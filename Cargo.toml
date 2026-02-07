@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/agentpin",
+    "crates/agentpin-cli",
+    "crates/agentpin-server",
+]

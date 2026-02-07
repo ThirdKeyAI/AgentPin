@@ -1,0 +1,21 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Private keys — NEVER commit these
+*.private.pem
+*.private.jwk.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db

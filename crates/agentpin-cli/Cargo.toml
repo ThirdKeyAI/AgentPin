@@ -1,0 +1,21 @@
+[package]
+name = "agentpin-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "CLI tool for AgentPin credential management"
+license = "MIT"
+authors = ["Jascha Wanger <jascha@thirdkey.ai>"]
+repository = "https://github.com/ThirdKeyAI/AgentPin"
+
+[[bin]]
+name = "agentpin"
+path = "src/main.rs"
+
+[dependencies]
+agentpin = { path = "../agentpin", features = ["fetch"] }
+clap = { version = "4.0", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+serde_json = "1.0"
+chrono = "0.4"
+anyhow = "1.0"

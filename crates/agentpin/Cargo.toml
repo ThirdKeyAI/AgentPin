@@ -1,0 +1,30 @@
+[package]
+name = "agentpin"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Domain-anchored cryptographic identity protocol for AI agents"
+license = "MIT"
+authors = ["Jascha Wanger <jascha@thirdkey.ai>"]
+repository = "https://github.com/ThirdKeyAI/AgentPin"
+keywords = ["agent", "identity", "cryptography", "jwt", "ecdsa"]
+categories = ["authentication", "cryptography"]
+
+[features]
+default = []
+fetch = ["reqwest", "tokio"]
+
+[dependencies]
+p256 = { version = "0.13", features = ["ecdsa", "pem", "jwk"] }
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.21"
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+url = "2.4"
+reqwest = { version = "0.12", features = ["json"], optional = true }
+tokio = { version = "1.0", optional = true }

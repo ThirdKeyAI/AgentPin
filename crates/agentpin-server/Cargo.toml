@@ -1,0 +1,27 @@
+[package]
+name = "agentpin-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "HTTP server for AgentPin discovery and revocation endpoints"
+license = "MIT"
+authors = ["Jascha Wanger <jascha@thirdkey.ai>"]
+repository = "https://github.com/ThirdKeyAI/AgentPin"
+
+[[bin]]
+name = "agentpin-server"
+path = "src/main.rs"
+
+[dependencies]
+agentpin = { path = "../agentpin" }
+axum = "0.7"
+tokio = { version = "1.0", features = ["full"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "set-header"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.0", features = ["derive"] }
+chrono = "0.4"
+anyhow = "1.0"
