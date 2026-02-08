@@ -16,6 +16,20 @@ Cargo.lock
 # Claude Code
 .claude/
 
+# Node.js
+node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+*.egg
+
 # OS
 .DS_Store
 Thumbs.db

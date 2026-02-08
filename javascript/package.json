@@ -1,0 +1,118 @@
+{
+  "name": "agentpin",
+  "version": "0.1.0",
+  "description": "Domain-anchored cryptographic identity protocol for AI agents",
+  "main": "src/index.js",
+  "type": "module",
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:watch": "node --test --watch tests/*.test.js",
+    "test:coverage": "c8 node --test tests/*.test.js",
+    "lint": "eslint src/ tests/",
+    "lint:fix": "eslint src/ tests/ --fix",
+    "prepublishOnly": "npm test && npm run lint",
+    "build": "echo 'No build step required for ES modules'",
+    "clean": "rm -rf node_modules package-lock.json"
+  },
+  "keywords": [
+    "cryptography",
+    "ecdsa",
+    "ai-agents",
+    "identity",
+    "security",
+    "digital-signatures",
+    "key-pinning",
+    "trust-on-first-use",
+    "tofu",
+    "jwt",
+    "well-known",
+    "credential-verification",
+    "delegation",
+    "agentpin"
+  ],
+  "author": {
+    "name": "ThirdKey",
+    "email": "contact@thirdkey.ai",
+    "url": "https://thirdkey.ai"
+  },
+  "maintainers": [
+    {
+      "name": "Jascha Wanger",
+      "email": "jascha@thirdkey.ai"
+    }
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thirdkey/agentpin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thirdkey/agentpin/issues",
+    "email": "contact@thirdkey.ai"
+  },
+  "homepage": "https://github.com/thirdkey/agentpin#readme",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "c8": "^8.0.1",
+    "eslint": "^9.0.0",
+    "globals": "^16.0.0"
+  },
+  "exports": {
+    ".": {
+      "import": "./src/index.js"
+    },
+    "./crypto": {
+      "import": "./src/crypto.js"
+    },
+    "./jwk": {
+      "import": "./src/jwk.js"
+    },
+    "./jwt": {
+      "import": "./src/jwt.js"
+    },
+    "./types": {
+      "import": "./src/types.js"
+    },
+    "./capability": {
+      "import": "./src/capability.js"
+    },
+    "./constraint": {
+      "import": "./src/constraint.js"
+    },
+    "./credential": {
+      "import": "./src/credential.js"
+    },
+    "./discovery": {
+      "import": "./src/discovery.js"
+    },
+    "./revocation": {
+      "import": "./src/revocation.js"
+    },
+    "./pinning": {
+      "import": "./src/pinning.js"
+    },
+    "./delegation": {
+      "import": "./src/delegation.js"
+    },
+    "./mutual": {
+      "import": "./src/mutual.js"
+    },
+    "./verification": {
+      "import": "./src/verification.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
