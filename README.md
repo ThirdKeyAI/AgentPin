@@ -18,10 +18,14 @@ See [AGENTPIN_TECHNICAL_SPECIFICATION.md](AGENTPIN_TECHNICAL_SPECIFICATION.md) f
 
 ```
 crates/
-├── agentpin/          # Core library (publishable to crates.io)
+├── agentpin/          # Core Rust library (publishable to crates.io)
 ├── agentpin-cli/      # CLI binary
 └── agentpin-server/   # HTTP server for discovery/revocation endpoints
+javascript/            # JavaScript/Node.js package (zero dependencies)
+python/                # Python package (uses cryptography library)
 ```
+
+All three implementations share the same API surface and produce interoperable credentials — a JWT issued by one language can be verified by any other.
 
 ## Quick Start
 
@@ -80,7 +84,9 @@ Serves:
 - `GET /.well-known/agent-identity-revocations.json` (Cache-Control: max-age=300)
 - `GET /health`
 
-## Building
+## Installation & Building
+
+### Rust
 
 ```bash
 cargo build --workspace
@@ -94,13 +100,73 @@ The core library has no mandatory HTTP dependency. Network fetching is behind th
 agentpin = { version = "0.1", features = ["fetch"] }
 ```
 
+### JavaScript
+
+Requires Node.js >= 18. Zero external dependencies — uses Node.js built-in `crypto`.
+
+```bash
+cd javascript
+npm install   # dev dependencies only (eslint, c8)
+npm test      # runs all 76 tests
+```
+
+```javascript
+import { generateKeyPair, pemToJwk, issueCredential, Capability,
+         verifyCredentialOffline, KeyPinStore, buildDiscoveryDocument } from 'agentpin';
+
+const { privateKey, publicKey } = generateKeyPair();
+const jwk = pemToJwk(publicKey, 'my-key-2026');
+
+const credential = issueCredential(
+    privateKey, 'my-key-2026', 'example.com',
+    'urn:agentpin:example.com:agent', 'verifier.com',
+    [new Capability('read:data')], null, null, 3600
+);
+
+const result = verifyCredentialOffline(
+    credential, discovery, null, new KeyPinStore(), 'verifier.com'
+);
+```
+
+### Python
+
+Requires Python >= 3.8.
+
+```bash
+cd python
+pip install -e ".[dev]"
+pytest tests/ -v   # runs all 76 tests
+```
+
+```python
+from agentpin import (
+    generate_key_pair, pem_to_jwk, issue_credential,
+    verify_credential_offline, KeyPinStore, Capability,
+    build_discovery_document, EntityType, AgentStatus,
+)
+
+private_key, public_key = generate_key_pair()
+jwk = pem_to_jwk(public_key, "my-key-2026")
+
+credential = issue_credential(
+    private_key, "my-key-2026", "example.com",
+    "urn:agentpin:example.com:agent", "verifier.com",
+    [Capability("read:data")], None, None, 3600,
+)
+
+result = verify_credential_offline(
+    credential, discovery, None, KeyPinStore(), "verifier.com"
+)
+```
+
 ## Key Design Decisions
 
 - **ES256 only** — Rejects all other JWT algorithms to prevent algorithm confusion attacks
-- **Inline JWT implementation** — No external JWT crate; we control algorithm validation
-- **No-redirect enforcement** — HTTP client configured with `redirect(Policy::none())` per spec security requirements
-- **Feature-gated HTTP** — Core library works offline; `fetch` feature enables reqwest for network operations
+- **Inline JWT implementation** — No external JWT library in any language; we control algorithm validation
+- **No-redirect enforcement** — HTTP client configured to reject redirects per spec security requirements
+- **Feature-gated HTTP** — Core libraries work offline; network fetching is opt-in
 - **TOFU key pinning** — Trust-on-first-use with JWK thumbprint (RFC 7638) for key continuity verification
+- **Cross-language interop** — All three implementations use DER-encoded ECDSA signatures and identical JSON field names, so credentials are fully interoperable
 
 ## License
 
