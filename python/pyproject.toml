@@ -54,9 +54,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/thirdkey/agentpin"
-Repository = "https://github.com/thirdkey/agentpin"
-Issues = "https://github.com/thirdkey/agentpin/issues"
+Homepage = "https://agentpin.org"
+Repository = "https://github.com/thirdkeyai/agentpin"
+Issues = "https://github.com/thirdkeyai/agentpin/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

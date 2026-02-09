@@ -1,6 +1,6 @@
 {
   "name": "agentpin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Domain-anchored cryptographic identity protocol for AI agents",
   "main": "src/index.js",
   "type": "module",
@@ -49,13 +49,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thirdkey/agentpin.git"
+    "url": "git+https://github.com/thirdkeyai/agentpin.git"
   },
   "bugs": {
-    "url": "https://github.com/thirdkey/agentpin/issues",
+    "url": "https://github.com/thirdkeyai/agentpin/issues",
     "email": "contact@thirdkey.ai"
   },
-  "homepage": "https://github.com/thirdkey/agentpin#readme",
+  "homepage": "https://agentpin.org",
   "engines": {
     "node": ">=18.0.0",
     "npm": ">=8.0.0"
