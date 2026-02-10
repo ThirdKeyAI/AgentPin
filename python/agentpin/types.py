@@ -154,6 +154,7 @@ class AgentDeclaration:
     constraints: Optional[dict] = None
     maker_attestation: Optional[str] = None
     credential_ttl_max: Optional[int] = None
+    directory_listing: Optional[bool] = None
 
 
 @dataclass

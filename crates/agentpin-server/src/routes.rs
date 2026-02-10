@@ -75,6 +75,7 @@ mod tests {
                 maker_attestation: None,
                 credential_ttl_max: None,
                 status: AgentStatus::Active,
+                directory_listing: None,
             }],
             revocation_endpoint: None,
             policy_url: None,

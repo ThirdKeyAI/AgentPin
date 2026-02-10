@@ -47,6 +47,11 @@ pub struct AgentDeclaration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_ttl_max: Option<u64>,
     pub status: AgentStatus,
+    /// When `false`, signals that this agent SHOULD NOT be included in public
+    /// agent directories or registries (analogous to `noindex` for search
+    /// engines). Defaults to `true` if omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory_listing: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +84,7 @@ mod tests {
                 maker_attestation: None,
                 credential_ttl_max: Some(3600),
                 status: AgentStatus::Active,
+                directory_listing: None,
             }],
             revocation_endpoint: Some(
                 "https://example.com/.well-known/agent-identity-revocations.json".to_string(),

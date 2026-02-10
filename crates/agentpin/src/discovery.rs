@@ -145,6 +145,7 @@ mod tests {
                 maker_attestation: None,
                 credential_ttl_max: Some(3600),
                 status: AgentStatus::Active,
+                directory_listing: None,
             }],
             2,
             "2026-01-15T00:00:00Z",

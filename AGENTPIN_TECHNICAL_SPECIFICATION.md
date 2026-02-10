@@ -351,7 +351,8 @@ Each entry in the `agents` array declares an agent type (for Makers) or agent in
   "constraints": { ... },
   "maker_attestation": "<base64url-encoded signature>",
   "credential_ttl_max": <integer>,
-  "status": "<active|suspended|deprecated>"
+  "status": "<active|suspended|deprecated>",
+  "directory_listing": <boolean>
 }
 ```
 
@@ -367,6 +368,7 @@ Each entry in the `agents` array declares an agent type (for Makers) or agent in
 | `maker_attestation` | string | Deployer REQUIRED | For Deployers: a base64url-encoded signature from the Maker over the canonical form of this agent declaration, proving the Maker authorized this deployment. For Makers: omitted. |
 | `credential_ttl_max` | integer | RECOMMENDED | Maximum allowed credential lifetime in seconds. Default: 86400 (24 hours). |
 | `status` | string | REQUIRED | One of `"active"`, `"suspended"`, `"deprecated"`. Verifiers MUST reject credentials for non-active agents. |
+| `directory_listing` | boolean | OPTIONAL | When `false`, signals that this agent SHOULD NOT be included in public agent directories or registries. Analogous to `noindex` for search engines. Defaults to `true` if omitted. See §15. |
 
 ### 4.6 Caching and Freshness
 
@@ -462,7 +464,8 @@ Discovery documents SHOULD be served with appropriate HTTP cache headers:
       },
       "maker_attestation": "MEUCIQD7y2F8...<base64url signature>...",
       "credential_ttl_max": 3600,
-      "status": "active"
+      "status": "active",
+      "directory_listing": false
     }
   ],
   "revocation_endpoint": "https://tarnover.com/.well-known/agent-identity-revocations.json",
@@ -1423,6 +1426,7 @@ The `alg` field in JWT headers and the `crv` field in JWK keys provide the exten
 
 - **Agent identity disclosure:** Presenting a credential reveals the agent's identity, issuer, capabilities, and delegation chain to the verifier. Agents operating in privacy-sensitive contexts SHOULD use minimal capability sets and audience-restricted credentials.
 - **Discovery document probing:** An adversary can probe `/.well-known/agent-identity.json` to enumerate an organization's agents. Organizations MAY choose to serve discovery documents only for agent IDs that are already known to the requester (authenticated discovery), at the cost of breaking TOFU.
+- **Directory listing opt-out:** The `directory_listing` field (§4.5) allows agents to signal that they SHOULD NOT be indexed or listed in public agent directories or registries. This is analogous to the `noindex` directive for search engines: it is a cooperative signal, not an enforcement mechanism. Directory operators SHOULD respect `"directory_listing": false` and exclude such agents from public listings. Note that setting `directory_listing` to `false` does not prevent the agent from being discoverable via the `.well-known` endpoint — it only signals to directory aggregators that the agent prefers not to be publicly catalogued.
 - **Correlation:** Verifiers that track `jti` values can correlate agent activity across time. Short credential lifetimes and frequent `jti` rotation mitigate this.
 - **Revocation disclosure:** Revocation documents reveal which agents/credentials have been revoked, potentially disclosing security incidents. Organizations SHOULD use generic reason codes where appropriate.
 
@@ -1566,6 +1570,11 @@ This specification would register the following if submitted as an RFC:
           "status": {
             "type": "string",
             "enum": ["active", "suspended", "deprecated"]
+          },
+          "directory_listing": {
+            "type": "boolean",
+            "default": true,
+            "description": "When false, signals the agent should not be listed in public directories"
           }
         }
       }
