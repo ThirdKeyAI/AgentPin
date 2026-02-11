@@ -96,4 +96,11 @@ export {
     verifyCredential,
 } from './verification.js';
 
-export const version = '0.1.0';
+export {
+    createTrustBundle,
+    findBundleDiscovery,
+    findBundleRevocation,
+    verifyCredentialWithBundle,
+} from './bundle.js';
+
+export const version = '0.2.0';

@@ -82,8 +82,16 @@ from .verification import (
     verify_credential,
     verify_credential_offline,
 )
+from .bundle import (
+    create_trust_bundle,
+    find_bundle_discovery,
+    find_bundle_revocation,
+    load_trust_bundle,
+    save_trust_bundle,
+    verify_credential_with_bundle,
+)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     # Types
@@ -155,4 +163,11 @@ __all__ = [
     # Verification
     "verify_credential_offline",
     "verify_credential",
+    # Bundle
+    "create_trust_bundle",
+    "find_bundle_discovery",
+    "find_bundle_revocation",
+    "load_trust_bundle",
+    "save_trust_bundle",
+    "verify_credential_with_bundle",
 ]

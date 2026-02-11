@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentpin"
-version = "0.1.1"
+version = "0.2.0"
 description = "Domain-anchored cryptographic identity protocol for AI agents"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
 authors = [
-    {name = "ThirdKey", email = "contact@thirdkey.ai"},
+    {name = "Jascha Wanger / ThirdKey.ai", email = "jascha@thirdkey.ai"},
 ]
 maintainers = [
     {name = "Jascha Wanger", email = "jascha@thirdkey.ai"},

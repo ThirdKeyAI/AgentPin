@@ -1,6 +1,6 @@
 {
   "name": "agentpin",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Domain-anchored cryptographic identity protocol for AI agents",
   "main": "src/index.js",
   "type": "module",
@@ -36,8 +36,8 @@
     "agentpin"
   ],
   "author": {
-    "name": "ThirdKey",
-    "email": "contact@thirdkey.ai",
+    "name": "Jascha Wanger / ThirdKey.ai",
+    "email": "jascha@thirdkey.ai",
     "url": "https://thirdkey.ai"
   },
   "maintainers": [
@@ -109,6 +109,9 @@
     },
     "./verification": {
       "import": "./src/verification.js"
+    },
+    "./bundle": {
+      "import": "./src/bundle.js"
     }
   },
   "publishConfig": {

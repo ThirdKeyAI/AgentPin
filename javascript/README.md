@@ -74,6 +74,7 @@ if (result.valid) {
 - **TOFU key pinning** (compatible with SchemaPin)
 - **Credential, agent, and key-level revocation**
 - **Mutual authentication** with challenge-response
+- **Trust bundles** for air-gapped and enterprise verification (v0.2.0)
 - **Zero dependencies** — Node.js built-in crypto only
 
 ## API
@@ -123,6 +124,26 @@ import { createChallenge, createResponse, verifyResponse } from 'agentpin/mutual
 const challenge = createChallenge(verifierCredential);
 const response = createResponse(challenge, privateKeyPem, kid);
 verifyResponse(response, challenge.nonce, publicKeyPem);
+```
+
+### Trust Bundles (v0.2.0)
+
+```javascript
+import {
+    createTrustBundle,
+    findBundleDiscovery,
+    verifyCredentialWithBundle,
+} from 'agentpin';
+
+// Create a bundle with pre-loaded discovery documents
+const bundle = createTrustBundle();
+bundle.documents.push(discovery);
+bundle.revocations.push(revocation);
+
+// Verify without any HTTP calls
+const result = verifyCredentialWithBundle(
+    credential, bundle, pinStore, 'verifier.com'
+);
 ```
 
 ### Key Pinning

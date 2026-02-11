@@ -84,6 +84,7 @@ else:
 - **TOFU key pinning** (compatible with SchemaPin)
 - **Credential, agent, and key-level revocation**
 - **Mutual authentication** with challenge-response
+- **Trust bundles** for air-gapped and enterprise verification (v0.2.0)
 
 ## API
 
@@ -147,6 +148,32 @@ result = store.check_and_pin(domain, jwk)  # PinningResult.FIRST_USE | MATCHED |
 store.add_key(domain, jwk)                  # allow key rotation
 json_str = store.to_json()                  # persist
 restored = KeyPinStore.from_json(json_str)  # restore
+```
+
+### Trust Bundles (v0.2.0)
+
+```python
+from agentpin import (
+    create_trust_bundle,
+    find_bundle_discovery,
+    verify_credential_with_bundle,
+    save_trust_bundle,
+    load_trust_bundle,
+)
+
+# Create a bundle with pre-loaded discovery documents
+bundle = create_trust_bundle()
+bundle["documents"].append(discovery)
+bundle["revocations"].append(revocation)
+
+# Verify without any HTTP calls
+result = verify_credential_with_bundle(
+    credential, bundle, pin_store=KeyPinStore(), audience="verifier.com"
+)
+
+# Save / load bundles to disk
+save_trust_bundle(bundle, "trust-bundle.json")
+bundle = load_trust_bundle("trust-bundle.json")
 ```
 
 ### Configuration
