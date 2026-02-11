@@ -2,6 +2,7 @@ pub mod crypto;
 pub mod error;
 pub mod jwk;
 pub mod jwt;
+pub mod resolver;
 pub mod types;
 
 pub mod credential;

@@ -1,3 +1,4 @@
+pub mod bundle;
 pub mod capability;
 pub mod constraint;
 pub mod credential;

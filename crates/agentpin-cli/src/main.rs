@@ -1,3 +1,4 @@
+mod bundle;
 mod issue;
 mod keygen;
 mod verify;
@@ -19,6 +20,8 @@ enum Commands {
     Issue(issue::IssueArgs),
     /// Verify an agent credential
     Verify(verify::VerifyArgs),
+    /// Create a trust bundle from discovery and revocation documents
+    Bundle(bundle::BundleArgs),
 }
 
 #[tokio::main]
@@ -28,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Keygen(args) => keygen::run(args)?,
         Commands::Issue(args) => issue::run(args)?,
         Commands::Verify(args) => verify::run(args).await?,
+        Commands::Bundle(args) => bundle::run(args)?,
     }
     Ok(())
 }

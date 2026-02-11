@@ -3,9 +3,15 @@ use std::fs;
 use clap::Args;
 
 use agentpin::pinning::KeyPinStore;
+use agentpin::resolver::{
+    ChainResolver, DiscoveryResolver, LocalFileResolver, TrustBundleResolver,
+};
+use agentpin::types::bundle::TrustBundle;
 use agentpin::types::discovery::DiscoveryDocument;
 use agentpin::types::revocation::RevocationDocument;
-use agentpin::verification::{verify_credential, verify_credential_offline, VerifierConfig};
+use agentpin::verification::{
+    verify_credential, verify_credential_offline, verify_credential_with_resolver, VerifierConfig,
+};
 
 #[derive(Args)]
 pub struct VerifyArgs {
@@ -32,6 +38,14 @@ pub struct VerifyArgs {
     /// Use offline-only verification (no HTTP fetches)
     #[arg(long)]
     pub offline: bool,
+
+    /// Path to a trust bundle JSON file for verification
+    #[arg(long)]
+    pub trust_bundle: Option<String>,
+
+    /// Path to a directory containing discovery document files ({domain}.json)
+    #[arg(long)]
+    pub discovery_dir: Option<String>,
 }
 
 pub async fn run(args: VerifyArgs) -> anyhow::Result<()> {
@@ -53,7 +67,17 @@ pub async fn run(args: VerifyArgs) -> anyhow::Result<()> {
 
     let config = VerifierConfig::default();
 
-    let result = if args.offline || args.discovery.is_some() {
+    let result = if args.trust_bundle.is_some() || args.discovery_dir.is_some() {
+        // Resolver-based verification
+        let resolver = build_resolver(&args)?;
+        verify_credential_with_resolver(
+            &credential,
+            resolver.as_ref(),
+            &mut pin_store,
+            args.audience.as_deref(),
+            &config,
+        )
+    } else if args.offline || args.discovery.is_some() {
         // Offline verification
         let discovery_path = args
             .discovery
@@ -103,4 +127,30 @@ pub async fn run(args: VerifyArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Build a sync resolver from the CLI flags.
+fn build_resolver(args: &VerifyArgs) -> anyhow::Result<Box<dyn DiscoveryResolver>> {
+    let mut resolvers: Vec<Box<dyn DiscoveryResolver>> = Vec::new();
+
+    if let Some(ref path) = args.trust_bundle {
+        let json = fs::read_to_string(path)?;
+        let bundle: TrustBundle = serde_json::from_str(&json)?;
+        resolvers.push(Box::new(TrustBundleResolver::new(&bundle)));
+    }
+
+    if let Some(ref dir) = args.discovery_dir {
+        resolvers.push(Box::new(LocalFileResolver::new(
+            std::path::Path::new(dir),
+            None,
+        )));
+    }
+
+    match resolvers.len() {
+        0 => Err(anyhow::anyhow!(
+            "At least --trust-bundle or --discovery-dir must be provided"
+        )),
+        1 => Ok(resolvers.remove(0)),
+        _ => Ok(Box::new(ChainResolver::new(resolvers))),
+    }
 }

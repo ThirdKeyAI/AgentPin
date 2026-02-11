@@ -7,6 +7,7 @@ use crate::error::{Error, ErrorCode};
 use crate::jwk::jwk_to_verifying_key;
 use crate::jwt;
 use crate::pinning::{check_pinning, KeyPinStore, PinningResult};
+use crate::resolver::DiscoveryResolver;
 use crate::revocation::check_revocation;
 use crate::types::capability::Capability;
 use crate::types::constraint::{constraints_subset_of, Constraints};
@@ -337,7 +338,111 @@ pub fn verify_credential_offline(
     result
 }
 
+/// Verify a credential using a sync [`DiscoveryResolver`].
+///
+/// This function extracts the issuer domain from the JWT, uses the resolver to
+/// obtain the discovery and revocation documents, then delegates to
+/// [`verify_credential_offline`].
+pub fn verify_credential_with_resolver(
+    credential_jwt: &str,
+    resolver: &dyn DiscoveryResolver,
+    pin_store: &mut KeyPinStore,
+    audience: Option<&str>,
+    config: &VerifierConfig,
+) -> VerificationResult {
+    let (_header, payload, _sig) = match jwt::decode_jwt_unverified(credential_jwt) {
+        Ok(parts) => parts,
+        Err(e) => {
+            return VerificationResult::failure(
+                ErrorCode::AlgorithmRejected,
+                &format!("JWT parse failed: {}", e),
+            )
+        }
+    };
+
+    let discovery = match resolver.resolve_discovery(&payload.iss) {
+        Ok(doc) => doc,
+        Err(e) => {
+            return VerificationResult::failure(
+                ErrorCode::DiscoveryFetchFailed,
+                &format!("Failed to resolve discovery document: {}", e),
+            )
+        }
+    };
+
+    let revocation = match resolver.resolve_revocation(&payload.iss, &discovery) {
+        Ok(doc) => doc,
+        Err(_) => {
+            return VerificationResult::failure(
+                ErrorCode::DiscoveryFetchFailed,
+                "Revocation document unreachable (fail-closed)",
+            );
+        }
+    };
+
+    verify_credential_offline(
+        credential_jwt,
+        &discovery,
+        revocation.as_ref(),
+        pin_store,
+        audience,
+        config,
+    )
+}
+
+/// Verify a credential using an [`AsyncDiscoveryResolver`].
+#[cfg(feature = "fetch")]
+pub async fn verify_credential_with_async_resolver(
+    credential_jwt: &str,
+    resolver: &dyn crate::resolver::AsyncDiscoveryResolver,
+    pin_store: &mut KeyPinStore,
+    audience: Option<&str>,
+    config: &VerifierConfig,
+) -> VerificationResult {
+    let (_header, payload, _sig) = match jwt::decode_jwt_unverified(credential_jwt) {
+        Ok(parts) => parts,
+        Err(e) => {
+            return VerificationResult::failure(
+                ErrorCode::AlgorithmRejected,
+                &format!("JWT parse failed: {}", e),
+            )
+        }
+    };
+
+    let discovery = match resolver.resolve_discovery(&payload.iss).await {
+        Ok(doc) => doc,
+        Err(e) => {
+            return VerificationResult::failure(
+                ErrorCode::DiscoveryFetchFailed,
+                &format!("Failed to resolve discovery document: {}", e),
+            )
+        }
+    };
+
+    let revocation = match resolver.resolve_revocation(&payload.iss, &discovery).await {
+        Ok(doc) => doc,
+        Err(_) => {
+            return VerificationResult::failure(
+                ErrorCode::DiscoveryFetchFailed,
+                "Revocation document unreachable (fail-closed)",
+            );
+        }
+    };
+
+    verify_credential_offline(
+        credential_jwt,
+        &discovery,
+        revocation.as_ref(),
+        pin_store,
+        audience,
+        config,
+    )
+}
+
 /// Online verification that fetches discovery/revocation documents.
+///
+/// This delegates to [`verify_credential_with_async_resolver`] using
+/// [`WellKnownResolver`](crate::resolver::WellKnownResolver).
 #[cfg(feature = "fetch")]
 pub async fn verify_credential(
     credential_jwt: &str,
@@ -705,6 +810,52 @@ mod tests {
         );
         assert!(!result2.valid);
         assert_eq!(result2.error_code, Some(ErrorCode::KeyPinMismatch));
+    }
+
+    #[test]
+    fn test_verify_with_trust_bundle_resolver() {
+        let f = setup();
+        let bundle = crate::types::bundle::TrustBundle {
+            agentpin_bundle_version: "0.1".to_string(),
+            created_at: "2026-02-10T00:00:00Z".to_string(),
+            documents: vec![f.discovery.clone()],
+            revocations: vec![f.revocation.clone()],
+        };
+        let resolver = crate::resolver::TrustBundleResolver::new(&bundle);
+        let mut pin_store = KeyPinStore::new();
+        let config = VerifierConfig::default();
+
+        let result = verify_credential_with_resolver(
+            &f.jwt,
+            &resolver,
+            &mut pin_store,
+            Some("verifier.com"),
+            &config,
+        );
+        assert!(result.valid, "Expected valid, got: {:?}", result);
+        assert_eq!(
+            result.agent_id,
+            Some("urn:agentpin:example.com:agent".to_string())
+        );
+    }
+
+    #[test]
+    fn test_verify_with_resolver_missing_domain() {
+        let f = setup();
+        let bundle = crate::types::bundle::TrustBundle::new("2026-02-10T00:00:00Z");
+        let resolver = crate::resolver::TrustBundleResolver::new(&bundle);
+        let mut pin_store = KeyPinStore::new();
+        let config = VerifierConfig::default();
+
+        let result = verify_credential_with_resolver(
+            &f.jwt,
+            &resolver,
+            &mut pin_store,
+            Some("verifier.com"),
+            &config,
+        );
+        assert!(!result.valid);
+        assert_eq!(result.error_code, Some(ErrorCode::DiscoveryFetchFailed));
     }
 
     #[test]

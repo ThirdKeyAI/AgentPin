@@ -476,6 +476,71 @@ Discovery documents SHOULD be served with appropriate HTTP cache headers:
 }
 ```
 
+### 4.8 Alternative Discovery Mechanisms
+
+The standard `.well-known` HTTPS endpoint (§4.1) is the REQUIRED baseline discovery mechanism. Implementations MAY support additional discovery mechanisms for environments where `.well-known` is unavailable or impractical. When using alternative mechanisms, the discovery document format (§4.2–4.5), credential format (§5), and verification flow (§6) remain identical — only the document retrieval step changes.
+
+#### 4.8.1 Local File Discovery
+
+Discovery documents are read from a local filesystem directory, with files named `{domain}.json`. Revocation documents, when present, are named `{domain}.revocations.json` in the same directory or a separate revocation directory.
+
+**Use cases:** Air-gapped networks, CI/CD pipelines, development environments, embedded deployments.
+
+**Requirements:**
+- File contents MUST conform to the discovery document schema (§4.2).
+- Verifiers MUST validate the document identically to a `.well-known`-fetched document.
+- File permissions SHOULD restrict read access to authorized processes.
+
+#### 4.8.2 Pre-Shared Trust Bundle
+
+A trust bundle is a JSON file containing a collection of discovery and revocation documents, distributed out-of-band. The bundle format is:
+
+```json
+{
+  "agentpin_bundle_version": "0.1",
+  "created_at": "2026-02-10T00:00:00Z",
+  "documents": [
+    { /* DiscoveryDocument */ },
+    { /* DiscoveryDocument */ }
+  ],
+  "revocations": [
+    { /* RevocationDocument */ },
+    { /* RevocationDocument */ }
+  ]
+}
+```
+
+**Use cases:** Enterprise-internal agents, pre-provisioned trust relationships, air-gapped environments, runtime identity bootstrapping.
+
+**Requirements:**
+- Each document within the bundle MUST independently conform to its respective schema.
+- Bundles SHOULD be signed or distributed over authenticated channels.
+- Verifiers MUST validate documents from bundles identically to `.well-known`-fetched documents.
+- The `created_at` timestamp indicates bundle generation time; verifiers MAY use it to enforce freshness policies.
+
+#### 4.8.3 DNS TXT Records (Future)
+
+*Reserved for future specification.* Discovery document URLs or fingerprints published as DNS TXT records at `_agentpin.{domain}`, enabling discovery in environments where HTTPS endpoints are impractical but DNS is available.
+
+#### 4.8.4 Internal CA / Trust Delegation (Future)
+
+*Reserved for future specification.* An internal certificate authority model where a root organization signs discovery documents for subsidiary entities, enabling hierarchical trust without requiring each entity to serve its own `.well-known` endpoint.
+
+#### 4.8.5 Resolver Chain
+
+A resolver chain tries multiple discovery mechanisms in priority order until one succeeds. The recommended enterprise pattern is:
+
+1. **Trust bundle** — Check pre-loaded bundle first (fastest, no I/O).
+2. **Local file** — Check filesystem directory (fast, no network).
+3. **`.well-known` HTTPS** — Fall back to standard HTTP discovery.
+
+The chain stops at the first resolver that successfully returns a document. If all resolvers fail, verification fails with `DISCOVERY_FETCH_FAILED`.
+
+**Requirements:**
+- Chain order MUST be deterministic and configurable.
+- A document returned by any resolver in the chain MUST be validated identically.
+- Revocation documents SHOULD be resolved from the same source as the discovery document when possible.
+
 ---
 
 ## 5. Agent Credentials
@@ -1453,13 +1518,18 @@ This specification would register the following if submitted as an RFC:
 - Maintain a revocation endpoint and promptly revoke compromised credentials.
 
 ### Verifiers MUST:
-- Fetch discovery documents over HTTPS without following redirects.
+- Implement `.well-known` HTTPS discovery as the baseline mechanism.
+- Fetch discovery documents over HTTPS without following redirects (when using `.well-known`).
 - Verify JWT signatures using the key from the discovery document (not the JWT `alg` header).
 - Reject credentials with `alg` other than `ES256`.
 - Check credential expiration with ≤ 60 seconds clock skew tolerance.
 - Check revocation status before accepting a credential.
 - Validate that credential capabilities match the discovery document.
 - Implement TOFU key pinning.
+
+### Verifiers MAY:
+- Implement alternative discovery mechanisms (§4.8) including local file discovery, pre-shared trust bundles, and resolver chains.
+- When using alternative mechanisms, all verification steps except document retrieval MUST remain identical to the standard flow (§6).
 
 ### Verifiers SHOULD:
 - Validate the full delegation chain when present.
@@ -1486,6 +1556,12 @@ This specification would register the following if submitted as an RFC:
 7. **Agent reputation.** A system for verifiers to share agent behavior assessments, complementing identity verification with behavioral track records.
 
 8. **SchemaPin cross-signing.** Allow a SchemaPin signature to embed an expected `agent_id`, and an AgentPin credential to embed expected `schema_hash` values, creating a bidirectional cryptographic binding between agents and their tools.
+
+9. **DNS TXT discovery.** Publish discovery document URLs or fingerprints as DNS TXT records at `_agentpin.{domain}`, enabling discovery in environments where HTTPS endpoints are impractical but DNS is available (§4.8.3).
+
+10. **Internal CA / Trust Delegation.** An internal certificate authority model where a root organization signs discovery documents for subsidiary entities, enabling hierarchical trust without per-entity `.well-known` endpoints (§4.8.4).
+
+11. **Symbiont-native identity provisioning.** Runtime-managed agent identity where Symbiont provisions and rotates agent credentials automatically, integrating discovery document management into the orchestration lifecycle.
 
 ---
 
