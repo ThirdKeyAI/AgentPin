@@ -42,50 +42,112 @@ crates/
 
 ---
 
-## Quick Start
+## Quick Start by Language
 
-### Generate Keys
+### Rust (CLI)
 
 ```bash
+# Generate keys
 cargo run -p agentpin-cli -- keygen \
-    --output-dir ./keys \
-    --agent-name "my-agent"
-```
+    --output-dir ./keys --agent-name "my-agent"
 
-Outputs: `my-agent.private.pem`, `my-agent.public.pem`, `my-agent.public.jwk.json`
-
-### Issue a Credential
-
-```bash
+# Issue a credential (ES256 JWT, 1-hour TTL)
 cargo run -p agentpin-cli -- issue \
     --key ./keys/my-agent.private.pem \
     --issuer "https://example.com" \
     --agent-id "my-agent" \
-    --capabilities read,write \
-    --ttl 3600
-```
+    --capabilities read,write --ttl 3600
 
-### Verify a Credential
-
-```bash
-# Offline (with local discovery document)
+# Verify offline
 cargo run -p agentpin-cli -- verify \
     --credential ./credential.jwt \
     --discovery ./agent-identity.json
 
-# Online (fetches from .well-known)
+# Verify online (fetches from .well-known)
 cargo run -p agentpin-cli -- verify \
-    --credential ./credential.jwt \
-    --domain example.com
-```
+    --credential ./credential.jwt --domain example.com
 
-### Create a Trust Bundle
-
-```bash
+# Create trust bundle for air-gapped environments
 cargo run -p agentpin-cli -- bundle \
     --discovery ./agent-identity.json \
-    --revocation ./revocations.json \
-    --output ./bundle.json
+    --revocation ./revocations.json --output ./bundle.json
+```
+
+### Rust (Library)
+
+```rust
+use agentpin::{
+    crypto,
+    credential::CredentialBuilder,
+    verification::verify_credential,
+    pinning::KeyPinStore,
+};
+
+let (private_key, public_key) = crypto::generate_keypair()?;
+
+let credential = CredentialBuilder::new()
+    .issuer("https://example.com")
+    .agent_id("my-agent")
+    .capability("read")
+    .capability("write")
+    .ttl_secs(3600)
+    .sign(&private_key)?;
+
+let result = verify_credential(&credential, &discovery_doc, &pin_store)?;
+```
+
+### JavaScript
+
+```bash
+npm install agentpin
+```
+
+```javascript
+import {
+    generateKeypair, issueCredential, verifyCredential,
+    KeyPinStore
+} from 'agentpin';
+
+// Generate ECDSA P-256 keypair
+const { privateKey, publicKey } = await generateKeypair();
+
+// Issue a credential
+const credential = await issueCredential(privateKey, {
+    issuer: 'https://example.com',
+    agentId: 'my-agent',
+    capabilities: ['read', 'write'],
+    ttlSecs: 3600,
+});
+
+// Verify
+const pinStore = new KeyPinStore();
+const result = await verifyCredential(credential, discoveryDoc, pinStore);
+```
+
+### Python
+
+```bash
+pip install agentpin
+```
+
+```python
+from agentpin.crypto import generate_keypair
+from agentpin.credential import issue_credential
+from agentpin.verification import verify_credential
+from agentpin.pinning import KeyPinStore
+
+private_key, public_key = generate_keypair()
+
+credential = issue_credential(
+    private_key,
+    issuer="https://example.com",
+    agent_id="my-agent",
+    capabilities=["read", "write"],
+    ttl_secs=3600,
+)
+
+pin_store = KeyPinStore()
+result = verify_credential(credential, discovery_doc, pin_store)
 ```
 
 ### Serve .well-known Endpoints
@@ -122,32 +184,16 @@ Serves:
 | `jwk` | JWK handling and thumbprint computation |
 | `resolver` | Pluggable discovery resolution |
 
-### Using the Library
+### Language API Reference
 
-```rust
-use agentpin::{
-    crypto,
-    credential::CredentialBuilder,
-    verification::verify_credential,
-    discovery::AgentIdentityDocument,
-    pinning::KeyPinStore,
-};
-
-// Generate keypair
-let (private_key, public_key) = crypto::generate_keypair()?;
-
-// Issue a credential
-let credential = CredentialBuilder::new()
-    .issuer("https://example.com")
-    .agent_id("my-agent")
-    .capability("read")
-    .capability("write")
-    .ttl_secs(3600)
-    .sign(&private_key)?;
-
-// Verify a credential
-let result = verify_credential(&credential, &discovery_doc, &pin_store)?;
-```
+| Operation | Rust | JavaScript | Python |
+|-----------|------|------------|--------|
+| Generate keys | `crypto::generate_keypair()` | `generateKeypair()` | `generate_keypair()` |
+| Issue credential | `CredentialBuilder::new().sign()` | `issueCredential()` | `issue_credential()` |
+| Verify credential | `verify_credential()` | `verifyCredential()` | `verify_credential()` |
+| Key pinning | `KeyPinStore` | `KeyPinStore` | `KeyPinStore` |
+| Trust bundle | `TrustBundle::from_json()` | `TrustBundle.fromJson()` | `TrustBundle.from_json()` |
+| Mutual auth | `MutualAuth::challenge()` | `createChallenge()` | `create_challenge()` |
 
 ### Feature Flags
 
@@ -225,6 +271,36 @@ Published at `/.well-known/agent-identity.json`:
 
 ---
 
+## v0.2.0 Features
+
+### Trust Bundles (Offline / Air-Gapped)
+
+Pre-package discovery + revocation data for environments without internet:
+
+```python
+from agentpin.bundle import TrustBundle
+
+bundle = TrustBundle.from_json(bundle_json_str)
+discovery = bundle.find_discovery("example.com")
+revocation = bundle.find_revocation("example.com")
+```
+
+### Pluggable Discovery Resolvers
+
+```python
+from agentpin.discovery import (
+    WellKnownResolver,    # HTTP .well-known lookups
+    DnsTxtResolver,       # DNS TXT record lookups
+    ManualResolver,       # Pre-configured discovery data
+)
+```
+
+### Directory Listing
+
+Domains can advertise all their agents via `"directory_listing": true` in the discovery document. Verifiers can enumerate available agents before issuing challenges.
+
+---
+
 ## Development
 
 ### Build and Test
@@ -264,3 +340,5 @@ cargo fmt --check
 6. **No external JWT crate** — algorithm validation is controlled inline to prevent algorithm confusion attacks
 7. **Feature-gate HTTP** — use the `fetch` feature only when online discovery is needed; default is offline-capable
 8. **Cross-compatible with SchemaPin** — both use ECDSA P-256, same crypto primitives
+9. **Trust bundles** are ideal for CI/CD and air-gapped deployments — pre-package discovery + revocation data
+10. **JavaScript and Python SDKs** provide identical verification guarantees to the Rust crate
