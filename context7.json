@@ -1,4 +1,38 @@
 {
+  "$schema": "https://context7.com/schema/context7.json",
   "url": "https://context7.com/thirdkeyai/agentpin",
-  "public_key": "pk_Ehy7QXQTu2Keb0e5BNeyx"
+  "public_key": "pk_Ehy7QXQTu2Keb0e5BNeyx",
+  "projectTitle": "AgentPin",
+  "description": "Domain-anchored cryptographic identity protocol for AI agents — ES256 JWT credentials, 12-step verification, TOFU key pinning, revocation checking, delegation chains, and mutual authentication. Implementations in Rust, JavaScript, and Python. Part of the ThirdKey trust stack.",
+  "folders": [
+    "SKILL.md",
+    "README.md",
+    "CHANGELOG.md",
+    "AGENTPIN_TECHNICAL_SPECIFICATION.md",
+    "crates/agentpin/src",
+    "crates/agentpin-cli/src",
+    "crates/agentpin-server/src",
+    "javascript/src",
+    "python/agentpin"
+  ],
+  "excludeFolders": [
+    "**/target",
+    "**/node_modules",
+    "**/dist",
+    "**/__pycache__",
+    "**/*.egg-info",
+    "**/build"
+  ],
+  "excludeFiles": [],
+  "rules": [
+    "AgentPin uses ES256 (ECDSA P-256) exclusively — reject all other JWT algorithms; algorithm validation is inline with no external JWT crate in Rust",
+    "Credential verification follows a 12-step flow: JWT parsing, algorithm check, signature verification, domain extraction, discovery resolution, domain binding, key matching, TOFU pinning, expiration, revocation, capability validation, delegation chain",
+    "Discovery documents are published at /.well-known/agent-identity.json; revocation lists at /.well-known/agent-identity-revocations.json",
+    "TOFU key pinning: on first verification for a domain, the public key (JWK thumbprint) is pinned — subsequent verifications reject different keys for the same domain",
+    "Delegation chains must narrow capabilities, never widen them; chain depth limits are enforced",
+    "Prefer short-lived credentials (hours, not days) — issue with TTL via CredentialBuilder (Rust), issueCredential (JS), or issue_credential (Python)",
+    "Trust bundles package discovery + revocation data for offline/air-gapped environments — use 'agentpin-cli bundle' to create",
+    "Rust crate is feature-gated: default is offline-capable, 'fetch' feature enables reqwest for online discovery",
+    "Three crates: agentpin (core library), agentpin-cli (CLI binary), agentpin-server (Axum .well-known server)"
+  ]
 }
