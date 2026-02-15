@@ -7,13 +7,9 @@
   "folders": [
     "SKILL.md",
     "README.md",
-    "CHANGELOG.md",
     "AGENTPIN_TECHNICAL_SPECIFICATION.md",
-    "crates/agentpin/src",
-    "crates/agentpin-cli/src",
-    "crates/agentpin-server/src",
-    "javascript/src",
-    "python/agentpin"
+    "javascript/README.md",
+    "python/README.md"
   ],
   "excludeFolders": [
     "**/target",
@@ -21,9 +17,22 @@
     "**/dist",
     "**/__pycache__",
     "**/*.egg-info",
-    "**/build"
+    "**/build",
+    "**/src",
+    "**/tests",
+    "crates"
   ],
-  "excludeFiles": [],
+  "excludeFiles": [
+    "**/*.rs",
+    "**/*.py",
+    "**/*.ts",
+    "**/*.js",
+    "**/*.lock",
+    "**/*.toml",
+    "**/*.cfg",
+    "CHANGELOG.md",
+    "ROADMAP.md"
+  ],
   "rules": [
     "AgentPin uses ES256 (ECDSA P-256) exclusively — reject all other JWT algorithms; algorithm validation is inline with no external JWT crate in Rust",
     "Credential verification follows a 12-step flow: JWT parsing, algorithm check, signature verification, domain extraction, discovery resolution, domain binding, key matching, TOFU pinning, expiration, revocation, capability validation, delegation chain",
