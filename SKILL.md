@@ -2,7 +2,7 @@
 
 **Purpose**: This guide helps AI assistants work with AgentPin for domain-anchored cryptographic agent identity verification.
 
-**For Full Documentation**: See the [README](README.md) and [Technical Specification](AGENTPIN_TECHNICAL_SPECIFICATION.md).
+**For Full Documentation**: See the [README](https://github.com/ThirdKeyAI/agentpin/blob/main/README.md) and [Technical Specification](https://github.com/ThirdKeyAI/agentpin/blob/main/AGENTPIN_TECHNICAL_SPECIFICATION.md).
 
 ## What AgentPin Does
 
