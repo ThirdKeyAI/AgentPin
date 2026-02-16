@@ -1,7 +1,6 @@
 ---
-title: AgentPin
+name: agentpin
 description: Domain-anchored cryptographic identity protocol for AI agents — ES256 JWT credentials, 12-step verification, TOFU key pinning, revocation, delegation chains, and mutual authentication
-version: 0.2.0
 ---
 
 # AgentPin Development Skills Guide
