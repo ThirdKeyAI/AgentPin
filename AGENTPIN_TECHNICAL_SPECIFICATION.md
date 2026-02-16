@@ -1,9 +1,9 @@
 # AgentPin Technical Specification
 
-**Protocol Version:** 0.1.0-draft  
-**Status:** Draft  
-**Author:** Jascha Wanger / [ThirdKey.ai](https://thirdkey.ai)  
-**Date:** 2026-01-31  
+**Protocol Version:** 0.2.0
+**Status:** Stable
+**Author:** Jascha Wanger / [ThirdKey.ai](https://thirdkey.ai)
+**Date:** 2026-02-16  
 **License:** MIT  
 
 ---

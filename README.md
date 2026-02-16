@@ -43,7 +43,7 @@ agentpin verify --credential <jwt>
 
 ```toml
 [dependencies]
-agentpin = { version = "0.1", features = ["fetch"] }
+agentpin = { version = "0.2", features = ["fetch"] }
 ```
 
 ### JavaScript
