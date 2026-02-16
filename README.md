@@ -2,98 +2,44 @@
 
 Domain-anchored cryptographic identity for AI agents. The second layer in the [ThirdKey](https://thirdkey.ai) trust stack (SchemaPin → **AgentPin** → Symbiont).
 
-AgentPin lets organizations publish verifiable identity documents for their AI agents, issue short-lived cryptographic credentials (JWTs), and verify agent identity using a 12-step protocol with TOFU key pinning, capability validation, delegation chains, and revocation checking.
+**[Read the Documentation →](https://docs.agentpin.org)**
 
-## Protocol Overview
+## What It Does
 
-- **Discovery** — Organizations publish `/.well-known/agent-identity.json` declaring their agents, public keys, and capabilities
-- **Credentials** — ES256 (ECDSA P-256) signed JWTs with agent identity, capabilities, constraints, and optional delegation chains
-- **Verification** — 12-step flow: JWT parsing, temporal validation, discovery resolution, signature verification, revocation checking, agent status, capability/constraint validation, delegation chain verification, TOFU key pinning, and audience matching
-- **Mutual Authentication** — Challenge-response protocol with 128-bit nonces for bidirectional identity verification
-- **Revocation** — Credential, agent, and key-level revocation via `/.well-known/agent-identity-revocations.json`
+AgentPin lets organizations publish verifiable identity for their AI agents. Issue short-lived ES256 credentials, verify agent identity with a 12-step protocol, and enforce capability-scoped access — all anchored to your domain via `.well-known` discovery.
 
-See [AGENTPIN_TECHNICAL_SPECIFICATION.md](AGENTPIN_TECHNICAL_SPECIFICATION.md) for the full protocol spec (v0.1.0-draft).
-
-## Project Structure
-
-```
-crates/
-├── agentpin/          # Core Rust library (publishable to crates.io)
-├── agentpin-cli/      # CLI binary
-└── agentpin-server/   # HTTP server for discovery/revocation endpoints
-javascript/            # JavaScript/Node.js package (zero dependencies)
-python/                # Python package (uses cryptography library)
-```
-
-All three implementations share the same API surface and produce interoperable credentials — a JWT issued by one language can be verified by any other.
+- **ES256 (ECDSA P-256)** cryptographic credentials
+- **Domain-anchored** `.well-known/agent-identity.json` discovery
+- **12-step verification** with TOFU key pinning
+- **Delegation chains** for maker-deployer models
+- **Capability-scoped credentials** with constraints
+- **Credential revocation** at credential, agent, and key level
+- **Mutual authentication** with challenge-response
+- **Trust bundles** for air-gapped and enterprise environments
+- **Cross-language** — Rust, JavaScript, and Python SDKs produce interoperable credentials
 
 ## Quick Start
 
-### Generate Keys
-
 ```bash
-agentpin keygen --domain example.com --kid example-2026-01 --output-dir ./keys
-```
+# Generate keys
+agentpin keygen --domain example.com --kid my-key-2026 --output-dir ./keys
 
-Generates `example-2026-01.private.pem`, `example-2026-01.public.pem`, and `example-2026-01.public.jwk.json`.
-
-### Issue a Credential
-
-```bash
+# Issue a credential
 agentpin issue \
-  --private-key ./keys/example-2026-01.private.pem \
-  --kid example-2026-01 \
-  --issuer example.com \
+  --private-key ./keys/my-key-2026.private.pem \
+  --kid my-key-2026 --issuer example.com \
   --agent-id "urn:agentpin:example.com:scout" \
-  --capabilities "read:data,write:reports" \
-  --ttl 3600
-```
+  --capabilities "read:data,write:reports" --ttl 3600
 
-Outputs a signed JWT to stdout.
-
-### Verify a Credential
-
-Offline (with local discovery document):
-
-```bash
-agentpin verify \
-  --credential <jwt> \
-  --discovery ./agent-identity.json \
-  --pin-store ./pins.json
-```
-
-Online (fetches discovery from issuer domain):
-
-```bash
+# Verify a credential
 agentpin verify --credential <jwt>
 ```
 
-Outputs a JSON verification result with validity, capabilities, key pinning status, and any errors.
+**[Getting Started Guide →](https://docs.agentpin.org/getting-started/)**
 
-### Serve Discovery Endpoints
-
-```bash
-agentpin-server \
-  --discovery ./agent-identity.json \
-  --revocation ./revocations.json \
-  --port 8080
-```
-
-Serves:
-- `GET /.well-known/agent-identity.json` (Cache-Control: max-age=3600)
-- `GET /.well-known/agent-identity-revocations.json` (Cache-Control: max-age=300)
-- `GET /health`
-
-## Installation & Building
+## Installation
 
 ### Rust
-
-```bash
-cargo build --workspace
-cargo test --workspace
-```
-
-The core library has no mandatory HTTP dependency. Network fetching is behind the `fetch` feature flag:
 
 ```toml
 [dependencies]
@@ -102,72 +48,40 @@ agentpin = { version = "0.1", features = ["fetch"] }
 
 ### JavaScript
 
-Requires Node.js >= 18. Zero external dependencies — uses Node.js built-in `crypto`.
-
 ```bash
-cd javascript
-npm install   # dev dependencies only (eslint, c8)
-npm test      # runs all 76 tests
-```
-
-```javascript
-import { generateKeyPair, pemToJwk, issueCredential, Capability,
-         verifyCredentialOffline, KeyPinStore, buildDiscoveryDocument } from 'agentpin';
-
-const { privateKey, publicKey } = generateKeyPair();
-const jwk = pemToJwk(publicKey, 'my-key-2026');
-
-const credential = issueCredential(
-    privateKey, 'my-key-2026', 'example.com',
-    'urn:agentpin:example.com:agent', 'verifier.com',
-    [new Capability('read:data')], null, null, 3600
-);
-
-const result = verifyCredentialOffline(
-    credential, discovery, null, new KeyPinStore(), 'verifier.com'
-);
+npm install agentpin
 ```
 
 ### Python
 
-Requires Python >= 3.8.
-
 ```bash
-cd python
-pip install -e ".[dev]"
-pytest tests/ -v   # runs all 76 tests
+pip install agentpin
 ```
 
-```python
-from agentpin import (
-    generate_key_pair, pem_to_jwk, issue_credential,
-    verify_credential_offline, KeyPinStore, Capability,
-    build_discovery_document, EntityType, AgentStatus,
-)
+## Documentation
 
-private_key, public_key = generate_key_pair()
-jwk = pem_to_jwk(public_key, "my-key-2026")
+| Topic | Link |
+|-------|------|
+| Getting Started | [docs.agentpin.org/getting-started](https://docs.agentpin.org/getting-started/) |
+| Verification Flow | [docs.agentpin.org/verification-flow](https://docs.agentpin.org/verification-flow/) |
+| CLI Reference | [docs.agentpin.org/cli-guide](https://docs.agentpin.org/cli-guide/) |
+| Trust Bundles | [docs.agentpin.org/trust-bundles](https://docs.agentpin.org/trust-bundles/) |
+| Delegation Chains | [docs.agentpin.org/delegation-chains](https://docs.agentpin.org/delegation-chains/) |
+| Deployment | [docs.agentpin.org/deployment](https://docs.agentpin.org/deployment/) |
+| Security | [docs.agentpin.org/security](https://docs.agentpin.org/security/) |
+| Technical Specification | [AGENTPIN_TECHNICAL_SPECIFICATION.md](AGENTPIN_TECHNICAL_SPECIFICATION.md) |
 
-credential = issue_credential(
-    private_key, "my-key-2026", "example.com",
-    "urn:agentpin:example.com:agent", "verifier.com",
-    [Capability("read:data")], None, None, 3600,
-)
+## Project Structure
 
-result = verify_credential_offline(
-    credential, discovery, None, KeyPinStore(), "verifier.com"
-)
 ```
-
-## Key Design Decisions
-
-- **ES256 only** — Rejects all other JWT algorithms to prevent algorithm confusion attacks
-- **Inline JWT implementation** — No external JWT library in any language; we control algorithm validation
-- **No-redirect enforcement** — HTTP client configured to reject redirects per spec security requirements
-- **Feature-gated HTTP** — Core libraries work offline; network fetching is opt-in
-- **TOFU key pinning** — Trust-on-first-use with JWK thumbprint (RFC 7638) for key continuity verification
-- **Cross-language interop** — All three implementations use DER-encoded ECDSA signatures and identical JSON field names, so credentials are fully interoperable
+crates/
+├── agentpin/          # Core Rust library
+├── agentpin-cli/      # CLI binary
+└── agentpin-server/   # HTTP server for .well-known endpoints
+javascript/            # JavaScript/Node.js SDK
+python/                # Python SDK
+```
 
 ## License
 
-MIT - Jascha Wanger / [ThirdKey.ai](https://thirdkey.ai)
+MIT — Jascha Wanger / [ThirdKey.ai](https://thirdkey.ai)
