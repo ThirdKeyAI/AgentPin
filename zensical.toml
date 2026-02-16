@@ -1,6 +1,6 @@
 [project]
 site_name = "AgentPin Documentation"
-site_url = "https://thirdkeyai.github.io/agentpin/"
+site_url = "https://docs.agentpin.org/"
 site_description = "Domain-anchored cryptographic identity protocol for AI agents"
 
 [project.repository]
