@@ -10,7 +10,16 @@
     "AGENTPIN_TECHNICAL_SPECIFICATION.md",
     "ROADMAP.md",
     "javascript/README.md",
-    "python/README.md"
+    "python/README.md",
+    "docs/index.md",
+    "docs/getting-started.md",
+    "docs/verification-flow.md",
+    "docs/cli-guide.md",
+    "docs/trust-bundles.md",
+    "docs/delegation-chains.md",
+    "docs/deployment.md",
+    "docs/security.md",
+    "docs/troubleshooting.md"
   ],
   "excludeFolders": [
     "**/target",

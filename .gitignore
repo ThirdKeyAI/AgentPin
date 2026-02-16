@@ -30,6 +30,9 @@ build/
 .venv/
 *.egg
 
+# Zensical build output
+site/
+
 # OS
 .DS_Store
 Thumbs.db
