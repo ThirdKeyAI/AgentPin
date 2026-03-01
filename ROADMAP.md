@@ -46,8 +46,15 @@ AgentPin becomes the cryptographic identity layer for A2A (Agent-to-Agent) netwo
 | Item | Details |
 |------|---------|
 | `A2aAgentCardResolver` | Implements `DiscoveryResolver` — fetches `/.well-known/agent-card.json`, extracts AgentPin extensions |
-| Fallback chain | Try A2A card first, fall back to `agent-identity.json` via `WellKnownResolver` |
+| `LocalAgentCardStore` | In-memory store of pre-registered AgentCards for agents that don't serve HTTP (e.g., CLI tools, daemon processes). Implements `DiscoveryResolver` — looks up cards by domain/agent-id from local store instead of making HTTP requests. Cards are added via `store.register(card)`. This supports Symbiont v1.7.0's push-based external agent registration where the coordinator receives AgentCard JSON inline rather than fetching it from a `.well-known` endpoint. |
+| Fallback chain | Try local store first → A2A card fetch → `agent-identity.json` via `WellKnownResolver` |
 | Feature flag | Optional dependency on `a2a-types` behind `a2a` feature flag |
+
+### Allowed Domains Interface
+
+| Item | Details |
+|------|---------|
+| `AllowedDomains` type | New type in `src/types/discovery.rs`: `Vec<String>` of trusted domains extracted from `AgentDeclaration.constraints`. Exported for use by SchemaPin v1.4.0's `A2aVerificationContext` when scoping tool verification to the intersection of caller and provider domains. Convention: empty list means "all domains trusted" (no restriction). |
 
 ### Touchpoints
 
@@ -56,7 +63,8 @@ AgentPin becomes the cryptographic identity layer for A2A (Agent-to-Agent) netwo
 | New | `src/types/a2a.rs` — `A2aAgentCardExtension`, `A2aAgentCardBuilder` |
 | New | `src/a2a.rs` — A2A extension signing and validation logic |
 | New | `src/resolver_a2a.rs` — `A2aAgentCardResolver` implementing `DiscoveryResolver` |
-| Extend | `src/types/discovery.rs` — `a2a_endpoint` field on discovery types |
+| New | `src/resolver_local.rs` — `LocalAgentCardStore` implementing `DiscoveryResolver` |
+| Extend | `src/types/discovery.rs` — `a2a_endpoint` field, `AllowedDomains` type |
 
 ---
 
@@ -116,4 +124,4 @@ We welcome input on roadmap priorities:
 
 ---
 
-*Last updated: 2026-02-12*
+*Last updated: 2026-03-01 (cross-repo alignment with Symbiont v1.7.0/v1.8.0 and SchemaPin v1.4.0)*
