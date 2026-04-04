@@ -78,6 +78,55 @@ impl From<String> for Capability {
     }
 }
 
+/// Core actions from the AgentPin capability taxonomy.
+pub const CORE_ACTIONS: &[&str] = &["read", "write", "execute", "admin", "delegate"];
+
+/// Check whether a string looks like a reverse-domain prefix (e.g., `com.example.scan`).
+/// Requires at least two dot-separated segments, each non-empty.
+fn is_reverse_domain(action: &str) -> bool {
+    let parts: Vec<&str> = action.split('.').collect();
+    parts.len() >= 2 && parts.iter().all(|p| !p.is_empty())
+}
+
+/// Validate a capability string against the AgentPin taxonomy.
+///
+/// Rules:
+/// - Must be in `action:resource` format
+/// - If action is a core action, no additional validation
+/// - If action is not a core action (custom), it MUST use reverse-domain prefix (e.g., `com.example.scan:target`)
+/// - `admin:*` wildcard is rejected (admin capabilities must be explicitly scoped)
+///
+/// Returns Ok(()) if valid, Err with description if invalid.
+pub fn validate_capability(cap: &Capability) -> Result<(), String> {
+    let (action, resource) = match Capability::parse(&cap.0) {
+        Some(parts) => parts,
+        None => return Err("capability must be in 'action:resource' format".to_string()),
+    };
+
+    // Reject admin:* wildcard — admin must be explicitly scoped
+    if action == "admin" && resource == "*" {
+        return Err(
+            "admin:* wildcard is not allowed; admin capabilities must be explicitly scoped"
+                .to_string(),
+        );
+    }
+
+    // Core actions are always valid (with any resource)
+    if CORE_ACTIONS.contains(&action) {
+        return Ok(());
+    }
+
+    // Custom actions must use reverse-domain prefix
+    if !is_reverse_domain(action) {
+        return Err(format!(
+            "custom action '{}' must use reverse-domain prefix (e.g., com.example.{})",
+            action, action
+        ));
+    }
+
+    Ok(())
+}
+
 /// Check that all requested capabilities are covered by declared capabilities.
 pub fn capabilities_subset(declared: &[Capability], requested: &[Capability]) -> bool {
     requested
@@ -149,6 +198,48 @@ mod tests {
         let h2 = capabilities_hash(&caps);
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 64);
+    }
+
+    #[test]
+    fn test_validate_core_action() {
+        let cap = Capability::from("read:codebase");
+        assert!(validate_capability(&cap).is_ok());
+    }
+
+    #[test]
+    fn test_validate_wildcard() {
+        let cap = Capability::from("read:*");
+        assert!(validate_capability(&cap).is_ok());
+    }
+
+    #[test]
+    fn test_validate_admin_wildcard_rejected() {
+        let cap = Capability::from("admin:*");
+        assert!(validate_capability(&cap).is_err());
+    }
+
+    #[test]
+    fn test_validate_admin_scoped_ok() {
+        let cap = Capability::from("admin:users");
+        assert!(validate_capability(&cap).is_ok());
+    }
+
+    #[test]
+    fn test_validate_custom_action_with_domain() {
+        let cap = Capability::from("com.example.scan:target");
+        assert!(validate_capability(&cap).is_ok());
+    }
+
+    #[test]
+    fn test_validate_custom_action_without_domain() {
+        let cap = Capability::from("scan:target");
+        assert!(validate_capability(&cap).is_err());
+    }
+
+    #[test]
+    fn test_validate_missing_colon() {
+        let cap = Capability::from("readcodebase");
+        assert!(validate_capability(&cap).is_err());
     }
 
     #[test]

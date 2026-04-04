@@ -1,0 +1,24 @@
+name: Release Check
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  version-consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version consistency
+        run: |
+          RUST_VER=$(grep '^version' crates/agentpin/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          PY_VER=$(grep 'version' python/pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          JS_VER=$(node -e "console.log(require('./javascript/package.json').version)")
+          echo "Rust: $RUST_VER"
+          echo "Python: $PY_VER"
+          echo "JavaScript: $JS_VER"
+          if [ "$RUST_VER" != "$PY_VER" ] || [ "$RUST_VER" != "$JS_VER" ]; then
+            echo "::error::Version mismatch! Rust=$RUST_VER Python=$PY_VER JavaScript=$JS_VER"
+            exit 1
+          fi
+          echo "All versions match: $RUST_VER"

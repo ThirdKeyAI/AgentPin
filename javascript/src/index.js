@@ -41,6 +41,8 @@ export {
     Capability,
     capabilitiesSubset,
     capabilitiesHash,
+    validateCapability,
+    CORE_ACTIONS,
 } from './capability.js';
 
 export {
@@ -88,6 +90,7 @@ export {
     createChallenge,
     createResponse,
     verifyResponse,
+    verifyResponseWithNonceStore,
 } from './mutual.js';
 
 export {
@@ -102,5 +105,27 @@ export {
     findBundleRevocation,
     verifyCredentialWithBundle,
 } from './bundle.js';
+
+export {
+    httpExtractCredential,
+    httpFormatAuthorizationHeader,
+    mcpExtractCredential,
+    mcpFormatMetaField,
+    wsExtractCredential,
+    wsFormatAuthMessage,
+    GRPC_METADATA_KEY,
+    grpcExtractCredential,
+    grpcFormatMetadataValue,
+} from './transport.js';
+
+export {
+    prepareRotation,
+    applyRotation,
+    completeRotation,
+} from './rotation.js';
+
+export {
+    InMemoryNonceStore,
+} from './nonce.js';
 
 export const version = '0.2.0';

@@ -1,9 +1,11 @@
 """AgentPin: Domain-anchored cryptographic identity protocol for AI agents."""
 
 from .capability import (
+    CORE_ACTIONS,
     Capability,
     capabilities_hash,
     capabilities_subset,
+    validate_capability,
 )
 from .constraint import (
     constraints_subset_of,
@@ -51,6 +53,29 @@ from .mutual import (
     create_challenge,
     create_response,
     verify_response,
+    verify_response_with_nonce_store,
+)
+from .nonce import (
+    InMemoryNonceStore,
+    NonceStore,
+)
+from .rotation import (
+    apply_rotation,
+    complete_rotation,
+    prepare_rotation,
+)
+from .transport import (
+    AUTH_TYPE,
+    FIELD_NAME,
+    GRPC_METADATA_KEY,
+    grpc_extract_credential,
+    grpc_format_metadata_value,
+    http_extract_credential,
+    http_format_authorization_header,
+    mcp_extract_credential,
+    mcp_format_meta_field,
+    ws_extract_credential,
+    ws_format_auth_message,
 )
 from .pinning import (
     KeyPinStore,
@@ -127,6 +152,8 @@ __all__ = [
     "Capability",
     "capabilities_subset",
     "capabilities_hash",
+    "validate_capability",
+    "CORE_ACTIONS",
     # Constraint
     "parse_rate_limit",
     "domain_pattern_matches",
@@ -160,6 +187,26 @@ __all__ = [
     "create_challenge",
     "create_response",
     "verify_response",
+    "verify_response_with_nonce_store",
+    # Nonce
+    "NonceStore",
+    "InMemoryNonceStore",
+    # Rotation
+    "prepare_rotation",
+    "apply_rotation",
+    "complete_rotation",
+    # Transport
+    "http_extract_credential",
+    "http_format_authorization_header",
+    "FIELD_NAME",
+    "mcp_extract_credential",
+    "mcp_format_meta_field",
+    "AUTH_TYPE",
+    "ws_extract_credential",
+    "ws_format_auth_message",
+    "GRPC_METADATA_KEY",
+    "grpc_extract_credential",
+    "grpc_format_metadata_value",
     # Verification
     "verify_credential_offline",
     "verify_credential",

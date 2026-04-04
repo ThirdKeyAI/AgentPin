@@ -1,0 +1,26 @@
+name: Rust CI
+on:
+  push:
+    branches: [main]
+    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock']
+  pull_request:
+    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable, '1.70']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+        if: matrix.rust == 'stable'
+      - run: cargo clippy --workspace -j2 -- -D warnings
+        if: matrix.rust == 'stable'
+      - run: cargo test --workspace -j2
+      - run: cargo test --workspace -j2 --features fetch

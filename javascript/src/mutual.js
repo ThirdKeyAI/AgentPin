@@ -5,7 +5,7 @@
 import { randomBytes } from 'crypto';
 import { signData, verifySignature } from './crypto.js';
 
-const NONCE_EXPIRY_SECS = 60;
+export const NONCE_EXPIRY_SECS = 60;
 
 /**
  * Base64url encode bytes (no padding).
@@ -84,4 +84,22 @@ export function verifyResponse(response, challenge, publicKeyPem) {
 
     // Verify signature over the nonce
     return verifySignature(publicKeyPem, Buffer.from(challenge.nonce), response.signature);
+}
+
+/**
+ * Verify a challenge response with optional nonce deduplication.
+ * @param {object} response
+ * @param {object} challenge
+ * @param {string} publicKeyPem
+ * @param {import('./nonce.js').InMemoryNonceStore|null} nonceStore - Optional nonce store for replay prevention
+ * @returns {boolean}
+ * @throws {Error} if nonce has been replayed or expired
+ */
+export function verifyResponseWithNonceStore(response, challenge, publicKeyPem, nonceStore = null) {
+    if (nonceStore) {
+        if (!nonceStore.checkAndRecord(response.nonce, NONCE_EXPIRY_SECS * 1000)) {
+            throw new Error(`Nonce '${response.nonce}' has already been used (replay attack)`);
+        }
+    }
+    return verifyResponse(response, challenge, publicKeyPem);
 }

@@ -1,6 +1,14 @@
 """Tests for capability parsing and matching."""
 
-from agentpin.capability import Capability, capabilities_hash, capabilities_subset
+import pytest
+
+from agentpin.capability import (
+    CORE_ACTIONS,
+    Capability,
+    capabilities_hash,
+    capabilities_subset,
+    validate_capability,
+)
 
 
 class TestCapabilityParse:
@@ -52,3 +60,34 @@ class TestCapabilitiesHash:
         caps1 = [Capability("read:codebase"), Capability("write:report")]
         caps2 = [Capability("write:report"), Capability("read:codebase")]
         assert capabilities_hash(caps1) == capabilities_hash(caps2)
+
+
+class TestValidateCapability:
+    def test_validate_core_action(self):
+        validate_capability(Capability("read:codebase"))
+        validate_capability(Capability("write:report"))
+        validate_capability(Capability("execute:task"))
+
+    def test_validate_wildcard(self):
+        validate_capability(Capability("read:*"))
+        validate_capability(Capability("write:*"))
+
+    def test_validate_admin_wildcard_rejected(self):
+        with pytest.raises(ValueError, match="admin:\\* wildcard is not allowed"):
+            validate_capability(Capability("admin:*"))
+
+    def test_validate_admin_scoped_ok(self):
+        validate_capability(Capability("admin:users"))
+        validate_capability(Capability("admin:config"))
+
+    def test_validate_custom_action_with_domain(self):
+        validate_capability(Capability("com.example.audit:logs"))
+        validate_capability(Capability("org.acme.deploy:staging"))
+
+    def test_validate_custom_action_without_domain(self):
+        with pytest.raises(ValueError, match="reverse-domain prefix"):
+            validate_capability(Capability("audit:logs"))
+
+    def test_validate_missing_colon(self):
+        with pytest.raises(ValueError, match="missing ':'"):
+            validate_capability(Capability("readcodebase"))

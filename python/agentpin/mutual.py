@@ -64,3 +64,13 @@ def verify_response(response: dict, challenge: dict, public_key_pem: str) -> boo
 
     # Verify signature over the nonce
     return verify_signature(public_key_pem, challenge["nonce"].encode("utf-8"), response["signature"])
+
+
+def verify_response_with_nonce_store(response, challenge, public_key_pem, nonce_store=None):
+    """Verify with optional nonce dedup. Raises ValueError on nonce reuse."""
+    if nonce_store is not None:
+        if not nonce_store.check_and_record(response["nonce"], NONCE_EXPIRY_SECS):
+            raise ValueError(
+                f"Nonce '{response['nonce']}' has already been used (replay attack)"
+            )
+    return verify_response(response, challenge, public_key_pem)

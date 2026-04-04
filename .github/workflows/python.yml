@@ -1,0 +1,23 @@
+name: Python CI
+on:
+  push:
+    branches: [main]
+    paths: ['python/**']
+  pull_request:
+    paths: ['python/**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - working-directory: python
+        run: |
+          pip install -e ".[dev]"
+          python -m pytest tests/ -v

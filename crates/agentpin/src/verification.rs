@@ -21,6 +21,8 @@ pub struct VerifierConfig {
     pub clock_skew_secs: i64,
     /// Maximum credential lifetime in seconds (default: 86400)
     pub max_ttl_secs: i64,
+    /// When true, capabilities are validated against the taxonomy (default: false)
+    pub strict_capabilities: bool,
 }
 
 impl Default for VerifierConfig {
@@ -28,6 +30,7 @@ impl Default for VerifierConfig {
         Self {
             clock_skew_secs: 60,
             max_ttl_secs: 86400,
+            strict_capabilities: false,
         }
     }
 }

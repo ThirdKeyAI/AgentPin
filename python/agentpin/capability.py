@@ -89,3 +89,39 @@ def capabilities_hash(capabilities: List[Capability]) -> str:
     sorted_caps = sorted(c.value for c in capabilities)
     json_str = json.dumps(sorted_caps, separators=(",", ":"))
     return sha256_hex(json_str.encode("utf-8"))
+
+
+CORE_ACTIONS = ["read", "write", "execute", "admin", "delegate"]
+
+
+def _is_reverse_domain(s: str) -> bool:
+    """Check if string looks like a reverse domain prefix (contains a dot)."""
+    return "." in s
+
+
+def validate_capability(cap: Capability) -> None:
+    """Validate a capability against the AgentPin taxonomy.
+
+    Raises ValueError if invalid.
+    Rules:
+    - Must be action:resource format
+    - admin:* wildcard rejected
+    - Custom (non-core) actions must use reverse-domain prefix
+    """
+    parsed = Capability.parse(cap.value)
+    if not parsed:
+        raise ValueError(
+            f"Invalid capability format (missing ':'): {cap.value}"
+        )
+    action, resource = parsed
+    if action == "admin" and resource == "*":
+        raise ValueError(
+            "admin:* wildcard is not allowed; admin capabilities must be explicitly scoped"
+        )
+    if action in CORE_ACTIONS:
+        return
+    if not _is_reverse_domain(action):
+        raise ValueError(
+            f"Custom action '{action}' must use reverse-domain prefix "
+            f"(e.g., com.example.{action})"
+        )

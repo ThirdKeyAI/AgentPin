@@ -107,3 +107,37 @@ export function capabilitiesHash(capabilities) {
     const json = JSON.stringify(sorted);
     return sha256Hex(json);
 }
+
+/** Core actions defined by the AgentPin taxonomy. */
+export const CORE_ACTIONS = ['read', 'write', 'execute', 'admin', 'delegate'];
+
+/**
+ * Check if a string uses reverse-domain notation (contains a dot).
+ * @param {string} s
+ * @returns {boolean}
+ */
+function isReverseDomain(s) {
+    return s.includes('.');
+}
+
+/**
+ * Validate a capability against the AgentPin taxonomy.
+ * @param {Capability} cap
+ * @throws {Error} if invalid
+ */
+export function validateCapability(cap) {
+    const parsed = Capability.parse(cap.value);
+    if (!parsed) {
+        throw new Error(`Invalid capability format (missing ':'): ${cap.value}`);
+    }
+    const [action, resource] = parsed;
+    if (action === 'admin' && resource === '*') {
+        throw new Error('admin:* wildcard is not allowed; admin capabilities must be explicitly scoped');
+    }
+    if (CORE_ACTIONS.includes(action)) {
+        return;
+    }
+    if (!isReverseDomain(action)) {
+        throw new Error(`Custom action '${action}' must use reverse-domain prefix (e.g., com.example.${action})`);
+    }
+}
