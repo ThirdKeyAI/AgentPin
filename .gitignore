@@ -5,6 +5,10 @@ Cargo.lock
 # Private keys — NEVER commit these
 *.private.pem
 *.private.jwk.json
+# Exception: cross-language interop test fixtures under testdata/ ARE
+# deliberately committed throwaway keypairs used only for SDK interop tests.
+# They are NOT used to sign anything in production.
+!go/pkg/verification/testdata/*.private.pem
 
 # IDE
 .idea/

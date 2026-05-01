@@ -1,0 +1,29 @@
+{
+  "agentpin_version": "0.1",
+  "entity": "example.com",
+  "entity_type": "maker",
+  "public_keys": [
+{
+  "kid": "example-2026-01",
+  "kty": "EC",
+  "crv": "P-256",
+  "x": "nXszbHO3-fXVL--bm8YeaeG63qOEzEjnRRHOI9ofMXY",
+  "y": "hvg_wGE3XQ52VLAUL_JqzhrKFqbfuPSeLVBCLPdt9IU",
+  "use": "sig",
+  "key_ops": [
+    "verify"
+  ]
+}  ],
+  "agents": [
+    {
+      "agent_id": "urn:agentpin:example.com:test-agent",
+      "name": "Cross-Language Test Agent",
+      "capabilities": ["read:*", "write:report"],
+      "credential_ttl_max": 86400,
+      "status": "active"
+    }
+  ],
+  "revocation_endpoint": "https://example.com/.well-known/agent-identity-revocations.json",
+  "max_delegation_depth": 2,
+  "updated_at": "2026-01-15T00:00:00Z"
+}

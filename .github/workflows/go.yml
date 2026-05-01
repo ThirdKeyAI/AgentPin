@@ -1,0 +1,34 @@
+name: Go CI
+on:
+  push:
+    branches: [main, dev]
+    paths: ['go/**', '.github/workflows/go.yml']
+  pull_request:
+    paths: ['go/**', '.github/workflows/go.yml']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ['1.21', '1.22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: gofmt
+        working-directory: go
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "::error::gofmt would reformat the following files:"
+            echo "$out"
+            exit 1
+          fi
+      - name: go vet
+        working-directory: go
+        run: go vet ./...
+      - name: go test
+        working-directory: go
+        run: go test ./...

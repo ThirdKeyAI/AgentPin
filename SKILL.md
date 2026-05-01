@@ -158,6 +158,40 @@ pin_store = KeyPinStore()
 result = verify_credential(credential, discovery_doc, pin_store)
 ```
 
+### Go
+
+```bash
+go get github.com/ThirdKeyAi/agentpin/go
+go install github.com/ThirdKeyAi/agentpin/go/cmd/agentpin@latest
+```
+
+```go
+import (
+    "github.com/ThirdKeyAi/agentpin/go/pkg/credential"
+    "github.com/ThirdKeyAi/agentpin/go/pkg/crypto"
+    "github.com/ThirdKeyAi/agentpin/go/pkg/pinning"
+    "github.com/ThirdKeyAi/agentpin/go/pkg/types"
+    "github.com/ThirdKeyAi/agentpin/go/pkg/verification"
+)
+
+kp, _ := crypto.GenerateKeyPair()
+priv, _ := crypto.LoadPrivateKey(kp.PrivateKeyPEM)
+
+cred, _ := credential.IssueCredential(
+    priv, "my-key-2026", "example.com",
+    "urn:agentpin:example.com:my-agent",
+    "verifier.com",
+    []types.Capability{"read:data", "write:report"},
+    nil, nil, 3600,
+)
+
+pinStore := pinning.NewKeyPinStore()
+result := verification.VerifyCredentialOffline(
+    cred, discoveryDoc, nil, pinStore,
+    "verifier.com", verification.DefaultVerifierConfig(),
+)
+```
+
 ### Serve .well-known Endpoints
 
 ```bash
@@ -194,14 +228,14 @@ Serves:
 
 ### Language API Reference
 
-| Operation | Rust | JavaScript | Python |
-|-----------|------|------------|--------|
-| Generate keys | `crypto::generate_keypair()` | `generateKeypair()` | `generate_keypair()` |
-| Issue credential | `CredentialBuilder::new().sign()` | `issueCredential()` | `issue_credential()` |
-| Verify credential | `verify_credential()` | `verifyCredential()` | `verify_credential()` |
-| Key pinning | `KeyPinStore` | `KeyPinStore` | `KeyPinStore` |
-| Trust bundle | `TrustBundle::from_json()` | `TrustBundle.fromJson()` | `TrustBundle.from_json()` |
-| Mutual auth | `MutualAuth::challenge()` | `createChallenge()` | `create_challenge()` |
+| Operation | Rust | JavaScript | Python | Go |
+|-----------|------|------------|--------|-----|
+| Generate keys | `crypto::generate_key_pair()` | `generateKeypair()` | `generate_keypair()` | `crypto.GenerateKeyPair()` |
+| Issue credential | `credential::issue_credential()` | `issueCredential()` | `issue_credential()` | `credential.IssueCredential()` |
+| Verify credential | `verification::verify_credential_offline()` | `verifyCredentialOffline()` | `verify_credential_offline()` | `verification.VerifyCredentialOffline()` |
+| Key pinning | `KeyPinStore` | `KeyPinStore` | `KeyPinStore` | `pinning.KeyPinStore` |
+| Trust bundle | `TrustBundle::new()` | `new TrustBundle()` | `TrustBundle()` | `bundle.NewTrustBundle()` |
+| Mutual auth | `mutual::create_challenge()` | `createChallenge()` | `create_challenge()` | `mutual.CreateChallenge()` |
 
 ### Feature Flags
 
@@ -349,4 +383,4 @@ cargo fmt --check
 7. **Feature-gate HTTP** — use the `fetch` feature only when online discovery is needed; default is offline-capable
 8. **Cross-compatible with SchemaPin** — both use ECDSA P-256, same crypto primitives
 9. **Trust bundles** are ideal for CI/CD and air-gapped deployments — pre-package discovery + revocation data
-10. **JavaScript and Python SDKs** provide identical verification guarantees to the Rust crate
+10. **JavaScript, Python, and Go SDKs** provide identical verification guarantees to the Rust crate

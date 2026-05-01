@@ -1,0 +1,11 @@
+{
+  "kid": "example-2026-01",
+  "kty": "EC",
+  "crv": "P-256",
+  "x": "nXszbHO3-fXVL--bm8YeaeG63qOEzEjnRRHOI9ofMXY",
+  "y": "hvg_wGE3XQ52VLAUL_JqzhrKFqbfuPSeLVBCLPdt9IU",
+  "use": "sig",
+  "key_ops": [
+    "verify"
+  ]
+}

@@ -27,12 +27,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-key match semantics**: AgentPin discovery docs may carry several keys for rotation; a published TXT record need only match one of them. When the TXT carries an explicit `kid`, the matching key MUST also carry the same `kid`.
 - **Fail-closed on mismatch**: a publisher who *intentionally* publishes a TXT record has signaled that DNS is part of their trust chain — divergence between DNS and `.well-known` indicates compromise of one channel and is treated as a hard failure.
 
+#### Go SDK (Fourth Language Port)
+
+- **New `go/` SDK** — wire-compatible with Rust, JavaScript, and Python at the v0.2.0 surface. Mirrors the package layout of the SchemaPin Go SDK. Closes the long-standing four-language-parity gap.
+- **Module path**: `github.com/ThirdKeyAi/agentpin/go`
+- **Packages**: `crypto`, `jwk`, `jwt`, `types`, `discovery`, `credential`, `verification`, `revocation`, `pinning`, `delegation`, `mutual`, `nonce`, `bundle`, `resolver`
+- **CLI**: `cmd/agentpin` with `keygen`, `issue`, `verify`, `bundle` subcommands matching the Rust binary
+- **ES256-only** enforcement is implemented inline using `crypto/ecdsa`. The JWT verifier rejects `none`, `HS256`, `RS256`, `ES384`, and any other algorithm before any signature work. No third-party JWT dependency.
+- **Cross-language interop tests** under `go/pkg/verification/cross_language_test.go` validate that Rust-generated PEM keypairs, JWKs, discovery documents, and JWTs round-trip correctly through the Go SDK.
+- **CI**: new `.github/workflows/go.yml` runs `go test`, `go vet`, and `gofmt -l` on every PR touching `go/**`. Version-consistency check extended to also validate the Go SDK's declared version.
+- **Note**: this initial Go port covers the v0.2.0 stable surface only. The two v0.3.0-alpha.1 features above (A2A AgentCard types and DNS TXT cross-verification) follow in a Go-side `0.3.0-alpha.2` PR.
+
 ### Notes
 
 - This is the first v0.3.0 alpha — the unblock for **Symbiont v1.8.0 Phase 3** (AgentPin-verified AgentCards, A2A auth middleware) and **SchemaPin v1.4.0 `A2aVerificationContext`** (which consumes `AllowedDomains` for tool-verification scoping). Both downstream releases were waiting on this surface.
 - DNS TXT defends against HTTPS-origin compromise (compromised hosting account, expired domain not removed from CDN, ACME ownership-validation bypass) and TLS cert mis-issuance — the DNS credential chain (registrar, DNS provider, optionally DNSSEC) is independent of the HTTPS hosting chain. Spec § 4.8.3 reserved this slot in v0.1; this PR ships the implementation.
 - All additions are purely additive — v0.2.0 callers are unaffected. Discovery documents without `a2a_endpoint`, AgentCards without an `agentpin` extension, and absent `_agentpin` TXT records all behave exactly as before.
-- JavaScript and Python SDK ports follow in `0.3.0-alpha.2`. The Go SDK (separate priority) follows in its own release.
+- JavaScript and Python SDK ports of the new A2A + DNS surface follow in `0.3.0-alpha.2`.
 
 ## [0.2.0] - 2026-02-12
 
