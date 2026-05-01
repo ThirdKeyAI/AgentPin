@@ -116,7 +116,7 @@ from .bundle import (
     verify_credential_with_bundle,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0-alpha.1"
 
 __all__ = [
     # Types

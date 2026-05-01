@@ -22,3 +22,7 @@ pub mod a2a;
 #[cfg(feature = "fetch")]
 pub mod resolver_a2a;
 pub mod resolver_local;
+
+// v0.3.0: DNS TXT cross-verification at `_agentpin.{domain}`. Parser/matcher
+// always available; the async fetcher lives behind the `dns` Cargo feature.
+pub mod dns;

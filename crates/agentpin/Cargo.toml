@@ -13,6 +13,7 @@ categories = ["authentication", "cryptography"]
 [features]
 default = []
 fetch = ["reqwest", "tokio", "async-trait"]
+dns = ["hickory-resolver", "tokio", "async-trait"]
 
 [dependencies]
 p256 = { version = "0.13", features = ["ecdsa", "pem", "jwk"] }
@@ -30,6 +31,9 @@ async-trait = { version = "0.1", optional = true }
 reqwest = { version = "0.12", features = ["json"], optional = true }
 tokio = { version = "1.0", optional = true }
 tempfile = { version = "3.0", optional = true }
+
+# Optional dependency for DNS TXT cross-verification (v0.3.0)
+hickory-resolver = { version = "0.24", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"
