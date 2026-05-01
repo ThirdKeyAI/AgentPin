@@ -1,8 +1,9 @@
 ---
 name: agentpin
 title: AgentPin
-description: Domain-anchored cryptographic identity protocol for AI agents — ES256 JWT credentials, 12-step verification, TOFU key pinning, revocation, delegation chains, and mutual authentication
-version: 0.2.0
+description: Domain-anchored cryptographic identity protocol for AI agents — ES256 JWT credentials, 12-step verification, TOFU key pinning, revocation, delegation chains, mutual authentication, and (v0.3.0-alpha, Rust) A2A AgentCard extension types + signed AgentCard builder + LocalAgentCardStore + A2aAgentCardResolver + AllowedDomains type for cross-protocol use with SchemaPin v1.4
+version: 0.3.0-alpha.1
+stable_version: 0.2.0
 ---
 
 # AgentPin Development Skills Guide

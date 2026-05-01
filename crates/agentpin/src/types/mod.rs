@@ -1,3 +1,4 @@
+pub mod a2a;
 pub mod bundle;
 pub mod capability;
 pub mod constraint;

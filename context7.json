@@ -3,7 +3,7 @@
   "url": "https://context7.com/thirdkeyai/agentpin",
   "public_key": "pk_Ehy7QXQTu2Keb0e5BNeyx",
   "projectTitle": "AgentPin",
-  "description": "Domain-anchored cryptographic identity protocol for AI agents — ES256 JWT credentials, 12-step verification, TOFU key pinning, revocation checking, delegation chains, and mutual authentication. Implementations in Rust, JavaScript, and Python. Part of the ThirdKey trust stack.",
+  "description": "Domain-anchored cryptographic identity protocol for AI agents — ES256 JWT credentials, 12-step verification, TOFU key pinning, revocation checking, delegation chains, mutual authentication, and (v0.3.0-alpha, Rust) A2A AgentCard extension types + signed AgentCard builder + LocalAgentCardStore + A2aAgentCardResolver + AllowedDomains type for cross-protocol use. Stable implementations in Rust, JavaScript, and Python. Part of the ThirdKey trust stack: SchemaPin (tool integrity) → AgentPin (agent identity) → Symbiont (runtime).",
   "folders": [
     "SKILL.md",
     "README.md",

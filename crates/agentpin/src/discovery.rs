@@ -23,6 +23,7 @@ pub fn build_discovery_document(
         )),
         policy_url: None,
         schemapin_endpoint: None,
+        a2a_endpoint: None,
         max_delegation_depth,
         updated_at: updated_at.to_string(),
     }
