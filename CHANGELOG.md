@@ -19,10 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`A2aAgentCardResolver`** in new `resolver_a2a` module (gated on `fetch`) — fetches `https://{domain}/.well-known/agent-card.json`, verifies the AgentPin extension, cross-checks that the embedded `agentpin_endpoint` host matches the fetched domain, and derives a `DiscoveryDocument`. `last_card()` exposes the original A2A representation alongside the derived doc for callers that want both.
 - **`a2a_endpoint` field** on `DiscoveryDocument` — optional URL of the entity's A2A AgentCard endpoint, enabling cross-protocol discovery.
 
+#### DNS TXT Cross-Verification at `_agentpin.{domain}` (Rust)
+
+- **New `dns` module** with `DnsTxtRecord`, `parse_txt_record`, `verify_dns_match`, and `txt_record_name`. Always available; the parser/matcher have no DNS dependencies.
+- **`fetch_dns_txt(domain)`**: async lookup behind the new `dns` Cargo feature. Brings in `hickory-resolver`, `tokio`, and `async-trait`.
+- **TXT record format**: `_agentpin.{domain}` IN TXT `"v=agentpin1; kid=...; fp=sha256:<hex>"` — whitespace-tolerant parser, case-insensitive on `fp`, ignores unknown fields for forward compatibility. Mirrors SchemaPin's `_schemapin.{domain}` shape exactly with the version tag changed.
+- **Multi-key match semantics**: AgentPin discovery docs may carry several keys for rotation; a published TXT record need only match one of them. When the TXT carries an explicit `kid`, the matching key MUST also carry the same `kid`.
+- **Fail-closed on mismatch**: a publisher who *intentionally* publishes a TXT record has signaled that DNS is part of their trust chain — divergence between DNS and `.well-known` indicates compromise of one channel and is treated as a hard failure.
+
 ### Notes
 
 - This is the first v0.3.0 alpha — the unblock for **Symbiont v1.8.0 Phase 3** (AgentPin-verified AgentCards, A2A auth middleware) and **SchemaPin v1.4.0 `A2aVerificationContext`** (which consumes `AllowedDomains` for tool-verification scoping). Both downstream releases were waiting on this surface.
-- All additions are purely additive — v0.2.0 callers are unaffected. Discovery documents without `a2a_endpoint` and AgentCards without an `agentpin` extension behave exactly as before.
+- DNS TXT defends against HTTPS-origin compromise (compromised hosting account, expired domain not removed from CDN, ACME ownership-validation bypass) and TLS cert mis-issuance — the DNS credential chain (registrar, DNS provider, optionally DNSSEC) is independent of the HTTPS hosting chain. Spec § 4.8.3 reserved this slot in v0.1; this PR ships the implementation.
+- All additions are purely additive — v0.2.0 callers are unaffected. Discovery documents without `a2a_endpoint`, AgentCards without an `agentpin` extension, and absent `_agentpin` TXT records all behave exactly as before.
 - JavaScript and Python SDK ports follow in `0.3.0-alpha.2`. The Go SDK (separate priority) follows in its own release.
 
 ## [0.2.0] - 2026-02-12
