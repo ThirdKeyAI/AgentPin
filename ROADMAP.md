@@ -14,7 +14,8 @@
 |---------|--------|----------|--------|
 | **v0.1.0** | 2026-01 | Core identity, verification, delegation | Shipped |
 | **v0.2.0** | 2026-02 | Trust bundles, alternative discovery, directory listing | Shipped |
-| **v0.3.0** | Q2 2026 | A2A AgentCard extension types + resolver | Planning |
+| **v0.3.0-alpha.1** | 2026-05-01 | A2A AgentCard types + resolvers + AllowedDomains (Rust) | **Shipped** |
+| **v0.3.0** | Q2 2026 | A2A AgentCard extension types + resolver, JS/Python ports, full A2A integration | In progress |
 | **v0.4.0** | Q3 2026 | Mutual auth as A2A handshake, cross-language parity | Planning |
 | **v1.0.0** | Q4 2026 | Stable API, full specification compliance | Planning |
 
@@ -28,7 +29,7 @@ See [CHANGELOG.md](CHANGELOG.md) for full release notes.
 
 ---
 
-## v0.3.0 — A2A AgentCard Types + Resolver (Q2 2026)
+## v0.3.0 — A2A AgentCard Types + Resolver (Q2 2026) — **Rust shipped (alpha.1)**
 
 AgentPin becomes the cryptographic identity layer for A2A (Agent-to-Agent) networks. This release defines extension types for A2A AgentCards and a resolver that discovers AgentPin identity from A2A endpoints.
 
@@ -124,4 +125,4 @@ We welcome input on roadmap priorities:
 
 ---
 
-*Last updated: 2026-03-01 (cross-repo alignment with Symbiont v1.7.0/v1.8.0 and SchemaPin v1.4.0)*
+*Last updated: 2026-05-01 (v0.3.0-alpha.1 — Rust A2A AgentCard types, AllowedDomains, LocalAgentCardStore, A2aAgentCardResolver)*
