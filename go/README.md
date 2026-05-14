@@ -138,6 +138,11 @@ agentpin bundle \
 | `nonce.InMemoryStore`                                   | `nonce::InMemoryNonceStore`                    | Replay-protection nonce store        |
 | `bundle.NewTrustBundle`                                 | `types::bundle::TrustBundle::new`              | Offline trust-bundle builder         |
 | `resolver.{WellKnown,LocalFile,TrustBundle,Chain}Resolver` | `resolver::*`                              | Pluggable discovery resolution       |
+| `a2a.BuildAndSignAgentCard` / `VerifyAgentpinExtension` | `a2a::A2aAgentCardBuilder` / `verify_agentpin_extension` | (v0.3) Sign + verify A2A AgentCards |
+| `dns.ParseTxtRecord` / `VerifyDnsMatch` / `LookupTxt`   | `dns::parse_txt_record` / `verify_dns_match` / `fetch_dns_txt` | (v0.3) DNS TXT cross-verification |
+| `resolver.LocalAgentCardStore`                          | `resolver_local::LocalAgentCardStore`          | (v0.3) Push-registered AgentCard store |
+| `resolver.A2aAgentCardResolver`                         | `resolver_a2a::A2aAgentCardResolver`           | (v0.3) `.well-known/agent-card.json` fetcher |
+| `types.AllowedDomainsHelper`                            | `types::discovery::AllowedDomains`             | (v0.3) Cross-protocol allow-list helpers |
 
 ## Security guarantees
 
@@ -154,6 +159,43 @@ agentpin bundle \
 - **Fail-closed revocation.** When a resolver returns an error fetching a
   revocation document, verification rejects the credential rather than
   proceeding without revocation data.
+- **(v0.3) AgentCard canonicalisation.** The `a2a.BuildAndSignAgentCard` /
+  `a2a.VerifyAgentpinExtension` pair uses sorted-key compact JSON with the
+  `agentpin` field cleared as the signing input — byte-identical to the
+  other three SDKs. AgentCards signed in any SDK verify in Go.
+- **(v0.3) DNS TXT fail-closed.** When a `_agentpin.{domain}` TXT record is
+  present, `dns.VerifyDnsMatch` rejects mismatches with `DISCOVERY_INVALID`.
+  Absent records are inert.
+
+## v0.3 quick reference
+
+```go
+// Sign an A2A AgentCard
+card, _ := a2a.BuildAndSignAgentCard(
+    "https://example.com/agent", &declaration,
+    privateKeyPEM, "example-2026-05",
+    "https://example.com/.well-known/agent-identity.json",
+    a2a.BuildOptions{Streaming: true},
+)
+
+// Verify (extension signature only)
+_ = a2a.VerifyAgentpinExtension(&card)
+
+// Push-based discovery
+store := resolver.NewLocalAgentCardStore()
+_ = store.Register(card)
+doc, _ := store.ResolveDiscovery("example.com")
+
+// Pull-based discovery
+r := resolver.NewA2aAgentCardResolver()
+doc, _ = r.ResolveDiscovery("example.com")
+
+// DNS TXT cross-verification
+record, _ := dns.ParseTxtRecord("v=agentpin1; kid=example-2026-05; fp=sha256:abcd...")
+_ = dns.VerifyDnsMatch(&doc, record)
+```
+
+See [docs/a2a-agentcards.md](https://github.com/ThirdKeyAI/AgentPin/blob/main/docs/a2a-agentcards.md) for the full guide.
 
 ## Development
 

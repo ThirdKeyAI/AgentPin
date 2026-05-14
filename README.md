@@ -16,7 +16,10 @@ AgentPin lets organizations publish verifiable identity for their AI agents. Iss
 - **Credential revocation** at credential, agent, and key level
 - **Mutual authentication** with challenge-response
 - **Trust bundles** for air-gapped and enterprise environments
-- **Cross-language** — Rust, JavaScript, Python, and Go SDKs produce interoperable credentials
+- **Signed A2A AgentCards** (v0.3) — extends the [A2A](https://github.com/google-a2a/A2A) AgentCard format with an AgentPin cryptographic-identity payload. `LocalAgentCardStore` for push-registered agents, `A2aAgentCardResolver` for `.well-known/agent-card.json` fetches.
+- **DNS TXT cross-verification** (v0.3) — second-channel trust via `_agentpin.{domain}` TXT records (`v=agentpin1; kid=...; fp=sha256:<hex>`), defending against HTTPS-origin and TLS cert mis-issuance compromise.
+- **`AllowedDomains` typed wrapper** (v0.3) — empty-list-equals-unrestricted convention with intersection semantics for cross-protocol scoping with SchemaPin v1.4 `A2aVerificationContext`.
+- **Cross-language** — Rust, JavaScript, Python, and Go SDKs produce interoperable credentials and AgentCards. Cards signed in any SDK verify cleanly in the other three.
 
 ## Quick Start
 
@@ -71,6 +74,7 @@ go get github.com/ThirdKeyAi/agentpin/go
 |-------|------|
 | Getting Started | [docs.agentpin.org/getting-started](https://docs.agentpin.org/getting-started/) |
 | Verification Flow | [docs.agentpin.org/verification-flow](https://docs.agentpin.org/verification-flow/) |
+| A2A AgentCards (v0.3) | [docs/a2a-agentcards.md](docs/a2a-agentcards.md) |
 | CLI Reference | [docs.agentpin.org/cli-guide](https://docs.agentpin.org/cli-guide/) |
 | Trust Bundles | [docs.agentpin.org/trust-bundles](https://docs.agentpin.org/trust-bundles/) |
 | Delegation Chains | [docs.agentpin.org/delegation-chains](https://docs.agentpin.org/delegation-chains/) |

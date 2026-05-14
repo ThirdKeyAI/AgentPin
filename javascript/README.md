@@ -75,6 +75,9 @@ if (result.valid) {
 - **Credential, agent, and key-level revocation**
 - **Mutual authentication** with challenge-response
 - **Trust bundles** for air-gapped and enterprise verification (v0.2.0)
+- **Signed A2A AgentCards** (v0.3.0) — extends the [A2A](https://github.com/google-a2a/A2A) AgentCard with an AgentPin cryptographic-identity payload. `LocalAgentCardStore` for push-registered agents, `A2aAgentCardResolver` for `.well-known/agent-card.json` fetches.
+- **DNS TXT cross-verification** (v0.3.0) — second-channel trust via `_agentpin.{domain}` TXT records (`v=agentpin1; kid=...; fp=sha256:<hex>`).
+- **`AllowedDomains` typed wrapper** (v0.3.0) — empty-list-equals-unrestricted convention with intersection semantics for cross-protocol scoping.
 - **Zero dependencies** — Node.js built-in crypto only
 
 ## API
@@ -158,9 +161,67 @@ const json = store.toJson();                    // persist
 const restored = KeyPinStore.fromJson(json);    // restore
 ```
 
+### A2A AgentCards (v0.3.0)
+
+```javascript
+import {
+    buildAndSignAgentCard,
+    verifyAgentpinExtension,
+    LocalAgentCardStore,
+    A2aAgentCardResolver,
+} from 'agentpin';
+
+// Build + sign an A2A AgentCard from an AgentPin declaration
+const card = buildAndSignAgentCard(
+    'https://example.com/agent',
+    declaration,
+    privateKeyPem,
+    'example-2026-05',
+    'https://example.com/.well-known/agent-identity.json',
+    { streaming: true },
+);
+
+// Verify (extension signature only — pair with discovery for full chain)
+verifyAgentpinExtension(card);
+
+// Push-based: register a card inline (no HTTP)
+const store = new LocalAgentCardStore();
+store.register(card);                                    // verifies signature
+const doc = store.resolveDiscovery('example.com');       // -> derived DiscoveryDocument
+
+// Pull-based: fetch + verify over HTTPS
+const resolver = new A2aAgentCardResolver();
+const fetched = await resolver.resolveDiscovery('example.com');
+```
+
+See [docs/a2a-agentcards.md](https://github.com/ThirdKeyAI/AgentPin/blob/main/docs/a2a-agentcards.md) for the full guide.
+
+### DNS TXT cross-verification (v0.3.0)
+
+```javascript
+import { parseTxtRecord, verifyDnsMatch, fetchDnsTxt } from 'agentpin';
+
+// Parse a TXT value retrieved out-of-band
+const record = parseTxtRecord('v=agentpin1; kid=example-2026-05; fp=sha256:abcd...');
+verifyDnsMatch(discoveryDoc, record);            // throws DISCOVERY_INVALID on mismatch
+
+// Or look it up live via Node's built-in dns/promises
+const fetched = await fetchDnsTxt('example.com'); // null when no record exists
+```
+
+### AllowedDomains (v0.3.0)
+
+```javascript
+import { AllowedDomains } from 'agentpin';
+
+const caller   = AllowedDomains.fromConstraints(callerCredential.constraints);
+const provider = AllowedDomains.fromConstraints(providerAgent.constraints);
+const scope    = AllowedDomains.intersect(caller, provider);  // unrestricted ∩ X = X
+```
+
 ## Cross-Language Interoperability
 
-Credentials issued by the JavaScript package can be verified by the [Rust](https://crates.io/crates/agentpin) and [Python](https://pypi.org/project/agentpin/) implementations, and vice versa. All implementations use DER-encoded ECDSA signatures and identical JSON field names.
+Credentials and signed A2A AgentCards issued by the JavaScript package verify byte-identically in the [Rust](https://crates.io/crates/agentpin), [Python](https://pypi.org/project/agentpin/), and [Go](https://pkg.go.dev/github.com/ThirdKeyAi/agentpin/go) implementations, and vice versa. All four SDKs use DER-encoded ECDSA signatures, identical JSON field names, and sorted-key canonical JSON for AgentCard signing inputs.
 
 ## License
 
