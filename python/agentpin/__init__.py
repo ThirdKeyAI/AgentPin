@@ -1,9 +1,11 @@
 """AgentPin: Domain-anchored cryptographic identity protocol for AI agents."""
 
 from .capability import (
+    CORE_ACTIONS,
     Capability,
     capabilities_hash,
     capabilities_subset,
+    validate_capability,
 )
 from .constraint import (
     constraints_subset_of,
@@ -29,11 +31,35 @@ from .delegation import (
     verify_chain_depth,
 )
 from .discovery import (
+    AllowedDomains,
     build_discovery_document,
     fetch_discovery_document,
     find_agent_by_id,
     find_key_by_kid,
     validate_discovery_document,
+)
+from .a2a import (
+    build_and_sign_agent_card,
+    build_unsigned_agent_card,
+    canonicalize_for_signing,
+    capability_to_skill,
+    extension_key_thumbprint,
+    sign_agent_card,
+    verify_agentpin_extension,
+)
+from .dns import (
+    fetch_dns_txt,
+    parse_txt_record,
+    txt_record_name,
+    verify_dns_match,
+)
+from .resolver_local import (
+    LocalAgentCardStore,
+    card_endpoint_host,
+    derive_discovery_from_card,
+)
+from .resolver_a2a import (
+    A2aAgentCardResolver,
 )
 from .jwk import (
     jwk_thumbprint,
@@ -51,6 +77,29 @@ from .mutual import (
     create_challenge,
     create_response,
     verify_response,
+    verify_response_with_nonce_store,
+)
+from .nonce import (
+    InMemoryNonceStore,
+    NonceStore,
+)
+from .rotation import (
+    apply_rotation,
+    complete_rotation,
+    prepare_rotation,
+)
+from .transport import (
+    AUTH_TYPE,
+    FIELD_NAME,
+    GRPC_METADATA_KEY,
+    grpc_extract_credential,
+    grpc_format_metadata_value,
+    http_extract_credential,
+    http_format_authorization_header,
+    mcp_extract_credential,
+    mcp_format_meta_field,
+    ws_extract_credential,
+    ws_format_auth_message,
 )
 from .pinning import (
     KeyPinStore,
@@ -91,7 +140,7 @@ from .bundle import (
     verify_credential_with_bundle,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     # Types
@@ -127,6 +176,8 @@ __all__ = [
     "Capability",
     "capabilities_subset",
     "capabilities_hash",
+    "validate_capability",
+    "CORE_ACTIONS",
     # Constraint
     "parse_rate_limit",
     "domain_pattern_matches",
@@ -140,6 +191,25 @@ __all__ = [
     "find_key_by_kid",
     "find_agent_by_id",
     "fetch_discovery_document",
+    "AllowedDomains",
+    # A2A AgentCard (v0.3.0)
+    "build_and_sign_agent_card",
+    "build_unsigned_agent_card",
+    "canonicalize_for_signing",
+    "capability_to_skill",
+    "extension_key_thumbprint",
+    "sign_agent_card",
+    "verify_agentpin_extension",
+    # DNS TXT (v0.3.0)
+    "fetch_dns_txt",
+    "parse_txt_record",
+    "txt_record_name",
+    "verify_dns_match",
+    # Resolvers (v0.3.0)
+    "LocalAgentCardStore",
+    "A2aAgentCardResolver",
+    "card_endpoint_host",
+    "derive_discovery_from_card",
     # Revocation
     "build_revocation_document",
     "add_revoked_credential",
@@ -160,6 +230,26 @@ __all__ = [
     "create_challenge",
     "create_response",
     "verify_response",
+    "verify_response_with_nonce_store",
+    # Nonce
+    "NonceStore",
+    "InMemoryNonceStore",
+    # Rotation
+    "prepare_rotation",
+    "apply_rotation",
+    "complete_rotation",
+    # Transport
+    "http_extract_credential",
+    "http_format_authorization_header",
+    "FIELD_NAME",
+    "mcp_extract_credential",
+    "mcp_format_meta_field",
+    "AUTH_TYPE",
+    "ws_extract_credential",
+    "ws_format_auth_message",
+    "GRPC_METADATA_KEY",
+    "grpc_extract_credential",
+    "grpc_format_metadata_value",
     # Verification
     "verify_credential_offline",
     "verify_credential",

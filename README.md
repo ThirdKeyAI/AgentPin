@@ -16,7 +16,7 @@ AgentPin lets organizations publish verifiable identity for their AI agents. Iss
 - **Credential revocation** at credential, agent, and key level
 - **Mutual authentication** with challenge-response
 - **Trust bundles** for air-gapped and enterprise environments
-- **Cross-language** — Rust, JavaScript, and Python SDKs produce interoperable credentials
+- **Cross-language** — Rust, JavaScript, Python, and Go SDKs produce interoperable credentials
 
 ## Quick Start
 
@@ -43,7 +43,7 @@ agentpin verify --credential <jwt>
 
 ```toml
 [dependencies]
-agentpin = { version = "0.2", features = ["fetch"] }
+agentpin = { version = "0.3", features = ["fetch"] }
 ```
 
 ### JavaScript
@@ -56,6 +56,13 @@ npm install agentpin
 
 ```bash
 pip install agentpin
+```
+
+### Go
+
+```bash
+go install github.com/ThirdKeyAi/agentpin/go/cmd/agentpin@latest
+go get github.com/ThirdKeyAi/agentpin/go
 ```
 
 ## Documentation
@@ -80,6 +87,7 @@ crates/
 └── agentpin-server/   # HTTP server for .well-known endpoints
 javascript/            # JavaScript/Node.js SDK
 python/                # Python SDK
+go/                    # Go SDK
 ```
 
 ## License

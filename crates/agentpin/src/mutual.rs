@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 use chrono::Utc;
 use p256::ecdsa::{SigningKey, VerifyingKey};
@@ -5,6 +7,7 @@ use rand::RngCore;
 
 use crate::crypto;
 use crate::error::Error;
+use crate::nonce::NonceStore;
 use crate::types::mutual::{Challenge, Response};
 
 const NONCE_EXPIRY_SECS: i64 = 60;
@@ -40,6 +43,19 @@ pub fn verify_response(
     challenge: &Challenge,
     verifying_key: &VerifyingKey,
 ) -> Result<bool, Error> {
+    verify_response_with_nonce_store(response, challenge, verifying_key, None)
+}
+
+/// Verify a challenge response with optional nonce deduplication.
+///
+/// When a `nonce_store` is provided, the response nonce is checked against
+/// previously seen nonces to prevent replay attacks within the validity window.
+pub fn verify_response_with_nonce_store(
+    response: &Response,
+    challenge: &Challenge,
+    verifying_key: &VerifyingKey,
+    nonce_store: Option<&dyn NonceStore>,
+) -> Result<bool, Error> {
     // Check nonce matches
     if response.nonce != challenge.nonce {
         return Ok(false);
@@ -53,6 +69,14 @@ pub fn verify_response(
                 "Challenge nonce expired ({} seconds old, max {})",
                 elapsed, NONCE_EXPIRY_SECS
             )));
+        }
+    }
+
+    // Check nonce deduplication if a store is provided
+    if let Some(store) = nonce_store {
+        let fresh = store.check_and_record(&response.nonce, Duration::from_secs(60))?;
+        if !fresh {
+            return Err(Error::Jwt("Nonce has already been used".to_string()));
         }
     }
 
@@ -145,5 +169,42 @@ mod tests {
             challenge.verifier_credential,
             Some("eyJ...test-jwt".to_string())
         );
+    }
+
+    #[test]
+    fn test_verify_with_nonce_store() {
+        let kp = crypto::generate_key_pair().unwrap();
+        let sk = crypto::load_signing_key(&kp.private_key_pem).unwrap();
+        let vk = crypto::load_verifying_key(&kp.public_key_pem).unwrap();
+
+        let store = crate::nonce::InMemoryNonceStore::new();
+        let challenge = create_challenge(None);
+        let response = create_response(&challenge, &sk, "test-key");
+
+        // First verification should succeed.
+        let valid =
+            verify_response_with_nonce_store(&response, &challenge, &vk, Some(&store)).unwrap();
+        assert!(valid);
+
+        // Second verification with the same nonce should fail (replay).
+        let result = verify_response_with_nonce_store(&response, &challenge, &vk, Some(&store));
+        assert!(result.is_err(), "Replayed nonce should be rejected");
+    }
+
+    #[test]
+    fn test_verify_without_nonce_store() {
+        let kp = crypto::generate_key_pair().unwrap();
+        let sk = crypto::load_signing_key(&kp.private_key_pem).unwrap();
+        let vk = crypto::load_verifying_key(&kp.public_key_pem).unwrap();
+
+        let challenge = create_challenge(None);
+        let response = create_response(&challenge, &sk, "test-key");
+
+        // Without a nonce store, same nonce can be verified multiple times.
+        let valid1 = verify_response(&response, &challenge, &vk).unwrap();
+        assert!(valid1);
+
+        let valid2 = verify_response(&response, &challenge, &vk).unwrap();
+        assert!(valid2);
     }
 }

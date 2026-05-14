@@ -41,6 +41,8 @@ export {
     Capability,
     capabilitiesSubset,
     capabilitiesHash,
+    validateCapability,
+    CORE_ACTIONS,
 } from './capability.js';
 
 export {
@@ -60,6 +62,7 @@ export {
     findKeyByKid,
     findAgentById,
     fetchDiscoveryDocument,
+    AllowedDomains,
 } from './discovery.js';
 
 export {
@@ -88,6 +91,7 @@ export {
     createChallenge,
     createResponse,
     verifyResponse,
+    verifyResponseWithNonceStore,
 } from './mutual.js';
 
 export {
@@ -103,4 +107,53 @@ export {
     verifyCredentialWithBundle,
 } from './bundle.js';
 
-export const version = '0.2.0';
+export {
+    httpExtractCredential,
+    httpFormatAuthorizationHeader,
+    mcpExtractCredential,
+    mcpFormatMetaField,
+    wsExtractCredential,
+    wsFormatAuthMessage,
+    GRPC_METADATA_KEY,
+    grpcExtractCredential,
+    grpcFormatMetadataValue,
+} from './transport.js';
+
+export {
+    prepareRotation,
+    applyRotation,
+    completeRotation,
+} from './rotation.js';
+
+export {
+    InMemoryNonceStore,
+} from './nonce.js';
+
+export {
+    capabilityToSkill,
+    buildUnsignedAgentCard,
+    signAgentCard,
+    buildAndSignAgentCard,
+    verifyAgentpinExtension,
+    extensionKeyThumbprint,
+    canonicalizeForSigning,
+} from './a2a.js';
+
+export {
+    LocalAgentCardStore,
+    cardEndpointHost,
+    deriveDiscoveryFromCard,
+} from './resolverLocal.js';
+
+export {
+    A2aAgentCardResolver,
+} from './resolverA2a.js';
+
+export {
+    parseTxtRecord,
+    verifyDnsMatch,
+    txtRecordName,
+    fetchDnsTxt,
+} from './dns.js';
+
+export const version = '0.3.0';

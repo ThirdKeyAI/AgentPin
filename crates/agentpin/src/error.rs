@@ -38,6 +38,9 @@ pub enum Error {
     #[error("Delegation error: {0}")]
     Delegation(String),
 
+    #[error("Transport error: {0}")]
+    Transport(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

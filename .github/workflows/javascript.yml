@@ -1,0 +1,27 @@
+name: JavaScript CI
+on:
+  push:
+    branches: [main]
+    paths: ['javascript/**']
+  pull_request:
+    paths: ['javascript/**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ['18', '20']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - working-directory: javascript
+        # The JS SDK has no runtime deps and intentionally does not commit a
+        # lockfile (it is in .gitignore), so use `npm install` instead of
+        # `npm ci`. Lock-free installs are fine here since devDependencies are
+        # only used for tests/lint, not anything that ships.
+        run: |
+          npm install --no-audit --no-fund
+          npm test

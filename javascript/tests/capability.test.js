@@ -4,7 +4,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { Capability, capabilitiesSubset, capabilitiesHash } from '../src/capability.js';
+import { Capability, capabilitiesSubset, capabilitiesHash, validateCapability, CORE_ACTIONS } from '../src/capability.js';
 
 describe('Capability.parse', () => {
     test('parses action and resource', () => {
@@ -62,5 +62,53 @@ describe('capabilitiesHash', () => {
         const caps1 = [new Capability('read:codebase'), new Capability('write:report')];
         const caps2 = [new Capability('write:report'), new Capability('read:codebase')];
         assert.strictEqual(capabilitiesHash(caps1), capabilitiesHash(caps2));
+    });
+});
+
+describe('CORE_ACTIONS', () => {
+    test('contains expected actions', () => {
+        assert.deepStrictEqual(CORE_ACTIONS, ['read', 'write', 'execute', 'admin', 'delegate']);
+    });
+});
+
+describe('validateCapability', () => {
+    test('accepts core actions', () => {
+        assert.doesNotThrow(() => validateCapability(new Capability('read:codebase')));
+        assert.doesNotThrow(() => validateCapability(new Capability('write:report')));
+        assert.doesNotThrow(() => validateCapability(new Capability('execute:task')));
+        assert.doesNotThrow(() => validateCapability(new Capability('delegate:sub')));
+    });
+
+    test('accepts admin with scoped resource', () => {
+        assert.doesNotThrow(() => validateCapability(new Capability('admin:users')));
+    });
+
+    test('rejects admin:* wildcard', () => {
+        assert.throws(
+            () => validateCapability(new Capability('admin:*')),
+            /admin:\* wildcard is not allowed/
+        );
+    });
+
+    test('accepts reverse-domain custom action', () => {
+        assert.doesNotThrow(() => validateCapability(new Capability('com.example.deploy:staging')));
+    });
+
+    test('rejects custom action without reverse-domain', () => {
+        assert.throws(
+            () => validateCapability(new Capability('deploy:staging')),
+            /must use reverse-domain prefix/
+        );
+    });
+
+    test('rejects missing colon', () => {
+        assert.throws(
+            () => validateCapability(new Capability('readcodebase')),
+            /Invalid capability format/
+        );
+    });
+
+    test('accepts read:* wildcard', () => {
+        assert.doesNotThrow(() => validateCapability(new Capability('read:*')));
     });
 });

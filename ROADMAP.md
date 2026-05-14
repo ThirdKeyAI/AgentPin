@@ -1,7 +1,7 @@
 # AgentPin Roadmap
 
-![Version](https://img.shields.io/badge/current-v0.2.0-brightgreen)
-![Next](https://img.shields.io/badge/next-v0.3.0-blue)
+![Version](https://img.shields.io/badge/current-v0.3.0-brightgreen)
+![Next](https://img.shields.io/badge/next-v0.4.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **Domain-anchored cryptographic identity for AI agents — the identity layer of the ThirdKey trust stack.**
@@ -14,8 +14,8 @@
 |---------|--------|----------|--------|
 | **v0.1.0** | 2026-01 | Core identity, verification, delegation | Shipped |
 | **v0.2.0** | 2026-02 | Trust bundles, alternative discovery, directory listing | Shipped |
-| **v0.3.0** | Q2 2026 | A2A AgentCard extension types + resolver | Planning |
-| **v0.4.0** | Q3 2026 | Mutual auth as A2A handshake, cross-language parity | Planning |
+| **v0.3.0** | 2026-05-14 | A2A AgentCard extension types + resolvers + AllowedDomains + DNS TXT (Rust, JavaScript, Python, Go) | **Shipped** |
+| **v0.4.0** | Q3 2026 | Mutual auth as A2A handshake, hardware-backed keys | Planning |
 | **v1.0.0** | Q4 2026 | Stable API, full specification compliance | Planning |
 
 ---
@@ -28,43 +28,35 @@ See [CHANGELOG.md](CHANGELOG.md) for full release notes.
 
 ---
 
-## v0.3.0 — A2A AgentCard Types + Resolver (Q2 2026)
+## v0.3.0 — Shipped (2026-05-14)
 
-AgentPin becomes the cryptographic identity layer for A2A (Agent-to-Agent) networks. This release defines extension types for A2A AgentCards and a resolver that discovers AgentPin identity from A2A endpoints.
+AgentPin became the cryptographic identity layer for A2A (Agent-to-Agent)
+networks. Four-language parity (Rust, JavaScript, Python, Go) for the A2A
+AgentCard extension surface and DNS TXT cross-verification: cards signed in
+any of the four SDKs verify cleanly in the other three.
 
-### A2A AgentCard Extension Types
+Highlights:
 
-| Item | Details |
-|------|---------|
-| `A2aAgentCardExtension` | New type: `agentpin_endpoint`, `public_key_jwk`, `signature` fields |
-| `A2aAgentCardBuilder` | Constructs signed A2A AgentCard from `AgentDeclaration` + signing key |
-| Capability mapping | `AgentDeclaration.capabilities` → `AgentSkill`, `AgentDeclaration.constraints` → `AgentCapabilities` |
-| Verification | Validate A2A extensions during 12-step verification |
+- **A2A AgentCard extension** — signed AgentCards published at
+  `/.well-known/agent-card.json` with an AgentPin payload
+  (`agentpin_endpoint`, `public_key_jwk`, `signature`). Detached ECDSA P-256
+  signature over the canonical bytes of the card with the extension
+  cleared, byte-identical across all four SDKs.
+- **Resolvers** — `A2aAgentCardResolver` for HTTPS fetch + extension
+  verification + endpoint-host cross-check; `LocalAgentCardStore` for
+  in-memory pre-registered cards (backs Symbiont's push-based external-
+  agent registration).
+- **`AllowedDomains` typed wrapper** — empty list = unrestricted convention
+  shared with SchemaPin v1.4 `A2aVerificationContext` for intersection-
+  based tool-verification scoping.
+- **DNS TXT cross-verification** — `_agentpin.{domain}` IN TXT
+  `"v=agentpin1; kid=...; fp=sha256:<hex>"`. Fail-closed on mismatch
+  because an intentional publish signals DNS is part of the trust chain.
+- **Go SDK** — initial fourth-language port at the v0.3.0 surface,
+  including A2A and DNS modules. Module path
+  `github.com/ThirdKeyAi/agentpin/go`, mirrors the SchemaPin Go SDK layout.
 
-### A2A AgentCard Resolver
-
-| Item | Details |
-|------|---------|
-| `A2aAgentCardResolver` | Implements `DiscoveryResolver` — fetches `/.well-known/agent-card.json`, extracts AgentPin extensions |
-| `LocalAgentCardStore` | In-memory store of pre-registered AgentCards for agents that don't serve HTTP (e.g., CLI tools, daemon processes). Implements `DiscoveryResolver` — looks up cards by domain/agent-id from local store instead of making HTTP requests. Cards are added via `store.register(card)`. This supports Symbiont v1.7.0's push-based external agent registration where the coordinator receives AgentCard JSON inline rather than fetching it from a `.well-known` endpoint. |
-| Fallback chain | Try local store first → A2A card fetch → `agent-identity.json` via `WellKnownResolver` |
-| Feature flag | Optional dependency on `a2a-types` behind `a2a` feature flag |
-
-### Allowed Domains Interface
-
-| Item | Details |
-|------|---------|
-| `AllowedDomains` type | New type in `src/types/discovery.rs`: `Vec<String>` of trusted domains extracted from `AgentDeclaration.constraints`. Exported for use by SchemaPin v1.4.0's `A2aVerificationContext` when scoping tool verification to the intersection of caller and provider domains. Convention: empty list means "all domains trusted" (no restriction). |
-
-### Touchpoints
-
-| Area | Change |
-|------|--------|
-| New | `src/types/a2a.rs` — `A2aAgentCardExtension`, `A2aAgentCardBuilder` |
-| New | `src/a2a.rs` — A2A extension signing and validation logic |
-| New | `src/resolver_a2a.rs` — `A2aAgentCardResolver` implementing `DiscoveryResolver` |
-| New | `src/resolver_local.rs` — `LocalAgentCardStore` implementing `DiscoveryResolver` |
-| Extend | `src/types/discovery.rs` — `a2a_endpoint` field, `AllowedDomains` type |
+See [CHANGELOG.md](CHANGELOG.md#030---2026-05-14) for full release notes.
 
 ---
 
@@ -81,13 +73,13 @@ Adapts AgentPin's challenge-response mutual authentication as an A2A handshake p
 | `MutualAuthPolicy` | `Required` \| `Optional` \| `Disabled` — configurable per agent |
 | Nonce expiry | Configurable nonce TTL for A2A use cases (shorter default than general use) |
 
-### Cross-Language Parity
+### Hardware-Backed Keys
 
-JavaScript and Python SDKs gain matching implementations:
-
-- `A2aAgentCardExtension`, `A2aAgentCardBuilder`, `A2aAgentCardResolver`
-- Mutual auth JSON-RPC helpers (`createChallenge`, `verifyResponse`)
-- Feature-flag equivalents for A2A dependencies
+| Item | Details |
+|------|---------|
+| HSM support | Sign credentials and AgentCards via PKCS#11-compatible HSMs |
+| TPM support | TPM 2.0 backend for OS-bound signing keys |
+| Key migration | Helpers to migrate existing software keys onto hardware-backed slots |
 
 ---
 
@@ -96,10 +88,10 @@ JavaScript and Python SDKs gain matching implementations:
 | Item | Details |
 |------|---------|
 | API audit | Review and stabilize all public types — remove experimental markers |
-| A2A types | Finalize `A2aAgentCardExtension` and related types |
+| A2A types | Finalize `A2aAgentCard`, `AgentpinExtension`, and related types; re-export upstream `a2a-types` once that crate stabilises |
 | Integration tests | Comprehensive test suite covering AgentPin + A2A interop scenarios |
 | Specification | Published spec for AgentPin identity model and A2A extension format |
-| Cross-language | Full parity across Rust, JavaScript, and Python — identical verification guarantees |
+| Cross-language | Full parity across Rust, JavaScript, Python, and Go — identical verification guarantees |
 
 ---
 
@@ -110,7 +102,6 @@ JavaScript and Python SDKs gain matching implementations:
 | Delegated A2A Auth | Delegate identity verification to trusted intermediaries for hub-and-spoke topologies |
 | Agent Directory Protocol | Standardized directory for discovering agents by capability, domain, or trust level |
 | Key Rotation for A2A | Seamless key rotation with grace periods — A2A peers notified via protocol extension |
-| Hardware-Backed Keys | HSM and TPM support for agent signing keys |
 
 ---
 
@@ -124,4 +115,4 @@ We welcome input on roadmap priorities:
 
 ---
 
-*Last updated: 2026-03-01 (cross-repo alignment with Symbiont v1.7.0/v1.8.0 and SchemaPin v1.4.0)*
+*Last updated: 2026-05-14 (v0.3.0 shipped — A2A AgentCard types, AllowedDomains, LocalAgentCardStore, A2aAgentCardResolver, DNS TXT cross-verification across Rust, JavaScript, Python, and Go)*
