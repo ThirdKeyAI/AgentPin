@@ -4,7 +4,7 @@ package version
 
 // Version is the current AgentPin Go SDK version. It must match the Rust
 // crate, JavaScript package, and Python package versions; CI enforces this.
-const Version = "0.3.0-alpha.1"
+const Version = "0.3.0"
 
 // ProtocolVersion is the AgentPin protocol version embedded in discovery
 // documents and credentials.

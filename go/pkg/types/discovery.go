@@ -46,6 +46,9 @@ type DiscoveryDocument struct {
 	RevocationEndpoint string             `json:"revocation_endpoint,omitempty"`
 	PolicyURL          string             `json:"policy_url,omitempty"`
 	SchemapinEndpoint  string             `json:"schemapin_endpoint,omitempty"`
-	MaxDelegationDepth uint8              `json:"max_delegation_depth"`
-	UpdatedAt          string             `json:"updated_at"`
+	// A2aEndpoint (v0.3.0) optionally identifies the URL of the entity's A2A
+	// AgentCard endpoint, enabling cross-protocol discovery.
+	A2aEndpoint        string `json:"a2a_endpoint,omitempty"`
+	MaxDelegationDepth uint8  `json:"max_delegation_depth"`
+	UpdatedAt          string `json:"updated_at"`
 }

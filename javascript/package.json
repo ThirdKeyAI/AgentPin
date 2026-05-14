@@ -1,6 +1,6 @@
 {
   "name": "agentpin",
-  "version": "0.3.0-alpha.1",
+  "version": "0.3.0",
   "description": "Domain-anchored cryptographic identity protocol for AI agents",
   "main": "src/index.js",
   "type": "module",
