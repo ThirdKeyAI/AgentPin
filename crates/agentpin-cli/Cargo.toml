@@ -2,7 +2,7 @@
 name = "agentpin-cli"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.85"
 description = "CLI tool for AgentPin credential management"
 license = "MIT"
 authors = ["Jascha Wanger <jascha@thirdkey.ai>"]
@@ -14,9 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 agentpin = { path = "../agentpin", features = ["fetch"] }
-# Pin to clap 4.5.x: clap_builder 4.6.0 declared edition = "2024" which
-# requires Rust 1.85+, breaking our declared MSRV of 1.70.
-clap = { version = "~4.5", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
 tokio = { version = "1.0", features = ["full"] }
 serde_json = "1.0"
 chrono = "0.4"

@@ -2,7 +2,7 @@
 name = "agentpin-server"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.85"
 description = "HTTP server for AgentPin discovery and revocation endpoints"
 license = "MIT"
 authors = ["Jascha Wanger <jascha@thirdkey.ai>"]
