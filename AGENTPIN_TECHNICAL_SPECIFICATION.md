@@ -1,10 +1,25 @@
 # AgentPin Technical Specification
 
-**Protocol Version:** 0.2.0
+**Protocol Version:** 0.3.0
 **Status:** Stable
 **Author:** Jascha Wanger / [ThirdKey.ai](https://thirdkey.ai)
-**Date:** 2026-02-16  
-**License:** MIT  
+**Date:** 2026-05-14
+**License:** MIT
+
+> **What's new in 0.3.0 (additive, wire-compatible with 0.2):**
+> §4.8.3 DNS TXT cross-verification at `_agentpin.{domain}` is now
+> normative (not "Reserved"). §4.9 adds the optional `a2a_endpoint`
+> field on `DiscoveryDocument`. New §4.10 specifies the **A2A AgentCard
+> extension** (signed AgentCards published at
+> `.well-known/agent-card.json`, AgentPin extension payload, sorted-key
+> canonical signing input). New §4.11 specifies the `AllowedDomains`
+> typed wrapper (empty-list = unrestricted; intersection semantics for
+> cross-protocol scoping with SchemaPin v1.4
+> `A2aVerificationContext`). §4.8 gains two new resolver entries
+> (LocalAgentCardStore, A2aAgentCardResolver). The wire protocol
+> version (`agentpin_version` field on documents) stays at `"0.1"` —
+> all v0.3 additions are purely additive fields that v0.2 callers
+> ignore.
 
 ---
 
@@ -29,6 +44,10 @@
   - [4.5 Agent Declaration Format](#45-agent-declaration-format)
   - [4.6 Caching and Freshness](#46-caching-and-freshness)
   - [4.7 Example Discovery Document](#47-example-discovery-document)
+  - [4.8 Alternative Discovery Mechanisms](#48-alternative-discovery-mechanisms)
+  - [4.9 Cross-Protocol Endpoint Fields (v0.3)](#49-cross-protocol-endpoint-fields-v03)
+  - [4.10 A2A AgentCard Extension (v0.3)](#410-a2a-agentcard-extension-v03)
+  - [4.11 AllowedDomains Typed Wrapper (v0.3)](#411-alloweddomains-typed-wrapper-v03)
 - [5. Agent Credentials](#5-agent-credentials)
   - [5.1 Credential Format](#51-credential-format)
   - [5.2 JWT Header](#52-jwt-header)
@@ -286,10 +305,14 @@ The discovery document is a JSON object with the following top-level structure:
   "revocation_endpoint": "<URL>",
   "policy_url": "<URL>",
   "schemapin_endpoint": "<URL>",
+  "a2a_endpoint": "<URL>",
   "max_delegation_depth": <integer>,
   "updated_at": "<ISO 8601 datetime>"
 }
 ```
+
+> The `a2a_endpoint` field is new in v0.3 and OPTIONAL — see §4.9. Documents
+> emitted by v0.2 implementations omit it; v0.3 verifiers MUST NOT require it.
 
 ### 4.3 Field Specifications
 
@@ -303,6 +326,7 @@ The discovery document is a JSON object with the following top-level structure:
 | `revocation_endpoint` | string | RECOMMENDED | URL of the revocation document (see §8). |
 | `policy_url` | string | OPTIONAL | URL of a human-readable policy document describing the entity's agent governance. |
 | `schemapin_endpoint` | string | OPTIONAL | URL of the entity's SchemaPin discovery document, if any. Enables cross-protocol discovery. |
+| `a2a_endpoint` | string | OPTIONAL | (v0.3) URL of the entity's A2A AgentCard endpoint (typically `https://{domain}/.well-known/agent-card.json`). Enables cross-protocol discovery from AgentPin into A2A. See §4.9, §4.10. |
 | `max_delegation_depth` | integer | REQUIRED | Maximum delegation depth this entity permits. MUST be between 0 and 3 inclusive. |
 | `updated_at` | string | REQUIRED | ISO 8601 datetime of the last update to this document. |
 
@@ -518,21 +542,98 @@ A trust bundle is a JSON file containing a collection of discovery and revocatio
 - Verifiers MUST validate documents from bundles identically to `.well-known`-fetched documents.
 - The `created_at` timestamp indicates bundle generation time; verifiers MAY use it to enforce freshness policies.
 
-#### 4.8.3 DNS TXT Records (Future)
+#### 4.8.3 DNS TXT Cross-Verification (v0.3)
 
-*Reserved for future specification.* Discovery document URLs or fingerprints published as DNS TXT records at `_agentpin.{domain}`, enabling discovery in environments where HTTPS endpoints are impractical but DNS is available.
+A publisher MAY publish a TXT record at `_agentpin.{domain}` containing a fingerprint of one of the public keys advertised in their `.well-known` discovery document. Verifiers MAY consult this record as a *second-channel* trust signal — DNS is administered through a separate credential chain (registrar account, DNS provider, optionally DNSSEC) from the HTTPS hosting account, so compromising one channel does not automatically compromise the other.
 
-#### 4.8.4 Internal CA / Trust Delegation (Future)
+**Wire format.** The TXT record value is a `;`-separated list of `key=value` pairs:
+
+```text
+_agentpin.example.com.  3600  IN  TXT  "v=agentpin1; kid=example-2026-05; fp=sha256:bae50bde68f47eba0e5d61ecd59db073ffe742eec94aeac0d2d26f27c155036a"
+```
+
+Fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `v`   | REQUIRED | Wire-format version. MUST be `"agentpin1"` for this specification. |
+| `fp`  | REQUIRED | Lowercase fingerprint, formatted as `sha256:<hex>`. The hex value is the RFC 7638 JWK thumbprint of one of the discovery document's `public_keys` entries. |
+| `kid` | OPTIONAL | Key identifier of the discovery key the `fp` is computed over. When present, the matching key MUST also carry this `kid`. |
+
+Parsers MUST:
+
+- Tolerate whitespace around `;` and `=`.
+- Treat field order as unsignificant.
+- Lowercase the `fp` value before comparison (the prefix `sha256:` is also case-insensitive on input).
+- Ignore unknown fields for forward compatibility.
+
+Parsers MUST reject the record when:
+
+- The `v` or `fp` field is missing.
+- `v` is any value other than `"agentpin1"` (in particular: SchemaPin's `_schemapin.{domain}` records, which use `v=schemapin1`, MUST NOT be accepted by the AgentPin parser).
+- `fp` does not begin with `sha256:`.
+- A field has no `=` separator.
+
+**Verifier semantics.** A verifier that observes a TXT record at `_agentpin.{domain}` MUST:
+
+1. Parse the record per the rules above.
+2. Compute the RFC 7638 thumbprint of each key in the discovery document's `public_keys` and compare against the TXT `fp` (case-insensitive). When the TXT carries a `kid`, only the discovery key with the matching `kid` is eligible.
+3. Treat the discovery document as trustworthy on this channel only if *at least one* discovery key matches.
+
+The semantics MUST be:
+
+- **Absent record** — no effect; DNS TXT is purely additive. Verifiers MUST NOT fail verification merely because no `_agentpin` TXT record exists.
+- **Present and matching** — second-channel confirmation succeeded.
+- **Present and mismatching** — **hard failure** (`DISCOVERY_INVALID`). A publisher who intentionally published a TXT record has signaled that DNS is part of their trust chain; divergence between DNS and `.well-known` indicates one channel is compromised, and the verifier cannot tell which is authentic.
+- **Present and malformed** — hard failure (`DISCOVERY_INVALID`).
+
+**Multi-key match.** AgentPin discovery documents MAY carry several keys for rotation (see §7.2). A published TXT record need only match *one* of them; verifiers MUST iterate the full `public_keys` list before declaring a mismatch.
+
+**Threat coverage.** DNS TXT defends against:
+
+- A compromised hosting account / expired domain not removed from a CDN.
+- ACME ownership-validation bypass that mints a TLS cert for the attacker.
+- TLS certificate mis-issuance by a CA the attacker controls.
+
+It does NOT defend against attackers who control the DNS chain itself (registrar account, DNS provider, or a downstream resolver). Publishers concerned about DNS-level compromise SHOULD pair this mechanism with DNSSEC.
+
+**Interaction with the rest of verification.** DNS TXT cross-verification is independent of the 12-step credential verification flow (§6.1). Verifiers MAY perform DNS TXT verification opportunistically at discovery-document-retrieval time (§6.2), or skip it entirely. When performed, a TXT mismatch MUST short-circuit the rest of the flow with `DISCOVERY_INVALID`.
+
+#### 4.8.4 LocalAgentCardStore (v0.3)
+
+In-memory store of pre-registered A2A AgentCards keyed by their AgentPin discovery domain. For agents that do not serve HTTP themselves (CLI tools, daemon processes, externally-registered agents pushed into a coordinator at registration time), a coordinator can keep their AgentCards in memory and resolve them via the standard `DiscoveryResolver` interface without making any network calls.
+
+**Use cases:** Symbiont's push-based external-agent registration flow, where a coordinator receives the AgentCard JSON inline; ephemeral runtime agents that exist only for the lifetime of an orchestration plan.
+
+**Requirements:**
+
+- The store MUST verify the AgentPin extension signature on each card at registration time (see §4.10).
+- The store MUST derive a `DiscoveryDocument` from the registered card so the rest of the AgentPin verification stack (TOFU pinning, capability validation) runs unchanged.
+- Re-registering an existing domain MUST replace the prior entry (supports key rotation on long-lived coordinators).
+
+#### 4.8.5 A2aAgentCardResolver (v0.3)
+
+HTTPS resolver that fetches `https://{domain}/.well-known/agent-card.json`, verifies the AgentPin extension on the returned card, cross-checks that the embedded `agentpin_endpoint` host matches the fetched domain, and derives a `DiscoveryDocument` from the card. See §4.10 for the AgentCard extension format.
+
+**Requirements:**
+
+- The resolver MUST follow HTTPS only; redirects MUST be rejected (same rule as the standard `.well-known` resolver in §6.2).
+- The resolver MUST verify the AgentPin extension before trusting any field on the card.
+- The resolver MUST reject a card whose `agentpin_endpoint` URL host does not equal the fetched domain — this defends against a card that legitimately exists at one domain being served from another.
+
+#### 4.8.6 Internal CA / Trust Delegation (Future)
 
 *Reserved for future specification.* An internal certificate authority model where a root organization signs discovery documents for subsidiary entities, enabling hierarchical trust without requiring each entity to serve its own `.well-known` endpoint.
 
-#### 4.8.5 Resolver Chain
+#### 4.8.7 Resolver Chain
 
 A resolver chain tries multiple discovery mechanisms in priority order until one succeeds. The recommended enterprise pattern is:
 
 1. **Trust bundle** — Check pre-loaded bundle first (fastest, no I/O).
 2. **Local file** — Check filesystem directory (fast, no network).
-3. **`.well-known` HTTPS** — Fall back to standard HTTP discovery.
+3. **LocalAgentCardStore** — (v0.3) Check the in-memory store of push-registered AgentCards (§4.8.4).
+4. **A2aAgentCardResolver** — (v0.3) Try `https://{domain}/.well-known/agent-card.json` (§4.8.5).
+5. **`.well-known` HTTPS** — Fall back to standard `agent-identity.json` discovery.
 
 The chain stops at the first resolver that successfully returns a document. If all resolvers fail, verification fails with `DISCOVERY_FETCH_FAILED`.
 
@@ -540,6 +641,189 @@ The chain stops at the first resolver that successfully returns a document. If a
 - Chain order MUST be deterministic and configurable.
 - A document returned by any resolver in the chain MUST be validated identically.
 - Revocation documents SHOULD be resolved from the same source as the discovery document when possible.
+
+### 4.9 Cross-Protocol Endpoint Fields (v0.3)
+
+Two OPTIONAL fields on `DiscoveryDocument` advertise neighbouring trust-stack endpoints, enabling cross-protocol resolution from AgentPin into the other layers:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `schemapin_endpoint` | URL | The entity's SchemaPin discovery document (`/.well-known/schemapin-discovery.json`). A verifier processing an AgentPin credential MAY follow this link to fetch the tool-integrity catalogue for the same domain. |
+| `a2a_endpoint`       | URL | The entity's A2A AgentCard (typically `/.well-known/agent-card.json`). A verifier that already trusts the AgentPin discovery document MAY use this link to fetch the corresponding signed A2A AgentCard for the same entity (§4.10). |
+
+Both fields are advisory. A verifier MAY decline to follow them, and a producer MAY omit them. Implementations MUST treat absence as "no advertised endpoint" and MUST NOT synthesize default URLs.
+
+When `a2a_endpoint` is present, verifiers SHOULD cross-check that its host equals the discovery document's `entity` field (modulo trailing-dot normalisation); a mismatch indicates a misconfigured publisher and MAY be treated as `DISCOVERY_INVALID`.
+
+### 4.10 A2A AgentCard Extension (v0.3)
+
+AgentPin extends the [Google A2A](https://github.com/google-a2a/A2A) AgentCard format with a cryptographic-identity payload, allowing an AgentCard discovered through the A2A protocol to be verified against the AgentPin trust chain (TOFU pinning, revocation, capability narrowing) without an additional round-trip to the publisher's `.well-known/agent-identity.json`.
+
+#### 4.10.1 AgentCard Subset
+
+AgentPin defines a *minimal subset* of the upstream A2A AgentCard shape that it populates and consumes. The full upstream AgentCard MAY carry additional fields; AgentPin implementations MUST preserve any unknown fields verbatim through serialize/deserialize round-trips so that subsequent A2A consumers see the full card.
+
+The AgentPin-relevant fields are:
+
+```json
+{
+  "name": "<human-readable agent name>",
+  "description": "<optional description>",
+  "version": "<optional semver>",
+  "url": "<public URL where the agent receives A2A traffic>",
+  "capabilities": {
+    "streaming": <boolean>,
+    "pushNotifications": <boolean>,
+    "allowed_domains": [ "<domain>", ... ]
+  },
+  "skills": [
+    { "id": "<capability string>", "name": "<display name>", "description": "<optional>" },
+    ...
+  ],
+  "agentpin": {
+    "agentpin_endpoint": "<URL of the entity's AgentPin discovery document>",
+    "public_key_jwk": { /* RFC 7517 JWK, identical shape to §4.4 */ },
+    "signature": "<base64-encoded DER ECDSA P-256 signature>"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | REQUIRED | Display name for the agent. Mapped from `AgentDeclaration.name` (§4.5). |
+| `description` | string | OPTIONAL | Description for the agent. Mapped from `AgentDeclaration.description`. |
+| `version` | string | OPTIONAL | Agent semver. Mapped from `AgentDeclaration.version`. |
+| `url` | string | REQUIRED | Public URL at which the agent receives A2A traffic. This is the *A2A endpoint*, not the AgentPin discovery endpoint. |
+| `capabilities.streaming` | boolean | REQUIRED | Whether the agent supports streaming responses. |
+| `capabilities.pushNotifications` | boolean | REQUIRED | Whether the agent emits push notifications. Note: camelCase per upstream A2A convention. |
+| `capabilities.allowed_domains` | array | OPTIONAL | (AgentPin extension) Domains this agent is permitted to interact with. Omitted when unrestricted (see §4.11). |
+| `skills` | array | REQUIRED | A2A skills, one per `AgentDeclaration.capabilities` entry. The skill `id` MUST be the AgentPin capability verb-resource string (e.g., `"read:customers/*"`). |
+| `agentpin` | object | OPTIONAL (REQUIRED for AgentPin-verifiable cards) | The AgentPin extension payload. A card without this field is a vanilla A2A AgentCard with no AgentPin trust binding. |
+
+#### 4.10.2 AgentPin Extension Payload
+
+The `agentpin` field carries three sub-fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `agentpin_endpoint` | string | REQUIRED | URL of the entity's AgentPin discovery document (typically `https://{domain}/.well-known/agent-identity.json`). |
+| `public_key_jwk` | object | REQUIRED | The public key used to sign this AgentCard, in JWK form (§4.4). The verifier uses this key to verify `signature`. |
+| `signature` | string | REQUIRED | Detached ECDSA P-256 signature over the canonical bytes of the AgentCard with the `agentpin` field cleared. Standard-base64-encoded DER bytes (matches the JWT signature encoding used elsewhere in AgentPin). |
+
+#### 4.10.3 Canonical Signing Input
+
+The signature in `agentpin.signature` is computed over the canonical JSON serialization of the AgentCard with the `agentpin` field set to `null`/absent. The canonicalisation rules are:
+
+1. Take the AgentCard you intend to publish.
+2. Remove (or set to `null`) its `agentpin` field.
+3. Recursively serialize as JSON with:
+   - Object keys sorted alphabetically at every depth.
+   - Compact separators (no whitespace between tokens).
+   - Fields whose value is `null`/`undefined` dropped from objects.
+   - UTF-8 string encoding (no `\uXXXX` escapes for non-ASCII).
+4. Sign the resulting byte sequence with ECDSA P-256 using SHA-256 as the message hash. Encode the DER signature with standard base64.
+
+This canonicalisation pattern is intentionally identical in spirit to SchemaPin's schema canonicalisation, so implementations can share the same `canonicalize()` helper.
+
+**Implementation note.** All four AgentPin SDKs (Rust, JavaScript, Python, Go) MUST produce byte-identical canonical bytes for the same input AgentCard. Conformance is verified end-to-end: a card signed in any SDK MUST verify in the other three.
+
+#### 4.10.4 Verification
+
+A verifier presented with an AgentCard `card` performs:
+
+1. Reject if `card.agentpin` is absent.
+2. Recompute the canonical signing input by canonicalising `card` with the `agentpin` field cleared (§4.10.3).
+3. Decode `card.agentpin.public_key_jwk` into a P-256 public key.
+4. Verify `card.agentpin.signature` against the canonical bytes using that key. A failure MUST surface as `DISCOVERY_INVALID`.
+
+Verification of the AgentCard signature alone proves only that the card has not been tampered with relative to the key inside its own extension. To chain the card back to a *trusted* AgentPin identity, the verifier MUST then:
+
+5. Verify that `card.agentpin.public_key_jwk` is also present in the entity's AgentPin discovery document at `card.agentpin.agentpin_endpoint`, by JWK thumbprint (§4.4). This step is what binds an A2A AgentCard to the rest of the AgentPin trust chain.
+
+Implementations MAY skip step 5 when the card was supplied through a channel that already establishes its provenance (e.g., a `LocalAgentCardStore` that was populated from an out-of-band, authenticated source — §4.8.4). When skipping step 5, implementations MUST document the substitute provenance check.
+
+#### 4.10.5 Capability Mapping
+
+The `skills` array on the AgentCard is derived from `AgentDeclaration.capabilities` (§4.5):
+
+- Each capability string `"<verb>:<resource>"` becomes a skill with `id == "<verb>:<resource>"`.
+- The default `skills[i].name` is the same verb-resource string. Builders MAY override with a human-readable name.
+- The capability *taxonomy* (§10) is unchanged — A2A AgentCards do not introduce new capability semantics; they merely re-express the existing capability list in the A2A skill shape so A2A-native consumers can read it.
+
+#### 4.10.6 Example Signed AgentCard
+
+```json
+{
+  "name": "Tarnover Field Analyst",
+  "description": "Reads customer reports, writes invoices",
+  "version": "1.0.0",
+  "url": "https://tarnover.com/agent",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false,
+    "allowed_domains": ["partner-corp.com"]
+  },
+  "skills": [
+    { "id": "read:customers/*", "name": "read:customers/*" },
+    { "id": "write:invoices/*", "name": "write:invoices/*" }
+  ],
+  "agentpin": {
+    "agentpin_endpoint": "https://tarnover.com/.well-known/agent-identity.json",
+    "public_key_jwk": {
+      "kid": "tarnover-2026-05",
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "...",
+      "y": "...",
+      "use": "sig"
+    },
+    "signature": "MEUCIQD..."
+  }
+}
+```
+
+### 4.11 AllowedDomains Typed Wrapper (v0.3)
+
+`AllowedDomains` is a typed view over the `allowed_domains` field on `Constraints` (§5.5) and on the A2A AgentCard `capabilities.allowed_domains` field (§4.10.1), used for cross-protocol allow-list composition.
+
+#### 4.11.1 Semantics
+
+An `AllowedDomains` value is an ordered list of strings, each of which is either a literal domain or a pattern using the wildcard rules from §5.5 (e.g., `"*.client-corp.com"`).
+
+The list has a single *convention* that v0.3 implementations MUST honour:
+
+> **An empty `AllowedDomains` list means *unrestricted* (all domains trusted).**
+
+This is the opposite of the naïve set-theoretic interpretation (where an empty set allows nothing), but it matches the existing v0.2 behaviour where an *omitted* `allowed_domains` field allowed all domains. The convention lets `AllowedDomains` be the unified type at API boundaries regardless of whether the upstream constraint was absent or explicitly empty.
+
+#### 4.11.2 Operations
+
+Implementations MUST expose the following operations:
+
+| Operation | Semantics |
+|-----------|-----------|
+| `unrestricted()`               | Returns an empty allow-list, i.e. "no restriction". |
+| `from_domains(list)`           | Constructs from any iterable of strings. |
+| `is_unrestricted(list)`        | Returns true iff the list is empty. |
+| `allows(list, domain)`         | Returns true iff `is_unrestricted(list)` OR `domain` is in `list` (pattern match per §5.5). |
+| `intersect(lhs, rhs)`          | Returns the intersection following these rules: `unrestricted ∩ X = X`; `X ∩ unrestricted = X`; otherwise the set intersection of `lhs` and `rhs`. |
+| `from_constraints(constraints)` | Returns `unrestricted()` when `constraints == null` or `constraints.allowed_domains` is absent; otherwise returns the literal list. |
+
+#### 4.11.3 Cross-Protocol Use
+
+SchemaPin v1.4 introduced `A2aVerificationContext`, which scopes tool-integrity verification to the intersection of *caller* and *provider* allow-lists. AgentPin v0.3 exposes `AllowedDomains` and its `intersect` operation so SchemaPin can compose the two allow-lists directly:
+
+```text
+caller_allowed  = AllowedDomains.from_constraints(caller_credential.constraints)
+provider_allowed = AllowedDomains.from_constraints(provider_agent.constraints)
+effective_scope  = AllowedDomains.intersect(caller_allowed, provider_allowed)
+```
+
+If `is_unrestricted(effective_scope)` is true at this point, the cross-protocol context places no domain restriction; otherwise the resulting set is the maximal domain allow-list the bridged interaction may operate on.
+
+#### 4.11.4 Edge Case: Intersection That Becomes Empty
+
+Two non-empty allow-lists with no overlap intersect to the empty list. Under the v0.3 convention this is *re-interpreted as "unrestricted"*, which is the same outcome as having no allow-list at all. This is documented behaviour — callers that need to distinguish "intentionally restricted to nothing" from "no restriction" MUST track that distinction outside the `AllowedDomains` value (e.g., with an out-of-band sentinel). The AgentPin SDKs deliberately do not encode this distinction in `AllowedDomains` because the existing v0.2 deployment surface does not encode it either.
 
 ---
 
@@ -1528,14 +1812,18 @@ This specification would register the following if submitted as an RFC:
 - Implement TOFU key pinning.
 
 ### Verifiers MAY:
-- Implement alternative discovery mechanisms (§4.8) including local file discovery, pre-shared trust bundles, and resolver chains.
+- Implement alternative discovery mechanisms (§4.8) including local file discovery, pre-shared trust bundles, the `LocalAgentCardStore` (§4.8.4), the `A2aAgentCardResolver` (§4.8.5), and resolver chains (§4.8.7).
 - When using alternative mechanisms, all verification steps except document retrieval MUST remain identical to the standard flow (§6).
+- (v0.3) Perform DNS TXT cross-verification at `_agentpin.{domain}` (§4.8.3) as a second-channel trust signal. When implemented, the verifier MUST treat a mismatching record as a hard `DISCOVERY_INVALID` failure and an absent record as a no-op.
+- (v0.3) Accept A2A AgentCards (§4.10) as discovery input, provided they have been verified per §4.10.4 (extension-signature verification AND key thumbprint matched against the AgentPin discovery document, unless an out-of-band provenance check is documented).
 
 ### Verifiers SHOULD:
 - Validate the full delegation chain when present.
 - Enforce credential constraints (domain, rate limit, data classification).
 - Cache discovery documents per HTTP cache headers.
 - Fail closed when revocation endpoints are unreachable.
+- (v0.3) When a discovery document's `a2a_endpoint` host disagrees with its `entity` field, fail with `DISCOVERY_INVALID`.
+- (v0.3) When composing `AllowedDomains` with a cross-protocol context (e.g., SchemaPin v1.4 `A2aVerificationContext`), use the intersection helper documented in §4.11.2 rather than reimplementing set logic — the empty-list-equals-unrestricted convention is part of the protocol.
 
 ---
 
@@ -1557,11 +1845,11 @@ This specification would register the following if submitted as an RFC:
 
 8. **SchemaPin cross-signing.** Allow a SchemaPin signature to embed an expected `agent_id`, and an AgentPin credential to embed expected `schema_hash` values, creating a bidirectional cryptographic binding between agents and their tools.
 
-9. **DNS TXT discovery.** Publish discovery document URLs or fingerprints as DNS TXT records at `_agentpin.{domain}`, enabling discovery in environments where HTTPS endpoints are impractical but DNS is available (§4.8.3).
+9. **Internal CA / Trust Delegation.** An internal certificate authority model where a root organization signs discovery documents for subsidiary entities, enabling hierarchical trust without per-entity `.well-known` endpoints (§4.8.6).
 
-10. **Internal CA / Trust Delegation.** An internal certificate authority model where a root organization signs discovery documents for subsidiary entities, enabling hierarchical trust without per-entity `.well-known` endpoints (§4.8.4).
+10. **Symbiont-native identity provisioning.** Runtime-managed agent identity where Symbiont provisions and rotates agent credentials automatically, integrating discovery document management into the orchestration lifecycle.
 
-11. **Symbiont-native identity provisioning.** Runtime-managed agent identity where Symbiont provisions and rotates agent credentials automatically, integrating discovery document management into the orchestration lifecycle.
+11. **Mutual-auth as A2A handshake (v0.4 target).** Adapt the §9 challenge-response mutual authentication as a normative A2A handshake message, so two A2A endpoints can perform AgentPin mutual auth as part of their session setup.
 
 ---
 
@@ -1658,6 +1946,11 @@ This specification would register the following if submitted as an RFC:
     "revocation_endpoint": { "type": "string", "format": "uri" },
     "policy_url": { "type": "string", "format": "uri" },
     "schemapin_endpoint": { "type": "string", "format": "uri" },
+    "a2a_endpoint": {
+      "type": "string",
+      "format": "uri",
+      "description": "(v0.3) Optional URL of the entity's A2A AgentCard endpoint."
+    },
     "max_delegation_depth": {
       "type": "integer",
       "minimum": 0,
