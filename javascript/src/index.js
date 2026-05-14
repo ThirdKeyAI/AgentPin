@@ -62,6 +62,7 @@ export {
     findKeyByKid,
     findAgentById,
     fetchDiscoveryDocument,
+    AllowedDomains,
 } from './discovery.js';
 
 export {
@@ -127,5 +128,32 @@ export {
 export {
     InMemoryNonceStore,
 } from './nonce.js';
+
+export {
+    capabilityToSkill,
+    buildUnsignedAgentCard,
+    signAgentCard,
+    buildAndSignAgentCard,
+    verifyAgentpinExtension,
+    extensionKeyThumbprint,
+    canonicalizeForSigning,
+} from './a2a.js';
+
+export {
+    LocalAgentCardStore,
+    cardEndpointHost,
+    deriveDiscoveryFromCard,
+} from './resolverLocal.js';
+
+export {
+    A2aAgentCardResolver,
+} from './resolverA2a.js';
+
+export {
+    parseTxtRecord,
+    verifyDnsMatch,
+    txtRecordName,
+    fetchDnsTxt,
+} from './dns.js';
 
 export const version = '0.2.0';

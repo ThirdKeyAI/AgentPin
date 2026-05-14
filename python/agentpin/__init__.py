@@ -31,11 +31,35 @@ from .delegation import (
     verify_chain_depth,
 )
 from .discovery import (
+    AllowedDomains,
     build_discovery_document,
     fetch_discovery_document,
     find_agent_by_id,
     find_key_by_kid,
     validate_discovery_document,
+)
+from .a2a import (
+    build_and_sign_agent_card,
+    build_unsigned_agent_card,
+    canonicalize_for_signing,
+    capability_to_skill,
+    extension_key_thumbprint,
+    sign_agent_card,
+    verify_agentpin_extension,
+)
+from .dns import (
+    fetch_dns_txt,
+    parse_txt_record,
+    txt_record_name,
+    verify_dns_match,
+)
+from .resolver_local import (
+    LocalAgentCardStore,
+    card_endpoint_host,
+    derive_discovery_from_card,
+)
+from .resolver_a2a import (
+    A2aAgentCardResolver,
 )
 from .jwk import (
     jwk_thumbprint,
@@ -167,6 +191,25 @@ __all__ = [
     "find_key_by_kid",
     "find_agent_by_id",
     "fetch_discovery_document",
+    "AllowedDomains",
+    # A2A AgentCard (v0.3.0)
+    "build_and_sign_agent_card",
+    "build_unsigned_agent_card",
+    "canonicalize_for_signing",
+    "capability_to_skill",
+    "extension_key_thumbprint",
+    "sign_agent_card",
+    "verify_agentpin_extension",
+    # DNS TXT (v0.3.0)
+    "fetch_dns_txt",
+    "parse_txt_record",
+    "txt_record_name",
+    "verify_dns_match",
+    # Resolvers (v0.3.0)
+    "LocalAgentCardStore",
+    "A2aAgentCardResolver",
+    "card_endpoint_host",
+    "derive_discovery_from_card",
     # Revocation
     "build_revocation_document",
     "add_revoked_credential",
