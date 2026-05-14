@@ -102,11 +102,11 @@ byte-identical across implementations.
 - Cross-SDK version coordination — Rust, JavaScript, Python, and Go SDKs
   all release as **0.3.0** together. The earlier `0.3.0-alpha.1` Rust
   preview is superseded by this entry.
-- **Rust MSRV bumped from 1.70 to 1.85.** Downstream ecosystem crates
-  (`getrandom`, `clap_builder`, others) have moved to edition 2024 which
-  requires Rust 1.85+, making the previously-declared 1.70 floor
-  unbuildable from scratch in practice. The CI matrix's MSRV row now
-  tests against 1.85.
+- **Rust MSRV bumped from 1.70 to 1.86.** Downstream ecosystem crates
+  (`getrandom`, `clap_builder`, the `icu_*` family) have moved to edition
+  2024 and/or to declared rust-version 1.86, making the previously-
+  declared 1.70 floor unbuildable from scratch in practice. The CI
+  matrix's MSRV row now tests against 1.86.
 
 ### Notes
 
