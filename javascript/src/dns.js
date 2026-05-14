@@ -66,7 +66,7 @@ export function parseTxtRecord(value) {
     if (version === null) {
         throw new AgentPinError(
             ErrorCode.DISCOVERY_INVALID,
-            "DNS TXT record missing required 'v' field"
+            'DNS TXT record missing required \'v\' field'
         );
     }
     if (version !== VERSION) {
@@ -78,7 +78,7 @@ export function parseTxtRecord(value) {
     if (fp === null) {
         throw new AgentPinError(
             ErrorCode.DISCOVERY_INVALID,
-            "DNS TXT record missing required 'fp' field"
+            'DNS TXT record missing required \'fp\' field'
         );
     }
     if (!fp.startsWith(FP_PREFIX)) {

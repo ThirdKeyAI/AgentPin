@@ -15,7 +15,7 @@ const HTTP_PREFIX = 'AgentPin ';
  */
 export function httpExtractCredential(headerValue) {
     if (!headerValue.startsWith(HTTP_PREFIX)) {
-        throw new AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, "Missing 'AgentPin ' prefix in Authorization header");
+        throw new AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, 'Missing \'AgentPin \' prefix in Authorization header');
     }
     const jwt = headerValue.slice(HTTP_PREFIX.length);
     if (!jwt) {
@@ -82,7 +82,7 @@ export function wsExtractCredential(message) {
         throw new AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, `Expected type '${WS_AUTH_TYPE}', got '${parsed.type}'`);
     }
     if (typeof parsed.credential !== 'string') {
-        throw new AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, "Missing or non-string 'credential' field");
+        throw new AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, 'Missing or non-string \'credential\' field');
     }
     return parsed.credential;
 }
