@@ -18,6 +18,10 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
       - working-directory: javascript
+        # The JS SDK has no runtime deps and intentionally does not commit a
+        # lockfile (it is in .gitignore), so use `npm install` instead of
+        # `npm ci`. Lock-free installs are fine here since devDependencies are
+        # only used for tests/lint, not anything that ships.
         run: |
-          npm ci
+          npm install --no-audit --no-fund
           npm test
