@@ -100,8 +100,13 @@ CORE_ACTIONS = ["read", "write", "execute", "admin", "delegate"]
 
 
 def _is_reverse_domain(s: str) -> bool:
-    """Check if string looks like a reverse domain prefix (contains a dot)."""
-    return "." in s
+    """Check if string looks like a reverse domain prefix.
+
+    Requires at least two dot-separated, non-empty segments (matching the
+    Rust, Go and JavaScript SDKs).
+    """
+    parts = s.split(".")
+    return len(parts) >= 2 and all(parts)
 
 
 def validate_capability(cap: Capability) -> None:

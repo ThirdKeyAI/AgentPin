@@ -625,3 +625,37 @@ func TestKeyMetadataEnforced(t *testing.T) {
 		t.Fatalf("future exp should pass: %+v", r)
 	}
 }
+
+// AP-21: admin:* is never accepted, and StrictCapabilities (default) rejects
+// custom actions that lack a reverse-domain prefix.
+func TestCapabilityTaxonomyEnforced(t *testing.T) {
+	f := setup(t)
+	issue := func(caps ...types.Capability) string {
+		j, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+			"verifier.com", caps, nil, nil, 3600)
+		return j
+	}
+	admin := *f.discovery
+	admin.Agents = []types.AgentDeclaration{f.discovery.Agents[0]}
+	admin.Agents[0].Capabilities = []types.Capability{"admin:*"}
+	lax := f.cfg
+	lax.StrictCapabilities = false
+	for _, cfg := range []VerifierConfig{f.cfg, lax} {
+		if r := VerifyCredentialOffline(issue("admin:*"), &admin, nil, pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrCapabilityExceeded {
+			t.Fatalf("admin:* accepted: %+v", r)
+		}
+	}
+	custom := *f.discovery
+	custom.Agents = []types.AgentDeclaration{f.discovery.Agents[0]}
+	custom.Agents[0].Capabilities = []types.Capability{"scan:target", "com.example.scan:target"}
+	if r := VerifyCredentialOffline(issue("scan:target"), &custom, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg); r.ErrorCode != types.ErrCapabilityExceeded {
+		t.Fatalf("strict mode should reject scan:target: %+v", r)
+	}
+	if r := VerifyCredentialOffline(issue("scan:target"), &custom, nil, pinning.NewKeyPinStore(), "verifier.com", lax); !r.Valid {
+		t.Fatalf("lax mode should accept scan:target: %+v", r)
+	}
+	custom.Agents[0].Capabilities = []types.Capability{"com.example.scan:target"}
+	if r := VerifyCredentialOffline(issue("com.example.scan:target"), &custom, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg); !r.Valid {
+		t.Fatalf("reverse-domain custom action should pass: %+v", r)
+	}
+}

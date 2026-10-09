@@ -532,3 +532,26 @@ def test_key_metadata_enforced():
     assert run(use="enc").error_code == ErrorCode.KEY_NOT_FOUND
     assert run(key_ops=["sign"]).error_code == ErrorCode.KEY_NOT_FOUND
     assert run(exp="2099-01-01T00:00:00Z").valid
+
+
+def test_capability_taxonomy_enforced():
+    """AP-21: admin:* is never accepted; strict mode rejects non-reverse-domain custom actions."""
+    f = setup()
+
+    def issue(*caps):
+        return issue_credential(
+            f["priv"], "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+            "verifier.com", [Capability(c) for c in caps], None, None, 3600,
+        )
+
+    admin = dict(f["discovery"], agents=[dict(f["discovery"]["agents"][0], capabilities=["admin:*"])])
+    lax = VerifierConfig(strict_capabilities=False)
+    for cfg in (f["config"], lax):
+        r = verify_credential_offline(issue("admin:*"), admin, None, KeyPinStore(), "verifier.com", cfg)
+        assert r.error_code == ErrorCode.CAPABILITY_EXCEEDED
+    custom = dict(f["discovery"], agents=[dict(f["discovery"]["agents"][0], capabilities=["scan:target", "com.example.scan:target"])])
+    r = verify_credential_offline(issue("scan:target"), custom, None, KeyPinStore(), "verifier.com", f["config"])
+    assert r.error_code == ErrorCode.CAPABILITY_EXCEEDED
+    assert verify_credential_offline(issue("scan:target"), custom, None, KeyPinStore(), "verifier.com", lax).valid
+    rev = dict(f["discovery"], agents=[dict(f["discovery"]["agents"][0], capabilities=["com.example.scan:target"])])
+    assert verify_credential_offline(issue("com.example.scan:target"), rev, None, KeyPinStore(), "verifier.com", f["config"]).valid

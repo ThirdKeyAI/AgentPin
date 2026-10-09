@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from .capability import Capability, validate_capability
 from .constraint import merge_constraints
 from .delegation import verify_attestation, verify_chain_depth
 from .credential import validate_credential_against_discovery
@@ -273,7 +274,20 @@ def verify_credential_offline(
             f"Credential lifetime {lifetime} exceeds agent credential_ttl_max {ttl_max}",
         )
 
-    # Step 8: Validate capabilities
+    # Step 8: Validate capabilities. admin MUST NOT be granted via wildcard
+    # (spec §10.3); under strict_capabilities every capability on both sides
+    # must satisfy the taxonomy (AP-21).
+    for cap in payload.get("capabilities", []):
+        if Capability.parse(str(cap)) == ("admin", "*"):
+            return _failure(
+                ErrorCode.CAPABILITY_EXCEEDED, f"Capability '{cap}' is not allowed: admin must be explicitly scoped"
+            )
+    if config.strict_capabilities:
+        for cap in list(payload.get("capabilities", [])) + list(agent.get("capabilities", []) or []):
+            try:
+                validate_capability(cap if isinstance(cap, Capability) else Capability(str(cap)))
+            except ValueError as e:
+                return _failure(ErrorCode.CAPABILITY_EXCEEDED, f"Capability '{cap}' rejected: {e}")
     try:
         validate_credential_against_discovery(payload.get("capabilities", []), agent.get("capabilities", []))
     except AgentPinError as e:

@@ -10,7 +10,7 @@ use crate::jwt;
 use crate::pinning::{check_pinning, KeyPinStore, PinningResult};
 use crate::resolver::DiscoveryResolver;
 use crate::revocation::check_revocation;
-use crate::types::capability::Capability;
+use crate::types::capability::{validate_capability, Capability};
 use crate::types::constraint::{merge_constraints, Constraints};
 use crate::types::discovery::{AgentStatus, DiscoveryDocument};
 use crate::types::revocation::RevocationDocument;
@@ -22,7 +22,10 @@ pub struct VerifierConfig {
     pub clock_skew_secs: i64,
     /// Maximum credential lifetime in seconds (default: 86400)
     pub max_ttl_secs: i64,
-    /// When true, capabilities are validated against the taxonomy (default: false)
+    /// When true (default), every capability in the credential and in the
+    /// matched agent declaration must satisfy the spec §10 taxonomy
+    /// (`action:resource`, core actions or reverse-domain custom actions).
+    /// `admin:*` is rejected regardless of this setting (spec §10.3).
     pub strict_capabilities: bool,
     /// When true, an unsigned revocation document is rejected (default:
     /// false). Signed documents are always verified when a signature is
@@ -45,7 +48,7 @@ impl Default for VerifierConfig {
         Self {
             clock_skew_secs: 60,
             max_ttl_secs: 86400,
-            strict_capabilities: false,
+            strict_capabilities: true,
             require_signed_revocation: false,
             revocation_max_age_secs: None,
             require_delegation_verification: true,
@@ -150,6 +153,11 @@ fn parse_failure(e: Error) -> VerificationResult {
 
 /// Default `credential_ttl_max` when an agent declaration omits it (spec §4.5).
 pub const DEFAULT_CREDENTIAL_TTL_MAX: u64 = 86400;
+
+/// `true` for `admin:*`, which spec §10.3 forbids granting via wildcard.
+fn is_admin_wildcard(cap: &Capability) -> bool {
+    matches!(Capability::parse(&cap.0), Some(("admin", "*")))
+}
 
 /// Verify a credential offline using caller-provided documents.
 /// Implements the 12-step verification flow from the spec.
@@ -514,7 +522,28 @@ fn verify_credential_core(
         );
     }
 
-    // Step 8: Validate capabilities
+    // Step 8: Validate capabilities. The admin action MUST NOT be granted via
+    // wildcard (spec §10.3); under strict_capabilities every capability on
+    // both sides must satisfy the taxonomy (AP-21).
+    if let Some(cap) = payload.capabilities.iter().find(|c| is_admin_wildcard(c)) {
+        return VerificationResult::failure(
+            ErrorCode::CapabilityExceeded,
+            &format!(
+                "Capability '{}' is not allowed: admin must be explicitly scoped",
+                cap
+            ),
+        );
+    }
+    if config.strict_capabilities {
+        for cap in payload.capabilities.iter().chain(agent.capabilities.iter()) {
+            if let Err(reason) = validate_capability(cap) {
+                return VerificationResult::failure(
+                    ErrorCode::CapabilityExceeded,
+                    &format!("Capability '{}' rejected: {}", cap, reason),
+                );
+            }
+        }
+    }
     if let Err(e) =
         validate_credential_against_discovery(&payload.capabilities, &agent.capabilities)
     {
@@ -1902,6 +1931,78 @@ mod tests {
         let mut future = f.discovery.clone();
         future.public_keys[0].exp = Some("2099-01-01T00:00:00Z".to_string());
         assert!(run(&future).valid);
+    }
+
+    /// AP-21: admin:* is never accepted, and strict_capabilities (default)
+    /// rejects custom actions that lack a reverse-domain prefix.
+    #[test]
+    fn test_capability_taxonomy_enforced() {
+        let f = setup();
+        let sk = crypto::load_signing_key(&f.private_key_pem).unwrap();
+        let issue = |caps: Vec<&str>| {
+            issue_credential(
+                &sk,
+                "test-2026-01",
+                "example.com",
+                "urn:agentpin:example.com:agent",
+                Some("verifier.com"),
+                caps.into_iter().map(Capability::from).collect(),
+                None,
+                None,
+                3600,
+            )
+            .unwrap()
+        };
+        let mut admin_doc = f.discovery.clone();
+        admin_doc.agents[0].capabilities = vec![Capability::from("admin:*")];
+        let lax = VerifierConfig {
+            strict_capabilities: false,
+            ..Default::default()
+        };
+        for cfg in [&f.config, &lax] {
+            let r = verify_credential_offline(
+                &issue(vec!["admin:*"]),
+                &admin_doc,
+                None,
+                &mut KeyPinStore::new(),
+                Some("verifier.com"),
+                cfg,
+            );
+            assert_eq!(r.error_code, Some(ErrorCode::CapabilityExceeded));
+        }
+        let mut custom_doc = f.discovery.clone();
+        custom_doc.agents[0].capabilities = vec![
+            Capability::from("scan:target"),
+            Capability::from("com.example.scan:target"),
+        ];
+        let r = verify_credential_offline(
+            &issue(vec!["scan:target"]),
+            &custom_doc,
+            None,
+            &mut KeyPinStore::new(),
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert_eq!(r.error_code, Some(ErrorCode::CapabilityExceeded));
+        let r = verify_credential_offline(
+            &issue(vec!["scan:target"]),
+            &custom_doc,
+            None,
+            &mut KeyPinStore::new(),
+            Some("verifier.com"),
+            &lax,
+        );
+        assert!(r.valid, "{:?}", r);
+        custom_doc.agents[0].capabilities = vec![Capability::from("com.example.scan:target")];
+        let r = verify_credential_offline(
+            &issue(vec!["com.example.scan:target"]),
+            &custom_doc,
+            None,
+            &mut KeyPinStore::new(),
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert!(r.valid, "{:?}", r);
     }
 
     #[test]

@@ -42,8 +42,10 @@ type VerifierConfig struct {
 	ClockSkewSecs int64
 	// MaxTTLSecs caps the maximum credential lifetime (default: 86400).
 	MaxTTLSecs int64
-	// StrictCapabilities, when true, validates capabilities against the
-	// taxonomy (currently informational; reserved for future use).
+	// StrictCapabilities, when true (default), requires every capability in
+	// the credential and in the matched agent declaration to satisfy the
+	// spec §10 taxonomy (action:resource, core actions or reverse-domain
+	// custom actions). admin:* is rejected regardless of this setting.
 	StrictCapabilities bool
 	// RequireSignedRevocation rejects unsigned revocation documents (default
 	// false). Signed documents are always verified when a signature is
@@ -65,7 +67,7 @@ func DefaultVerifierConfig() VerifierConfig {
 	return VerifierConfig{
 		ClockSkewSecs:      60,
 		MaxTTLSecs:         86400,
-		StrictCapabilities: false,
+		StrictCapabilities: true,
 	}
 }
 
@@ -373,7 +375,21 @@ func verifyCredentialCore(
 		)
 	}
 
-	// Step 11: Capability subset.
+	// Step 11: Capabilities. admin MUST NOT be granted via wildcard (spec
+	// §10.3); under StrictCapabilities every capability on both sides must
+	// satisfy the taxonomy (AP-21).
+	for _, c := range payload.Capabilities {
+		if c.Action() == "admin" && c.Resource() == "*" {
+			return failure(types.ErrCapabilityExceeded, fmt.Sprintf("Capability '%s' is not allowed: admin must be explicitly scoped", c))
+		}
+	}
+	if config.StrictCapabilities {
+		for _, c := range append(append([]types.Capability{}, payload.Capabilities...), agent.Capabilities...) {
+			if err := types.ValidateCapability(c); err != nil {
+				return failure(types.ErrCapabilityExceeded, fmt.Sprintf("Capability '%s' rejected: %v", c, err))
+			}
+		}
+	}
 	if err := credential.ValidateCredentialAgainstDiscovery(payload.Capabilities, agent.Capabilities); err != nil {
 		return failure(types.ErrCapabilityExceeded, err.Error())
 	}

@@ -6,6 +6,7 @@
 import { decodeJwtUnverified, verifyJwt, MalformedCredentialError } from './jwt.js';
 import { jwkToPem } from './jwk.js';
 import { validateCredentialAgainstDiscovery } from './credential.js';
+import { Capability, validateCapability } from './capability.js';
 import { validateDiscoveryDocument, findKeyByKid, findAgentById, fetchDiscoveryDocument } from './discovery.js';
 import {
     checkRevocation, fetchRevocationDocument, fetchRevocationDocumentIfPresent,
@@ -37,7 +38,19 @@ export function defaultVerifierConfig() {
          * reported with delegation_verified: false and a warning (AP-2).
          */
         requireDelegationVerification: true,
+        /**
+         * When true (default), every capability in the credential and in the
+         * matched agent declaration must satisfy the spec §10 taxonomy
+         * (action:resource, core actions or reverse-domain custom actions).
+         * admin:* is rejected regardless of this setting (spec §10.3).
+         */
+        strictCapabilities: true,
     };
+}
+
+function isAdminWildcard(cap) {
+    const c = cap instanceof Capability ? cap : new Capability(String(cap));
+    return c.action === 'admin' && c.resource === '*';
 }
 
 /** Default `credential_ttl_max` when an agent declaration omits it (spec §4.5). */
@@ -334,7 +347,22 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
         );
     }
 
-    // Step 8: Validate capabilities
+    // Step 8: Validate capabilities. admin MUST NOT be granted via wildcard
+    // (spec §10.3); under strictCapabilities every capability on both sides
+    // must satisfy the taxonomy (AP-21).
+    const adminWildcard = payload.capabilities.find(isAdminWildcard);
+    if (adminWildcard !== undefined) {
+        return failureResult(ErrorCode.CAPABILITY_EXCEEDED, `Capability '${adminWildcard}' is not allowed: admin must be explicitly scoped`);
+    }
+    if (config.strictCapabilities) {
+        for (const cap of [...payload.capabilities, ...(agent.capabilities || [])]) {
+            try {
+                validateCapability(cap instanceof Capability ? cap : new Capability(String(cap)));
+            } catch (e) {
+                return failureResult(ErrorCode.CAPABILITY_EXCEEDED, `Capability '${cap}' rejected: ${e.message}`);
+            }
+        }
+    }
     try {
         validateCredentialAgainstDiscovery(payload.capabilities, agent.capabilities);
     } catch (e) {

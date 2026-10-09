@@ -445,3 +445,21 @@ describe('delegation chain verification (AP-2, AP-20, AP-21)', () => {
         assert.ok(run({ exp: '2099-01-01T00:00:00Z' }).valid);
     });
 });
+
+describe('capability taxonomy (AP-21)', () => {
+    test('admin:* is never accepted; strict mode rejects non-reverse-domain custom actions', () => {
+        const f = setup();
+        const issue = (caps) => issueCredential(f.kp.privateKeyPem, 'test-2026-01', 'example.com', 'urn:agentpin:example.com:agent',
+            'verifier.com', caps.map((c) => new Capability(c)), null, null, 3600);
+        const admin = { ...f.discovery, agents: [{ ...f.discovery.agents[0], capabilities: ['admin:*'] }] };
+        const lax = { ...f.config, strictCapabilities: false };
+        for (const cfg of [f.config, lax]) {
+            assert.strictEqual(verifyCredentialOffline(issue(['admin:*']), admin, null, new KeyPinStore(), 'verifier.com', cfg).error_code, ErrorCode.CAPABILITY_EXCEEDED);
+        }
+        const custom = { ...f.discovery, agents: [{ ...f.discovery.agents[0], capabilities: ['scan:target', 'com.example.scan:target'] }] };
+        assert.strictEqual(verifyCredentialOffline(issue(['scan:target']), custom, null, new KeyPinStore(), 'verifier.com', f.config).error_code, ErrorCode.CAPABILITY_EXCEEDED);
+        assert.ok(verifyCredentialOffline(issue(['scan:target']), custom, null, new KeyPinStore(), 'verifier.com', lax).valid);
+        const rev = { ...f.discovery, agents: [{ ...f.discovery.agents[0], capabilities: ['com.example.scan:target'] }] };
+        assert.ok(verifyCredentialOffline(issue(['com.example.scan:target']), rev, null, new KeyPinStore(), 'verifier.com', f.config).valid);
+    });
+});

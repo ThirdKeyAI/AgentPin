@@ -242,3 +242,8 @@ class VerifierConfig:
     #: False only to accept unverified chains, which are then reported with
     #: delegation_verified=False and a warning (AP-2).
     require_delegation_verification: bool = True
+    #: When True (default), every capability in the credential and in the
+    #: matched agent declaration must satisfy the spec §10 taxonomy
+    #: (action:resource, core actions or reverse-domain custom actions).
+    #: admin:* is rejected regardless of this setting (spec §10.3).
+    strict_capabilities: bool = True
