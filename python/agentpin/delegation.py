@@ -12,11 +12,29 @@ seconds, empty when absent) bounds its lifetime.
 """
 
 import time
+from enum import Enum
 from typing import List, Optional
 
 from .capability import Capability, capabilities_hash
 from .crypto import CTX_ATTESTATION, domain_separated_input, sign_data, verify_signature
+from .domain import normalize_domain
 from .types import AgentPinError, ErrorCode
+
+
+def _normalize_or_raw(domain: object) -> str:
+    try:
+        return normalize_domain(domain)
+    except AgentPinError:
+        return str(domain)
+
+
+def _plain(value: object) -> str:
+    """Wire string for a field that may be a ``(str, Enum)`` member (for example
+    ``DelegationRole.MAKER``) or a plain string: both must sign identically."""
+    inner = getattr(value, "value", None)
+    if isinstance(value, Enum) and isinstance(inner, str):
+        return inner
+    return str(value)
 
 
 def canonical_attestation_input(
@@ -32,16 +50,19 @@ def canonical_attestation_input(
     """Create the domain-separated attestation signing input."""
     cap_hash = capabilities_hash(capabilities)
     exp_str = "" if exp is None else str(int(exp))
+    # Domains are compared in normalized form everywhere else (AP-3), so the
+    # signed input uses the normalized form too; invalid names are signed
+    # verbatim and can never match a normalized issuer.
     return domain_separated_input(
         CTX_ATTESTATION,
         [
-            str(domain),
-            str(role),
-            str(agent_id),
-            str(delegatee_domain),
-            str(delegatee_agent_id),
+            _normalize_or_raw(domain),
+            _plain(role),
+            _plain(agent_id),
+            _normalize_or_raw(delegatee_domain),
+            _plain(delegatee_agent_id),
             cap_hash,
-            str(kid),
+            _plain(kid),
             exp_str,
         ],
     )
@@ -70,7 +91,7 @@ def create_attestation(
 
     att = {
         "domain": domain,
-        "role": role,
+        "role": _plain(role),
         "agent_id": agent_id,
         "kid": kid,
         "attestation": signature,

@@ -373,3 +373,75 @@ describe('effective constraints (AP-15)', () => {
         assert.strictEqual(verifyCredentialOffline(wide, f.discovery, null, new KeyPinStore(), 'verifier.com', f.config).error_code, ErrorCode.CONSTRAINT_VIOLATION);
     });
 });
+
+describe('delegation chain verification (AP-2, AP-20, AP-21)', () => {
+    async function delegationFixture() {
+        const { createAttestation } = await import('../src/delegation.js');
+        const { DelegationRole } = await import('../src/types.js');
+        const maker = generateKeyPair();
+        const makerDoc = buildDiscoveryDocument('maker.com', EntityType.MAKER, [pemToJwk(maker.publicKeyPem, 'maker-2026-01')],
+            [{ agent_id: 'urn:agentpin:maker.com:agent-type', name: 'Agent Type', capabilities: ['read:*'], status: AgentStatus.ACTIVE }],
+            2, '2026-01-15T00:00:00Z');
+        const deployer = generateKeyPair();
+        const deployerDoc = buildDiscoveryDocument('example.com', EntityType.DEPLOYER, [pemToJwk(deployer.publicKeyPem, 'deployer-2026-01')],
+            [{ agent_id: 'urn:agentpin:example.com:agent', agent_type: 'urn:agentpin:maker.com:agent-type', name: 'Deployed', capabilities: ['read:*'], status: AgentStatus.ACTIVE }],
+            2, '2026-01-15T00:00:00Z');
+        const caps = [new Capability('read:data')];
+        const att = createAttestation(maker.privateKeyPem, 'maker-2026-01', 'maker.com', DelegationRole.MAKER,
+            'urn:agentpin:maker.com:agent-type', 'example.com', 'urn:agentpin:example.com:agent', caps);
+        const jwt = issueCredential(deployer.privateKeyPem, 'deployer-2026-01', 'example.com', 'urn:agentpin:example.com:agent',
+            'verifier.com', caps, null, [att], 3600);
+        const resolverFor = (...docs) => ({ resolveDiscovery(d) { const doc = docs.find((x) => x.entity === d); if (!doc) throw new Error(`no doc for ${d}`); return doc; } });
+        return { jwt, makerDoc, deployerDoc, deployer, caps, resolverFor };
+    }
+
+    test('a genuine chain verifies end to end', async () => {
+        const f = await delegationFixture();
+        const r = verifyCredentialOffline(f.jwt, f.deployerDoc, null, new KeyPinStore(), 'verifier.com', undefined, f.resolverFor(f.makerDoc));
+        assert.ok(r.valid, JSON.stringify(r));
+        assert.strictEqual(r.delegation_verified, true);
+        assert.deepStrictEqual(r.delegation_chain, [{ domain: 'maker.com', role: 'maker', verified: true }]);
+        assert.deepStrictEqual(r.warnings, []);
+    });
+
+    test('a forged attestation is rejected; unverifiable chains fail closed by default', async () => {
+        const f = await delegationFixture();
+        const forged = issueCredential(f.deployer.privateKeyPem, 'deployer-2026-01', 'example.com', 'urn:agentpin:example.com:agent',
+            'verifier.com', f.caps, null, [{ domain: 'maker.com', role: 'maker', agent_id: 'urn:agentpin:maker.com:agent-type', kid: 'maker-2026-01', attestation: 'AAAA' }], 3600);
+        const r1 = verifyCredentialOffline(forged, f.deployerDoc, null, new KeyPinStore(), 'verifier.com', undefined, f.resolverFor(f.makerDoc));
+        assert.strictEqual(r1.valid, false);
+        assert.strictEqual(r1.error_code, ErrorCode.DELEGATION_INVALID);
+        const r2 = verifyCredentialOffline(f.jwt, f.deployerDoc, null, new KeyPinStore(), 'verifier.com');
+        assert.strictEqual(r2.valid, false);
+        assert.strictEqual(r2.error_code, ErrorCode.DELEGATION_INVALID);
+        const r3 = verifyCredentialOffline(f.jwt, f.deployerDoc, null, new KeyPinStore(), 'verifier.com', { requireDelegationVerification: false });
+        assert.ok(r3.valid);
+        assert.strictEqual(r3.delegation_verified, false);
+        assert.ok(r3.warnings.length > 0);
+    });
+
+    test('unresolvable attester, unknown kid, depth and scope widening fail', async () => {
+        const f = await delegationFixture();
+        const run = (doc) => verifyCredentialOffline(f.jwt, f.deployerDoc, null, new KeyPinStore(), 'verifier.com', undefined, f.resolverFor(doc));
+        assert.strictEqual(run({ entity: 'other.com' }).error_code, ErrorCode.DELEGATION_INVALID);
+        assert.strictEqual(run({ ...f.makerDoc, public_keys: [{ ...f.makerDoc.public_keys[0], kid: 'maker-2026-02' }] }).error_code, ErrorCode.DELEGATION_INVALID);
+        assert.strictEqual(run({ ...f.makerDoc, max_delegation_depth: 0 }).error_code, ErrorCode.DELEGATION_DEPTH_EXCEEDED);
+        const narrow = run({ ...f.makerDoc, agents: [{ ...f.makerDoc.agents[0], capabilities: ['read:public'] }] });
+        assert.strictEqual(narrow.error_code, ErrorCode.DELEGATION_INVALID);
+        assert.match(narrow.error_message, /exceed/);
+        assert.strictEqual(run({ ...f.makerDoc, agents: [{ ...f.makerDoc.agents[0], status: 'suspended' }] }).error_code, ErrorCode.DELEGATION_INVALID);
+    });
+
+    test('key metadata is enforced: unparsable exp, use != sig, key_ops without verify', () => {
+        const f = setup();
+        const run = (mutate) => {
+            const doc = { ...f.discovery, public_keys: [{ ...f.discovery.public_keys[0], ...mutate }] };
+            return verifyCredentialOffline(f.jwt, doc, null, new KeyPinStore(), 'verifier.com', f.config);
+        };
+        assert.strictEqual(run({ exp: 'expired' }).error_code, ErrorCode.KEY_EXPIRED);
+        assert.strictEqual(run({ exp: '2020-01-01T00:00:00Z' }).error_code, ErrorCode.KEY_EXPIRED);
+        assert.strictEqual(run({ use: 'enc' }).error_code, ErrorCode.KEY_NOT_FOUND);
+        assert.strictEqual(run({ key_ops: ['sign'] }).error_code, ErrorCode.KEY_NOT_FOUND);
+        assert.ok(run({ exp: '2099-01-01T00:00:00Z' }).valid);
+    });
+});

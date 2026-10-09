@@ -161,6 +161,8 @@ from .types import (
     VerifierConfig,
 )
 from .verification import (
+    DEFAULT_CREDENTIAL_TTL_MAX,
+    check_key_usable,
     verify_credential,
     verify_credential_offline,
 )
@@ -321,6 +323,8 @@ __all__ = [
     # Verification
     "verify_credential_offline",
     "verify_credential",
+    "check_key_usable",
+    "DEFAULT_CREDENTIAL_TTL_MAX",
     # Bundle
     "create_trust_bundle",
     "find_bundle_discovery",

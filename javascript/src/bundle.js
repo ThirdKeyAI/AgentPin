@@ -111,7 +111,14 @@ export function verifyCredentialWithBundle(credentialJwt, bundle, pinStore, audi
     }
 
     const revocation = findBundleRevocation(bundle, payload.iss);
-    return verifyCredentialOffline(credentialJwt, discovery, revocation, pinStore, audience, config);
+    const chainResolver = {
+        resolveDiscovery(domain) {
+            const doc = findBundleDiscovery(bundle, domain);
+            if (!doc) throw new AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, `Domain '${domain}' not found in trust bundle`);
+            return doc;
+        },
+    };
+    return verifyCredentialOffline(credentialJwt, discovery, revocation, pinStore, audience, config, chainResolver);
 }
 
 // ---------------------------------------------------------------------------

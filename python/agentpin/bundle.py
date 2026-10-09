@@ -98,7 +98,17 @@ def verify_credential_with_bundle(
         )
 
     revocation = find_bundle_revocation(bundle, payload["iss"])
-    return verify_credential_offline(credential_jwt, discovery, revocation, pin_store, audience, config)
+
+    class _BundleResolver:
+        def resolve_discovery(self, domain: str) -> Dict[str, Any]:
+            doc = find_bundle_discovery(bundle, domain)
+            if doc is None:
+                raise AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, f"Domain '{domain}' not found in trust bundle")
+            return doc
+
+    return verify_credential_offline(
+        credential_jwt, discovery, revocation, pin_store, audience, config, chain_resolver=_BundleResolver()
+    )
 
 
 # ---------------------------------------------------------------------------

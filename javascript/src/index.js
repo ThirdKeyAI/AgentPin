@@ -118,6 +118,8 @@ export {
     defaultVerifierConfig,
     verifyCredentialOffline,
     verifyCredential,
+    checkKeyUsable,
+    DEFAULT_CREDENTIAL_TTL_MAX,
 } from './verification.js';
 
 export {

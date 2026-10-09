@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/credential"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/crypto"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/delegation"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/jwk"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/jwt"
@@ -475,5 +476,152 @@ func TestOmittedConstraintsInheritDiscoveryDefaults(t *testing.T) {
 		"verifier.com", []types.Capability{"read:data"}, &types.Constraints{AllowedDomains: []string{"evil.com"}}, nil, 3600)
 	if r := VerifyCredentialOffline(wide, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg); r.ErrorCode != types.ErrConstraintViolation {
 		t.Fatalf("widening must be rejected: %+v", r)
+	}
+}
+
+type delegationFixture struct {
+	jwt         string
+	deployerDoc types.DiscoveryDocument
+	makerDoc    types.DiscoveryDocument
+	deployerKey *ecdsa.PrivateKey
+	caps        []types.Capability
+}
+
+func newDelegationFixture(t *testing.T) delegationFixture {
+	t.Helper()
+	makerKP, _ := crypto.GenerateKeyPair()
+	makerPriv, _ := crypto.LoadPrivateKey(makerKP.PrivateKeyPEM)
+	makerPub, _ := crypto.LoadPublicKey(makerKP.PublicKeyPEM)
+	ttl := uint64(86400)
+	makerDoc := discovery.BuildDiscoveryDocument("maker.com", types.EntityMaker,
+		[]types.JWK{jwk.VerifyingKeyToJWK(makerPub, "maker-2026-01")},
+		[]types.AgentDeclaration{{AgentID: "urn:agentpin:maker.com:agent-type", Name: "Agent Type",
+			Capabilities: []types.Capability{"read:*"}, CredentialTTLMax: &ttl, Status: types.AgentActive}},
+		2, "2026-01-15T00:00:00Z")
+	depKP, _ := crypto.GenerateKeyPair()
+	depPriv, _ := crypto.LoadPrivateKey(depKP.PrivateKeyPEM)
+	depPub, _ := crypto.LoadPublicKey(depKP.PublicKeyPEM)
+	depDoc := discovery.BuildDiscoveryDocument("example.com", types.EntityDeployer,
+		[]types.JWK{jwk.VerifyingKeyToJWK(depPub, "deployer-2026-01")},
+		[]types.AgentDeclaration{{AgentID: "urn:agentpin:example.com:agent", AgentType: "urn:agentpin:maker.com:agent-type",
+			Name: "Deployed Agent", Capabilities: []types.Capability{"read:*"}, CredentialTTLMax: &ttl, Status: types.AgentActive}},
+		2, "2026-01-15T00:00:00Z")
+	caps := []types.Capability{"read:data"}
+	att, err := delegation.CreateAttestation(makerPriv, "maker-2026-01", "maker.com", types.RoleMaker,
+		"urn:agentpin:maker.com:agent-type", "example.com", "urn:agentpin:example.com:agent", caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwtStr, err := credential.IssueCredential(depPriv, "deployer-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", caps, nil, []types.DelegationAttestation{*att}, 3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return delegationFixture{jwt: jwtStr, deployerDoc: depDoc, makerDoc: makerDoc, deployerKey: depPriv, caps: caps}
+}
+
+func bundleResolver(docs ...types.DiscoveryDocument) *resolver.TrustBundleResolver {
+	return resolver.NewTrustBundleResolver(&types.TrustBundle{AgentpinBundleVersion: "0.1", Documents: docs})
+}
+
+// AP-2: a genuine chain verifies end to end and is reported as verified.
+func TestDelegationChainVerified(t *testing.T) {
+	f := newDelegationFixture(t)
+	r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc, f.makerDoc), pinning.NewKeyPinStore(), "verifier.com", DefaultVerifierConfig())
+	if !r.Valid || r.DelegationVerified == nil || !*r.DelegationVerified || len(r.DelegationChain) != 1 || !r.DelegationChain[0].Verified {
+		t.Fatalf("expected verified chain: %+v", r)
+	}
+	if r.DelegationChain[0].Domain != "maker.com" || r.DelegationChain[0].Role != "maker" || len(r.Warnings) != 0 {
+		t.Fatalf("chain entry wrong: %+v", r)
+	}
+}
+
+// AP-2: a fabricated attestation is rejected with DELEGATION_INVALID
+// instead of being reported alongside Valid: true.
+func TestForgedDelegationChainRejected(t *testing.T) {
+	f := newDelegationFixture(t)
+	forged, _ := credential.IssueCredential(f.deployerKey, "deployer-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", f.caps, nil, []types.DelegationAttestation{{Domain: "maker.com", Role: types.RoleMaker,
+			AgentID: "urn:agentpin:maker.com:agent-type", Kid: "maker-2026-01", Attestation: "AAAA"}}, 3600)
+	r := VerifyCredentialWithResolver(forged, bundleResolver(f.deployerDoc, f.makerDoc), pinning.NewKeyPinStore(), "verifier.com", DefaultVerifierConfig())
+	if r.Valid || r.ErrorCode != types.ErrDelegationInvalid {
+		t.Fatalf("forged chain must fail: %+v", r)
+	}
+	// Offline with no way to resolve the attester: fail closed by default.
+	r = VerifyCredentialOffline(f.jwt, &f.deployerDoc, nil, pinning.NewKeyPinStore(), "verifier.com", DefaultVerifierConfig())
+	if r.Valid || r.ErrorCode != types.ErrDelegationInvalid {
+		t.Fatalf("unverifiable chain must fail by default: %+v", r)
+	}
+	// Explicit opt-out: accepted but marked unverified.
+	lax := DefaultVerifierConfig()
+	lax.AllowUnverifiedDelegation = true
+	r = VerifyCredentialOffline(f.jwt, &f.deployerDoc, nil, pinning.NewKeyPinStore(), "verifier.com", lax)
+	if !r.Valid || r.DelegationVerified == nil || *r.DelegationVerified || len(r.Warnings) == 0 {
+		t.Fatalf("opt-out should accept with warning: %+v", r)
+	}
+	// Offline with a chain resolver works too.
+	r = VerifyCredentialOfflineWithChain(f.jwt, &f.deployerDoc, nil, pinning.NewKeyPinStore(), "verifier.com", DefaultVerifierConfig(), bundleResolver(f.makerDoc))
+	if !r.Valid || r.DelegationVerified == nil || !*r.DelegationVerified {
+		t.Fatalf("chain resolver should verify: %+v", r)
+	}
+}
+
+// AP-2: unresolvable attester, unknown kid, exceeded depth and capability
+// widening beyond the attester's declaration all fail.
+func TestDelegationChainFailureModes(t *testing.T) {
+	f := newDelegationFixture(t)
+	cfg := DefaultVerifierConfig()
+	if r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc), pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrDelegationInvalid {
+		t.Fatalf("unresolvable attester: %+v", r)
+	}
+	noKey := f.makerDoc
+	noKey.PublicKeys = []types.JWK{f.makerDoc.PublicKeys[0]}
+	noKey.PublicKeys[0].Kid = "maker-2026-02"
+	if r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc, noKey), pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrDelegationInvalid {
+		t.Fatalf("unknown kid: %+v", r)
+	}
+	shallow := f.makerDoc
+	shallow.MaxDelegationDepth = 0
+	if r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc, shallow), pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrDelegationDepthExceeded {
+		t.Fatalf("depth: %+v", r)
+	}
+	narrow := f.makerDoc
+	narrow.Agents = []types.AgentDeclaration{f.makerDoc.Agents[0]}
+	narrow.Agents[0].Capabilities = []types.Capability{"read:public"}
+	if r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc, narrow), pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrDelegationInvalid || !strings.Contains(r.ErrorMessage, "exceed") {
+		t.Fatalf("scope narrowing: %+v", r)
+	}
+	suspended := f.makerDoc
+	suspended.Agents = []types.AgentDeclaration{f.makerDoc.Agents[0]}
+	suspended.Agents[0].Status = types.AgentSuspended
+	if r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc, suspended), pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrDelegationInvalid {
+		t.Fatalf("inactive attested agent: %+v", r)
+	}
+}
+
+// AP-20 / AP-21: a key with an unparsable exp, use != sig, or key_ops
+// without verify is rejected.
+func TestKeyMetadataEnforced(t *testing.T) {
+	f := setup(t)
+	run := func(mutate func(k *types.JWK)) Result {
+		doc := *f.discovery
+		doc.PublicKeys = []types.JWK{f.discovery.PublicKeys[0]}
+		mutate(&doc.PublicKeys[0])
+		return VerifyCredentialOffline(f.jwt, &doc, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg)
+	}
+	if r := run(func(k *types.JWK) { k.Exp = "expired" }); r.ErrorCode != types.ErrKeyExpired {
+		t.Fatalf("unparsable exp: %+v", r)
+	}
+	if r := run(func(k *types.JWK) { k.Exp = "2020-01-01T00:00:00Z" }); r.ErrorCode != types.ErrKeyExpired {
+		t.Fatalf("past exp: %+v", r)
+	}
+	if r := run(func(k *types.JWK) { k.Use = "enc" }); r.ErrorCode != types.ErrKeyNotFound {
+		t.Fatalf("use=enc: %+v", r)
+	}
+	if r := run(func(k *types.JWK) { k.KeyOps = []string{"sign"} }); r.ErrorCode != types.ErrKeyNotFound {
+		t.Fatalf("key_ops without verify: %+v", r)
+	}
+	if r := run(func(k *types.JWK) { k.Exp = "2099-01-01T00:00:00Z" }); !r.Valid {
+		t.Fatalf("future exp should pass: %+v", r)
 	}
 }

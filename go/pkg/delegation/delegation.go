@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/crypto"
+	domainpkg "github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
 )
 
@@ -42,6 +43,15 @@ func CanonicalAttestationInput(
 	kid string,
 	exp *int64,
 ) []byte {
+	// Domains are compared in normalized form everywhere else (AP-3), so the
+	// signed input uses the normalized form too; invalid names are signed
+	// verbatim and can never match a normalized issuer.
+	if n, err := domainpkg.Normalize(domain); err == nil {
+		domain = n
+	}
+	if n, err := domainpkg.Normalize(delegateeDomain); err == nil {
+		delegateeDomain = n
+	}
 	return crypto.DomainSeparatedInput(
 		crypto.CtxAttestation,
 		[]byte(domain),

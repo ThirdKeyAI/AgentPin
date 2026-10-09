@@ -236,3 +236,9 @@ class VerifierConfig:
     require_signed_revocation: bool = False
     #: When set, reject revocation documents older than this many seconds.
     revocation_max_age_secs: Optional[int] = None
+    #: When True (default), a credential carrying a delegation_chain is
+    #: rejected with DELEGATION_INVALID unless every attestation was verified
+    #: against the attester's discovery document (spec §6.1 step 10). Set to
+    #: False only to accept unverified chains, which are then reported with
+    #: delegation_verified=False and a warning (AP-2).
+    require_delegation_verification: bool = True

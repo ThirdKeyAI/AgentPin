@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/credential"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/delegation"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/jwk"
@@ -51,6 +52,12 @@ type VerifierConfig struct {
 	// RevocationMaxAgeSecs, when > 0, rejects a revocation document whose
 	// updated_at is older than this many seconds or unparsable.
 	RevocationMaxAgeSecs int64
+	// AllowUnverifiedDelegation accepts a credential whose delegation_chain
+	// could not be verified (no resolver for the attesters' documents),
+	// reporting delegation_verified=false plus a warning. By default such a
+	// credential is rejected with DELEGATION_INVALID (spec §6.1 step 10;
+	// AP-2, design issue 10).
+	AllowUnverifiedDelegation bool
 }
 
 // DefaultVerifierConfig returns the default verifier configuration.
@@ -60,6 +67,114 @@ func DefaultVerifierConfig() VerifierConfig {
 		MaxTTLSecs:         86400,
 		StrictCapabilities: false,
 	}
+}
+
+// DefaultCredentialTTLMax is the credential_ttl_max assumed when an agent
+// declaration omits it (spec §4.5).
+const DefaultCredentialTTLMax uint64 = 86400
+
+// CheckKeyUsable rejects keys that are expired, not marked for signature
+// use, or whose key_ops exclude "verify" (spec §4.4; AP-20, AP-21). An
+// unparsable exp is a failure, not a pass.
+func CheckKeyUsable(kk *types.JWK, now, skew int64) error {
+	if kk.Exp != "" {
+		expDt, err := time.Parse(time.RFC3339, kk.Exp)
+		if err != nil {
+			return types.NewVerificationError(types.ErrKeyExpired, fmt.Sprintf("Key '%s' has an unparsable exp '%s'", kk.Kid, kk.Exp))
+		}
+		if expDt.Unix() < now-skew {
+			return types.NewVerificationError(types.ErrKeyExpired, fmt.Sprintf("Key '%s' has expired", kk.Kid))
+		}
+	}
+	if kk.Use != "sig" {
+		return types.NewVerificationError(types.ErrKeyNotFound, fmt.Sprintf("Key '%s' is not a signature key (use = '%s')", kk.Kid, kk.Use))
+	}
+	if kk.KeyOps != nil {
+		ok := false
+		for _, op := range kk.KeyOps {
+			if op == "verify" {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return types.NewVerificationError(types.ErrKeyNotFound, fmt.Sprintf("Key '%s' key_ops do not permit verify", kk.Kid))
+		}
+	}
+	return nil
+}
+
+func verificationFailure(err error, fallback types.ErrorCode) Result {
+	if ve, ok := types.AsVerificationError(err); ok {
+		return failure(ve.Code, ve.Message)
+	}
+	return failure(fallback, err.Error())
+}
+
+// verifyDelegationChain implements spec §6.4: every attestation is verified
+// against its attester's discovery document, Maker/Deployer scope narrowing
+// is checked, and the minimum max_delegation_depth across all participants
+// is enforced.
+func verifyDelegationChain(
+	chain []types.DelegationAttestation,
+	issuer string,
+	payload *types.JWTPayload,
+	disc *types.DiscoveryDocument,
+	r resolver.DiscoveryResolver,
+	now, skew int64,
+) ([]DelegationChainEntry, *Result) {
+	fail := func(msg string) *Result {
+		res := failure(types.ErrDelegationInvalid, msg)
+		return &res
+	}
+	depths := []uint8{disc.MaxDelegationDepth}
+	entries := make([]DelegationChainEntry, 0, len(chain))
+	for _, att := range chain {
+		domainName, err := domain.Normalize(att.Domain)
+		if err != nil {
+			return nil, fail(fmt.Sprintf("Delegation attester domain invalid: %v", err))
+		}
+		doc, err := r.ResolveDiscovery(domainName)
+		if err != nil {
+			return nil, fail(fmt.Sprintf("Cannot resolve discovery document for delegation attester '%s': %v", domainName, err))
+		}
+		if err := discovery.ValidateDiscoveryDocument(doc, domainName); err != nil {
+			return nil, fail(fmt.Sprintf("Discovery document for delegation attester '%s' invalid: %v", domainName, err))
+		}
+		kk := discovery.FindKeyByKid(doc, att.Kid)
+		if kk == nil {
+			return nil, fail(fmt.Sprintf("Delegation attester '%s' has no key '%s'", domainName, att.Kid))
+		}
+		if err := CheckKeyUsable(kk, now, skew); err != nil {
+			return nil, fail(fmt.Sprintf("Delegation attester '%s' key '%s' unusable: %v", domainName, att.Kid, err))
+		}
+		pub, err := jwk.JWKToVerifyingKey(kk)
+		if err != nil {
+			return nil, fail(fmt.Sprintf("Delegation attester '%s' key '%s' invalid: %v", domainName, att.Kid, err))
+		}
+		a := att
+		if err := delegation.VerifyAttestation(&a, pub, issuer, payload.Sub, payload.Capabilities); err != nil {
+			return nil, fail(err.Error())
+		}
+		// Scope narrowing (spec §10.3): when the attester declares the
+		// attested agent, it must be active and the credential capabilities
+		// must be within what the attester declared for it.
+		if agent := discovery.FindAgentByID(doc, att.AgentID); agent != nil {
+			if agent.Status != types.AgentActive {
+				return nil, fail(fmt.Sprintf("Delegation attester '%s' declares agent '%s' as %s", domainName, att.AgentID, agent.Status))
+			}
+			if !types.CapabilitiesSubset(agent.Capabilities, payload.Capabilities) {
+				return nil, fail(fmt.Sprintf("Credential capabilities exceed those declared by delegation attester '%s' for '%s'", domainName, att.AgentID))
+			}
+		}
+		depths = append(depths, doc.MaxDelegationDepth)
+		entries = append(entries, DelegationChainEntry{Domain: domainName, Role: string(att.Role), Verified: true})
+	}
+	if err := delegation.VerifyChainDepth(len(chain), depths); err != nil {
+		res := verificationFailure(err, types.ErrDelegationDepthExceeded)
+		return nil, &res
+	}
+	return entries, nil
 }
 
 // DelegationChainEntry summarizes one delegation attestation in the result.
@@ -105,12 +220,13 @@ func parseFailure(err error) Result {
 	return failure(types.ErrAlgorithmRejected, fmt.Sprintf("JWT parse failed: %v", err))
 }
 
-// DefaultCredentialTTLMax is the credential_ttl_max assumed when an agent
-// declaration omits it (spec §4.5).
-const DefaultCredentialTTLMax uint64 = 86400
-
 // VerifyCredentialOffline runs the full 12-step verification flow against a
 // caller-provided discovery (and optional revocation) document.
+//
+// Without a resolver for the attesters' discovery documents a
+// delegation_chain cannot be verified; by default such a credential is
+// rejected. Use VerifyCredentialOfflineWithChain to supply the attesters'
+// documents (for example from a TrustBundleResolver).
 func VerifyCredentialOffline(
 	credentialJWT string,
 	disc *types.DiscoveryDocument,
@@ -118,6 +234,33 @@ func VerifyCredentialOffline(
 	pinStore *pinning.KeyPinStore,
 	audience string,
 	config VerifierConfig,
+) Result {
+	return verifyCredentialCore(credentialJWT, disc, rev, pinStore, audience, config, nil)
+}
+
+// VerifyCredentialOfflineWithChain is VerifyCredentialOffline with a
+// resolver used only to fetch the discovery documents of delegation-chain
+// attesters.
+func VerifyCredentialOfflineWithChain(
+	credentialJWT string,
+	disc *types.DiscoveryDocument,
+	rev *types.RevocationDocument,
+	pinStore *pinning.KeyPinStore,
+	audience string,
+	config VerifierConfig,
+	chain resolver.DiscoveryResolver,
+) Result {
+	return verifyCredentialCore(credentialJWT, disc, rev, pinStore, audience, config, chain)
+}
+
+func verifyCredentialCore(
+	credentialJWT string,
+	disc *types.DiscoveryDocument,
+	rev *types.RevocationDocument,
+	pinStore *pinning.KeyPinStore,
+	audience string,
+	config VerifierConfig,
+	chain resolver.DiscoveryResolver,
 ) Result {
 	// Steps 1-2: Parse JWT (alg/typ enforced inside DecodeJWTUnverified, then
 	// claim shape — AP-5 / AP-18).
@@ -171,12 +314,10 @@ func VerifyCredentialOffline(
 	if kk == nil {
 		return failure(types.ErrKeyNotFound, fmt.Sprintf("Key '%s' not found in discovery document", header.Kid))
 	}
-	if kk.Exp != "" {
-		if expDt, err := time.Parse(time.RFC3339, kk.Exp); err == nil {
-			if expDt.Unix() < now-skew {
-				return failure(types.ErrKeyExpired, fmt.Sprintf("Key '%s' has expired", header.Kid))
-			}
-		}
+	// Key expiration and usage (an unparsable exp is a failure, not a pass —
+	// AP-20; use/key_ops enforced — AP-21).
+	if err := CheckKeyUsable(kk, now, skew); err != nil {
+		return verificationFailure(err, types.ErrKeyNotFound)
 	}
 	pub, err := jwk.JWKToVerifyingKey(kk)
 	if err != nil {
@@ -256,20 +397,31 @@ func VerifyCredentialOffline(
 		Warnings:     []string{},
 	}
 
-	// Step 12: Delegation chain (offline mode cannot verify signatures).
+	// Step 12: Delegation chain. Every attestation is verified against its
+	// attester's discovery document (spec §6.4); a chain that cannot be
+	// verified fails closed unless the verifier opted out (AP-2).
 	if len(payload.DelegationChain) > 0 {
-		entries := make([]DelegationChainEntry, 0, len(payload.DelegationChain))
-		for _, att := range payload.DelegationChain {
-			entries = append(entries, DelegationChainEntry{
-				Domain:   att.Domain,
-				Role:     string(att.Role),
-				Verified: false,
-			})
+		switch {
+		case chain != nil:
+			entries, failed := verifyDelegationChain(payload.DelegationChain, issuer, payload, disc, chain, now, skew)
+			if failed != nil {
+				return *failed
+			}
+			result.DelegationChain = entries
+			tr := true
+			result.DelegationVerified = &tr
+		case !config.AllowUnverifiedDelegation:
+			return failure(types.ErrDelegationInvalid, "Delegation chain present but no resolver is available to verify it")
+		default:
+			entries := make([]DelegationChainEntry, 0, len(payload.DelegationChain))
+			for _, att := range payload.DelegationChain {
+				entries = append(entries, DelegationChainEntry{Domain: att.Domain, Role: string(att.Role), Verified: false})
+			}
+			result.DelegationChain = entries
+			f := false
+			result.DelegationVerified = &f
+			result.Warnings = append(result.Warnings, "Delegation chain present but not verified (AllowUnverifiedDelegation is set)")
 		}
-		result.DelegationChain = entries
-		f := false
-		result.DelegationVerified = &f
-		result.Warnings = append(result.Warnings, "Delegation chain present but not verified in offline mode")
 	}
 
 	// Step 8: TOFU key pinning.
@@ -334,5 +486,5 @@ func VerifyCredentialWithResolver(
 		return failure(types.ErrDiscoveryFetchFailed, "Revocation document unreachable (fail-closed)")
 	}
 
-	return VerifyCredentialOffline(credentialJWT, disc, rev, pinStore, audience, config)
+	return verifyCredentialCore(credentialJWT, disc, rev, pinStore, audience, config, r)
 }

@@ -410,3 +410,125 @@ def test_omitted_constraints_inherit_discovery_defaults():
         verify_credential_offline(wide, f["discovery"], None, KeyPinStore(), "verifier.com").error_code
         == ErrorCode.CONSTRAINT_VIOLATION
     )
+
+
+def _delegation_fixture():
+    from agentpin.delegation import create_attestation
+    from agentpin.types import DelegationRole
+
+    maker_priv, maker_pub = generate_key_pair()
+    maker_doc = build_discovery_document(
+        "maker.com", EntityType.MAKER, [pem_to_jwk(maker_pub, "maker-2026-01")],
+        [{"agent_id": "urn:agentpin:maker.com:agent-type", "name": "Agent Type", "capabilities": ["read:*"],
+          "status": AgentStatus.ACTIVE}],
+        2, "2026-01-15T00:00:00Z",
+    )
+    dep_priv, dep_pub = generate_key_pair()
+    dep_doc = build_discovery_document(
+        "example.com", EntityType.DEPLOYER, [pem_to_jwk(dep_pub, "deployer-2026-01")],
+        [{"agent_id": "urn:agentpin:example.com:agent", "agent_type": "urn:agentpin:maker.com:agent-type",
+          "name": "Deployed", "capabilities": ["read:*"], "status": AgentStatus.ACTIVE}],
+        2, "2026-01-15T00:00:00Z",
+    )
+    caps = [Capability("read:data")]
+    att = create_attestation(
+        maker_priv, "maker-2026-01", "maker.com", DelegationRole.MAKER,
+        "urn:agentpin:maker.com:agent-type", "example.com", "urn:agentpin:example.com:agent", caps,
+    )
+    jwt_str = issue_credential(
+        dep_priv, "deployer-2026-01", "example.com", "urn:agentpin:example.com:agent",
+        "verifier.com", caps, None, [att], 3600,
+    )
+
+    class _Resolver:
+        def __init__(self, *docs):
+            self.docs = docs
+
+        def resolve_discovery(self, domain):
+            for d in self.docs:
+                if d["entity"] == domain:
+                    return d
+            raise RuntimeError(f"no doc for {domain}")
+
+    return {"jwt": jwt_str, "maker_doc": maker_doc, "dep_doc": dep_doc, "dep_priv": dep_priv, "caps": caps,
+            "resolver": _Resolver}
+
+
+class TestDelegationChain:
+    """AP-2 regression tests."""
+
+    def test_genuine_chain_verifies(self):
+        f = _delegation_fixture()
+        r = verify_credential_offline(
+            f["jwt"], f["dep_doc"], None, KeyPinStore(), "verifier.com", chain_resolver=f["resolver"](f["maker_doc"])
+        )
+        assert r.valid, r
+        assert r.delegation_verified is True
+        assert r.delegation_chain == [{"domain": "maker.com", "role": "maker", "verified": True}]
+        assert r.warnings == []
+
+    def test_forged_attestation_rejected_and_unverifiable_fails_closed(self):
+        f = _delegation_fixture()
+        forged = issue_credential(
+            f["dep_priv"], "deployer-2026-01", "example.com", "urn:agentpin:example.com:agent", "verifier.com",
+            f["caps"], None,
+            [{"domain": "maker.com", "role": "maker", "agent_id": "urn:agentpin:maker.com:agent-type",
+              "kid": "maker-2026-01", "attestation": "AAAA"}],
+            3600,
+        )
+        r1 = verify_credential_offline(
+            forged, f["dep_doc"], None, KeyPinStore(), "verifier.com", chain_resolver=f["resolver"](f["maker_doc"])
+        )
+        assert not r1.valid
+        assert r1.error_code == ErrorCode.DELEGATION_INVALID
+        r2 = verify_credential_offline(f["jwt"], f["dep_doc"], None, KeyPinStore(), "verifier.com")
+        assert not r2.valid
+        assert r2.error_code == ErrorCode.DELEGATION_INVALID
+        lax = VerifierConfig(require_delegation_verification=False)
+        r3 = verify_credential_offline(f["jwt"], f["dep_doc"], None, KeyPinStore(), "verifier.com", lax)
+        assert r3.valid
+        assert r3.delegation_verified is False
+        assert r3.warnings
+
+    def test_failure_modes(self):
+        f = _delegation_fixture()
+
+        def run(doc):
+            return verify_credential_offline(
+                f["jwt"], f["dep_doc"], None, KeyPinStore(), "verifier.com", chain_resolver=f["resolver"](doc)
+            )
+
+        assert run({"entity": "other.com"}).error_code == ErrorCode.DELEGATION_INVALID
+        no_key = dict(f["maker_doc"], public_keys=[dict(f["maker_doc"]["public_keys"][0], kid="maker-2026-02")])
+        assert run(no_key).error_code == ErrorCode.DELEGATION_INVALID
+        assert run(dict(f["maker_doc"], max_delegation_depth=0)).error_code == ErrorCode.DELEGATION_DEPTH_EXCEEDED
+        narrow = dict(f["maker_doc"], agents=[dict(f["maker_doc"]["agents"][0], capabilities=["read:public"])])
+        r = run(narrow)
+        assert r.error_code == ErrorCode.DELEGATION_INVALID and "exceed" in r.error_message
+        suspended = dict(f["maker_doc"], agents=[dict(f["maker_doc"]["agents"][0], status="suspended")])
+        assert run(suspended).error_code == ErrorCode.DELEGATION_INVALID
+
+    def test_bundle_verification_verifies_chain(self):
+        from agentpin.bundle import create_trust_bundle, verify_credential_with_bundle
+
+        f = _delegation_fixture()
+        bundle = create_trust_bundle()
+        bundle["documents"] = [f["dep_doc"], f["maker_doc"]]
+        r = verify_credential_with_bundle(f["jwt"], bundle, KeyPinStore(), "verifier.com")
+        assert r.valid, r
+        assert r.delegation_verified is True
+
+
+def test_key_metadata_enforced():
+    """AP-20 / AP-21: unparsable exp, use != sig, key_ops without verify are rejected."""
+    f = setup()
+
+    def run(**mutate):
+        doc = dict(f["discovery"], public_keys=[dict(f["discovery"]["public_keys"][0], **mutate)])
+        return verify_credential_offline(f["jwt"], doc, None, KeyPinStore(), "verifier.com")
+
+    assert run(exp="expired").error_code == ErrorCode.KEY_EXPIRED
+    assert run(exp="2020-01-01T00:00:00Z").error_code == ErrorCode.KEY_EXPIRED
+    assert run(use="enc").error_code == ErrorCode.KEY_NOT_FOUND
+    assert run(key_ops=["sign"]).error_code == ErrorCode.KEY_NOT_FOUND
+    assert run(exp="2099-01-01T00:00:00Z").valid

@@ -20,6 +20,7 @@ use chrono::Utc;
 use p256::ecdsa::{SigningKey, VerifyingKey};
 
 use crate::crypto::{self, CTX_ATTESTATION};
+use crate::domain::normalize_domain;
 use crate::error::{Error, ErrorCode};
 use crate::types::capability::{capabilities_hash, Capability};
 use crate::types::credential::{DelegationAttestation, DelegationRole};
@@ -46,6 +47,12 @@ pub fn canonical_attestation_input(
 ) -> Vec<u8> {
     let cap_hash = capabilities_hash(capabilities);
     let exp_str = exp.map(|e| e.to_string()).unwrap_or_default();
+    // Domains are compared in normalized form everywhere else (AP-3), so the
+    // signed input uses the normalized form too; invalid names are signed
+    // verbatim and can never match a normalized issuer.
+    let domain = normalize_domain(domain).unwrap_or_else(|_| domain.to_string());
+    let delegatee_domain =
+        normalize_domain(delegatee_domain).unwrap_or_else(|_| delegatee_domain.to_string());
     crypto::domain_separated_input(
         CTX_ATTESTATION,
         &[

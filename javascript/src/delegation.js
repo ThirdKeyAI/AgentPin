@@ -14,7 +14,16 @@
 
 import { signData, verifySignature, domainSeparatedInput, CTX_ATTESTATION } from './crypto.js';
 import { capabilitiesHash } from './capability.js';
+import { normalizeDomain } from './domain.js';
 import { AgentPinError, ErrorCode } from './types.js';
+
+function normalizeOrRaw(domain) {
+    try {
+        return normalizeDomain(domain);
+    } catch {
+        return String(domain);
+    }
+}
 
 /**
  * Create the domain-separated attestation signing input.
@@ -33,9 +42,12 @@ export function canonicalAttestationInput(
 ) {
     const capHash = capabilitiesHash(capabilities);
     const expStr = (exp === null || exp === undefined) ? '' : String(exp);
+    // Domains are compared in normalized form everywhere else (AP-3), so the
+    // signed input uses the normalized form too; invalid names are signed
+    // verbatim and can never match a normalized issuer.
     return domainSeparatedInput(CTX_ATTESTATION, [
-        String(domain), String(role), String(agentId),
-        String(delegateeDomain), String(delegateeAgentId),
+        normalizeOrRaw(domain), String(role), String(agentId),
+        normalizeOrRaw(delegateeDomain), String(delegateeAgentId),
         capHash, String(kid), expStr,
     ]);
 }

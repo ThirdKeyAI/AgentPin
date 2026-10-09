@@ -6,9 +6,10 @@ Implements the 12-step verification flow from the spec.
 import math
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from .constraint import merge_constraints
+from .delegation import verify_attestation, verify_chain_depth
 from .credential import validate_credential_against_discovery
 from .discovery import fetch_discovery_document, find_agent_by_id, find_key_by_kid, validate_discovery_document
 from .domain import default_revocation_endpoint, normalize_domain, validate_https_url_for_domain
@@ -62,6 +63,90 @@ def _is_nonneg_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def check_key_usable(jwk: dict, now: int, skew: int) -> None:
+    """Reject keys that are expired, not marked for signature use, or whose
+    ``key_ops`` exclude ``verify`` (spec §4.4; AP-20, AP-21). An unparsable
+    ``exp`` is a failure, not a pass.
+
+    Raises:
+        AgentPinError: KEY_EXPIRED or KEY_NOT_FOUND
+    """
+    kid = jwk.get("kid")
+    exp = jwk.get("exp")
+    if exp is not None:
+        try:
+            exp_dt = datetime.fromisoformat(str(exp).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            raise AgentPinError(ErrorCode.KEY_EXPIRED, f"Key '{kid}' has an unparsable exp '{exp}'") from None
+        if exp_dt.tzinfo is None:
+            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+        if exp_dt.timestamp() < now - skew:
+            raise AgentPinError(ErrorCode.KEY_EXPIRED, f"Key '{kid}' has expired")
+    if jwk.get("use") != "sig":
+        raise AgentPinError(ErrorCode.KEY_NOT_FOUND, f"Key '{kid}' is not a signature key (use = '{jwk.get('use')}')")
+    key_ops = jwk.get("key_ops")
+    if key_ops is not None and (not isinstance(key_ops, list) or "verify" not in key_ops):
+        raise AgentPinError(ErrorCode.KEY_NOT_FOUND, f"Key '{kid}' key_ops do not permit verify")
+
+
+def _verify_delegation_chain(chain, issuer, payload, discovery, chain_resolver, now, skew):
+    """Spec §6.4: verify every attestation against its attester's discovery
+    document, check Maker/Deployer scope narrowing, and enforce the minimum
+    max_delegation_depth across all participants.
+
+    Returns (entries, None) on success or (None, failure_result).
+    """
+
+    def fail(message):
+        return None, _failure(ErrorCode.DELEGATION_INVALID, message)
+
+    depths = [discovery.get("max_delegation_depth", 0)]
+    entries = []
+    for att in chain:
+        try:
+            domain = normalize_domain(att.get("domain"))
+        except AgentPinError as e:
+            return fail(f"Delegation attester domain invalid: {e}")
+        try:
+            doc = chain_resolver.resolve_discovery(domain)
+            validate_discovery_document(doc, domain)
+        except Exception as e:
+            return fail(f"Cannot resolve discovery document for delegation attester '{domain}': {e}")
+        jwk = find_key_by_kid(doc, att.get("kid"))
+        if not jwk:
+            return fail(f"Delegation attester '{domain}' has no key '{att.get('kid')}'")
+        try:
+            check_key_usable(jwk, now, skew)
+            pem = jwk_to_pem(jwk)
+        except Exception as e:
+            return fail(f"Delegation attester '{domain}' key '{att.get('kid')}' unusable: {e}")
+        try:
+            verify_attestation(att, pem, issuer, payload["sub"], payload.get("capabilities", []))
+        except AgentPinError as e:
+            return fail(str(e))
+        # Scope narrowing (spec §10.3): when the attester declares the
+        # attested agent, it must be active and the credential capabilities
+        # must be within what the attester declared for it.
+        agent = find_agent_by_id(doc, att.get("agent_id"))
+        if agent is not None:
+            if agent.get("status") != "active":
+                return fail(f"Delegation attester '{domain}' declares agent '{att.get('agent_id')}' as {agent.get('status')}")
+            try:
+                validate_credential_against_discovery(payload.get("capabilities", []), agent.get("capabilities", []))
+            except AgentPinError:
+                return fail(
+                    f"Credential capabilities exceed those declared by delegation attester '{domain}' "
+                    f"for '{att.get('agent_id')}'"
+                )
+        depths.append(doc.get("max_delegation_depth", 0))
+        entries.append({"domain": domain, "role": att.get("role"), "verified": True})
+    try:
+        verify_chain_depth(len(chain), depths)
+    except AgentPinError as e:
+        return None, _failure(e.code, str(e))
+    return entries, None
+
+
 def verify_credential_offline(
     credential_jwt: str,
     discovery: dict,
@@ -69,10 +154,17 @@ def verify_credential_offline(
     pin_store: KeyPinStore,
     audience: Optional[str],
     config: Optional[VerifierConfig] = None,
+    chain_resolver: Optional[Any] = None,
 ) -> VerificationResult:
     """Verify a credential offline using caller-provided documents.
 
     Implements the 12-step verification flow from the spec.
+
+    Without ``chain_resolver`` a ``delegation_chain`` cannot be verified;
+    under the default ``require_delegation_verification=True`` such a
+    credential is rejected. Pass an object with a synchronous
+    ``resolve_discovery(domain)`` (for example a trust bundle lookup) to
+    verify chains offline.
     """
     if config is None:
         config = VerifierConfig()
@@ -123,16 +215,12 @@ def verify_credential_offline(
     if not jwk:
         return _failure(ErrorCode.KEY_NOT_FOUND, f"Key '{header['kid']}' not found in discovery document")
 
-    # Check key expiration
-    if jwk.get("exp"):
-        try:
-            exp_dt = datetime.fromisoformat(jwk["exp"])
-            if exp_dt.tzinfo is None:
-                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-            if exp_dt.timestamp() < now - skew:
-                return _failure(ErrorCode.KEY_EXPIRED, f"Key '{header['kid']}' has expired")
-        except (ValueError, TypeError):
-            pass
+    # Check key expiration and usage (an unparsable exp is a failure, not a
+    # pass — AP-20; use/key_ops enforced — AP-21)
+    try:
+        check_key_usable(jwk, now, skew)
+    except AgentPinError as e:
+        return _failure(e.code, str(e))
 
     # Convert JWK to PEM
     try:
@@ -211,14 +299,29 @@ def verify_credential_offline(
         {"status": "unknown", "first_seen": None},
     )
 
-    if payload.get("delegation_chain"):
-        entries = [
-            {"domain": att["domain"], "role": att["role"], "verified": False}
-            for att in payload["delegation_chain"]
-        ]
-        result.delegation_chain = entries
-        result.delegation_verified = False
-        result.warnings.append("Delegation chain present but not verified in offline mode")
+    # Step 10: every attestation is verified against its attester's
+    # discovery document (spec §6.4); a chain that cannot be verified fails
+    # closed unless the verifier opted out (AP-2).
+    chain = payload.get("delegation_chain")
+    if chain:
+        if chain_resolver is not None:
+            entries, failed = _verify_delegation_chain(chain, issuer, payload, discovery, chain_resolver, now, skew)
+            if failed is not None:
+                return failed
+            result.delegation_chain = entries
+            result.delegation_verified = True
+        elif config.require_delegation_verification:
+            return _failure(
+                ErrorCode.DELEGATION_INVALID, "Delegation chain present but no resolver is available to verify it"
+            )
+        else:
+            result.delegation_chain = [
+                {"domain": att.get("domain"), "role": att.get("role"), "verified": False} for att in chain
+            ]
+            result.delegation_verified = False
+            result.warnings.append(
+                "Delegation chain present but not verified (require_delegation_verification is False)"
+            )
 
     # Step 11: TOFU key pinning
     try:
@@ -294,4 +397,31 @@ def verify_credential(
         except Exception:
             return _failure(ErrorCode.DISCOVERY_FETCH_FAILED, "Revocation endpoint unreachable (fail-closed)")
 
-    return verify_credential_offline(credential_jwt, discovery, revocation, pin_store, audience, config)
+    # Pre-resolve the discovery documents of every delegation attester so the
+    # chain can be verified by the synchronous core (AP-2).
+    chain_docs: Dict[str, dict] = {}
+    for att in payload.get("delegation_chain") or []:
+        try:
+            domain = normalize_domain(att.get("domain"))
+        except AgentPinError as e:
+            return _failure(ErrorCode.DELEGATION_INVALID, f"Delegation attester domain invalid: {e}")
+        if domain in chain_docs:
+            continue
+        try:
+            chain_docs[domain] = fetch_discovery_document(domain)
+        except Exception as e:
+            return _failure(
+                ErrorCode.DELEGATION_INVALID,
+                f"Cannot resolve discovery document for delegation attester '{domain}': {e}",
+            )
+
+    class _PreResolved:
+        def resolve_discovery(self, domain: str) -> dict:
+            doc = chain_docs.get(normalize_domain(domain))
+            if doc is None:
+                raise AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, f"Domain '{domain}' not pre-resolved")
+            return doc
+
+    return verify_credential_offline(
+        credential_jwt, discovery, revocation, pin_store, audience, config, chain_resolver=_PreResolved()
+    )
