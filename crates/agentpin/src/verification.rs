@@ -726,8 +726,10 @@ pub fn verify_credential_with_resolver(
 
 /// Pre-resolved discovery documents for delegation attesters, used by the
 /// async entry point which cannot call an async resolver from the sync core.
+#[cfg(feature = "fetch")]
 struct PreResolved(std::collections::HashMap<String, DiscoveryDocument>);
 
+#[cfg(feature = "fetch")]
 impl DiscoveryResolver for PreResolved {
     fn resolve_discovery(&self, domain: &str) -> Result<DiscoveryDocument, Error> {
         let key = normalize_domain(domain).unwrap_or_else(|_| domain.to_string());

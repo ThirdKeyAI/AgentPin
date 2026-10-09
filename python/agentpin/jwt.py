@@ -2,6 +2,7 @@
 
 import base64
 import json
+import re
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.ec import ECDSA, EllipticCurvePrivateKey, EllipticCurvePublicKey
@@ -15,12 +16,23 @@ def base64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("utf-8")
 
 
+_BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]*$")
+
+
 def base64url_decode(s: str) -> bytes:
-    """Base64url decode a string."""
-    padding = 4 - len(s) % 4
-    if padding != 4:
-        s += "=" * padding
-    return base64.urlsafe_b64decode(s)
+    """Base64url decode a string strictly.
+
+    RFC 7515 §2 / RFC 4648 §5 without padding: only the base64url alphabet,
+    no padding, no whitespace, and canonical trailing bits. Non-canonical
+    input raises ``ValueError`` rather than being silently accepted, so every
+    SDK agrees on which tokens are well formed.
+    """
+    if not isinstance(s, str) or not _BASE64URL_RE.match(s) or len(s) % 4 == 1:
+        raise ValueError("Invalid base64url encoding")
+    raw = base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+    if base64url_encode(raw) != s:
+        raise ValueError("Non-canonical base64url encoding")
+    return raw
 
 
 def encode_jwt(header: dict, payload: dict, private_key_pem: str) -> str:

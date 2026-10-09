@@ -21,17 +21,26 @@ export function base64urlEncode(data) {
         .replace(/=+$/, '');
 }
 
+const BASE64URL_RE = /^[A-Za-z0-9_-]*$/;
+
 /**
- * Base64url decode a string.
+ * Base64url decode a string strictly (RFC 7515 §2 / RFC 4648 §5 without
+ * padding): only the base64url alphabet, no padding, no whitespace, and
+ * canonical trailing bits. Non-canonical input is rejected rather than
+ * silently accepted, so every SDK agrees on which tokens are well formed.
  * @param {string} str
  * @returns {Buffer}
+ * @throws {Error} on malformed input
  */
 export function base64urlDecode(str) {
-    let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
-    const pad = base64.length % 4;
-    if (pad === 2) base64 += '==';
-    else if (pad === 3) base64 += '=';
-    return Buffer.from(base64, 'base64');
+    if (typeof str !== 'string' || !BASE64URL_RE.test(str) || str.length % 4 === 1) {
+        throw new Error('Invalid base64url encoding');
+    }
+    const bytes = Buffer.from(str, 'base64url');
+    if (base64urlEncode(bytes) !== str) {
+        throw new Error('Non-canonical base64url encoding');
+    }
+    return bytes;
 }
 
 /**

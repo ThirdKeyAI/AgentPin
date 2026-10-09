@@ -22,7 +22,8 @@ func runIssue(args []string) error {
 	caps := fs.String("capabilities", "", "Comma-separated capabilities (required)")
 	ttl := fs.Uint64("ttl", 3600, "Credential TTL in seconds")
 	delChainPath := fs.String("delegation-chain", "", "JSON file with delegation chain entries")
-	constraintsArg := fs.String("constraints", "", "JSON string or file with constraint overrides")
+	constraintsArg := fs.String("constraints", "", "JSON string with constraint overrides (literal; use --constraints-file for a file)")
+	constraintsFile := fs.String("constraints-file", "", "Path to a JSON file with constraint overrides")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -49,15 +50,19 @@ func runIssue(args []string) error {
 	}
 
 	var constraints *types.Constraints
-	if *constraintsArg != "" {
-		var data []byte
-		if _, err := os.Stat(*constraintsArg); err == nil {
-			data, err = os.ReadFile(*constraintsArg)
+	if *constraintsArg != "" && *constraintsFile != "" {
+		return fmt.Errorf("use only one of --constraints or --constraints-file")
+	}
+	if *constraintsArg != "" || *constraintsFile != "" {
+		// --constraints is always literal JSON and --constraints-file always a
+		// path (AP-23).
+		data := []byte(*constraintsArg)
+		if *constraintsFile != "" {
+			var err error
+			data, err = os.ReadFile(*constraintsFile)
 			if err != nil {
 				return err
 			}
-		} else {
-			data = []byte(*constraintsArg)
 		}
 		var c types.Constraints
 		if err := json.Unmarshal(data, &c); err != nil {

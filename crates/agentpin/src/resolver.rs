@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::domain::{normalize_domain, validate_https_url_for_domain};
+use crate::domain::normalize_domain;
+#[cfg(feature = "fetch")]
+use crate::domain::validate_https_url_for_domain;
 use crate::error::Error;
 use crate::types::bundle::TrustBundle;
 use crate::types::discovery::DiscoveryDocument;

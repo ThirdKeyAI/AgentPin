@@ -15,9 +15,17 @@ use agentpin::verification::{
 
 #[derive(Args)]
 pub struct VerifyArgs {
-    /// JWT credential string or path to file containing it
-    #[arg(long)]
-    pub credential: String,
+    /// JWT credential string (literal; use --credential-file to read from a file)
+    #[arg(
+        long,
+        conflicts_with = "credential_file",
+        required_unless_present = "credential_file"
+    )]
+    pub credential: Option<String>,
+
+    /// Path to a file containing the JWT credential
+    #[arg(long, conflicts_with = "credential")]
+    pub credential_file: Option<String>,
 
     /// Path to discovery document JSON file (for offline verification)
     #[arg(long)]
@@ -49,11 +57,13 @@ pub struct VerifyArgs {
 }
 
 pub async fn run(args: VerifyArgs) -> anyhow::Result<()> {
-    // Load credential — could be a JWT string or a file path
-    let credential = if std::path::Path::new(&args.credential).exists() {
-        fs::read_to_string(&args.credential)?.trim().to_string()
-    } else {
-        args.credential.clone()
+    // --credential is always literal and --credential-file always a path: the
+    // old "path if a file by that name exists" rule made the meaning of an
+    // argument depend on the filesystem (AP-23).
+    let credential = match (&args.credential, &args.credential_file) {
+        (Some(literal), None) => literal.clone(),
+        (None, Some(path)) => fs::read_to_string(path)?.trim().to_string(),
+        _ => anyhow::bail!("exactly one of --credential or --credential-file is required"),
     };
 
     // Load or create pin store

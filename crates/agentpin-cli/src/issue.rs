@@ -42,9 +42,13 @@ pub struct IssueArgs {
     #[arg(long)]
     pub delegation_chain: Option<String>,
 
-    /// JSON string or file path with constraint overrides
-    #[arg(long)]
+    /// JSON string with constraint overrides (literal; use --constraints-file for a file)
+    #[arg(long, conflicts_with = "constraints_file")]
     pub constraints: Option<String>,
+
+    /// Path to a JSON file with constraint overrides
+    #[arg(long, conflicts_with = "constraints")]
+    pub constraints_file: Option<String>,
 }
 
 pub fn run(args: IssueArgs) -> anyhow::Result<()> {
@@ -57,16 +61,13 @@ pub fn run(args: IssueArgs) -> anyhow::Result<()> {
         .map(|s| Capability::from(s.trim()))
         .collect();
 
-    let constraints: Option<Constraints> = match &args.constraints {
-        Some(c) => {
-            let json = if std::path::Path::new(c).exists() {
-                fs::read_to_string(c)?
-            } else {
-                c.clone()
-            };
-            Some(serde_json::from_str(&json)?)
-        }
-        None => None,
+    // --constraints is always literal JSON and --constraints-file always a
+    // path (AP-23).
+    let constraints: Option<Constraints> = match (&args.constraints, &args.constraints_file) {
+        (Some(json), None) => Some(serde_json::from_str(json)?),
+        (None, Some(path)) => Some(serde_json::from_str(&fs::read_to_string(path)?)?),
+        (None, None) => None,
+        _ => anyhow::bail!("use only one of --constraints or --constraints-file"),
     };
 
     let delegation_chain: Option<Vec<DelegationAttestation>> = match &args.delegation_chain {

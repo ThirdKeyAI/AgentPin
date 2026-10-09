@@ -17,7 +17,7 @@ agentpin = { path = "../agentpin" }
 axum = "0.7"
 tokio = { version = "1.0", features = ["full"] }
 tower = { version = "0.4", features = ["util"] }
-tower-http = { version = "0.5", features = ["cors", "trace", "set-header"] }
+tower-http = { version = "0.5", features = ["trace", "set-header"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = "0.1"

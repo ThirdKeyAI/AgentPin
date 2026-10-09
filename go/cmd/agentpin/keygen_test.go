@@ -72,3 +72,18 @@ func TestWriteAtomicCreatesRestrictiveFile(t *testing.T) {
 		t.Fatalf("temp files left behind: %v", leftovers)
 	}
 }
+
+// AP-23: a credential argument is never reinterpreted as a path.
+func TestVerifyCredentialArgumentIsLiteral(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "not.a.jwt")
+	if err := os.WriteFile(name, []byte("garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runVerify([]string{"--credential", name, "--credential-file", name}); err == nil {
+		t.Fatal("both flags must be rejected")
+	}
+	if err := runVerify([]string{}); err == nil {
+		t.Fatal("one of the flags is required")
+	}
+}
