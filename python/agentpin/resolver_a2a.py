@@ -14,12 +14,11 @@ from threading import RLock
 from typing import Any, Callable, Optional
 
 from .a2a import verify_agentpin_extension
+from .discovery import fetch_discovery_document
 from .domain import normalize_domain
 from .net import fetch_json_bounded
-from .discovery import fetch_discovery_document
 from .resolver_local import card_endpoint_host, card_key_published_in, derive_discovery_from_card
 from .types import AgentPinError, ErrorCode
-
 
 AGENT_CARD_PATH = "/.well-known/agent-card.json"
 DEFAULT_TIMEOUT_SECS = 10.0

@@ -1,6 +1,5 @@
 """Tests for AllowedDomains helpers + a2a_endpoint discovery field (v0.3.0)."""
 
-import pytest
 
 from agentpin import (
     AllowedDomains,

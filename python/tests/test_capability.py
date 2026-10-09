@@ -3,7 +3,6 @@
 import pytest
 
 from agentpin.capability import (
-    CORE_ACTIONS,
     Capability,
     capabilities_hash,
     capabilities_subset,

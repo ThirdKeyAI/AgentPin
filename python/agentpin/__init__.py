@@ -1,5 +1,27 @@
 """AgentPin: Domain-anchored cryptographic identity protocol for AI agents."""
 
+from .a2a import (
+    agent_card_signing_input,
+    build_and_sign_agent_card,
+    build_unsigned_agent_card,
+    canonicalize_for_signing,
+    capability_to_skill,
+    extension_key_thumbprint,
+    sign_agent_card,
+    verify_agentpin_extension,
+)
+from .bundle import (
+    bundle_signing_input,
+    check_bundle_expiry,
+    create_trust_bundle,
+    find_bundle_discovery,
+    find_bundle_revocation,
+    load_trust_bundle,
+    save_trust_bundle,
+    sign_trust_bundle,
+    verify_credential_with_bundle,
+    verify_trust_bundle,
+)
 from .capability import (
     CORE_ACTIONS,
     Capability,
@@ -47,36 +69,17 @@ from .discovery import (
     find_key_by_kid,
     validate_discovery_document,
 )
-from .a2a import (
-    agent_card_signing_input,
-    build_and_sign_agent_card,
-    build_unsigned_agent_card,
-    canonicalize_for_signing,
-    capability_to_skill,
-    extension_key_thumbprint,
-    sign_agent_card,
-    verify_agentpin_extension,
-)
-from .domain import (
-    default_revocation_endpoint,
-    https_url_host,
-    normalize_domain,
-    validate_https_url_for_domain,
-)
 from .dns import (
     fetch_dns_txt,
     parse_txt_record,
     txt_record_name,
     verify_dns_match,
 )
-from .resolver_local import (
-    LocalAgentCardStore,
-    card_endpoint_host,
-    card_key_published_in,
-    derive_discovery_from_card,
-)
-from .resolver_a2a import (
-    A2aAgentCardResolver,
+from .domain import (
+    default_revocation_endpoint,
+    https_url_host,
+    normalize_domain,
+    validate_https_url_for_domain,
 )
 from .jwk import (
     jwk_thumbprint,
@@ -102,9 +105,42 @@ from .mutual import (
     verify_response,
     verify_response_with_nonce_store,
 )
+from .net import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    DEFAULT_TIMEOUT_SECS,
+    fetch_json_bounded,
+)
 from .nonce import (
     InMemoryNonceStore,
     NonceStore,
+)
+from .pinning import (
+    KeyPinStore,
+    PinningResult,
+    check_pinning,
+    check_pinning_set,
+)
+from .resolver_a2a import (
+    A2aAgentCardResolver,
+)
+from .resolver_local import (
+    LocalAgentCardStore,
+    card_endpoint_host,
+    card_key_published_in,
+    derive_discovery_from_card,
+)
+from .revocation import (
+    add_revoked_agent,
+    add_revoked_credential,
+    add_revoked_key,
+    build_revocation_document,
+    check_revocation,
+    check_revocation_freshness,
+    fetch_revocation_document,
+    fetch_revocation_document_if_present,
+    revocation_signing_input,
+    sign_revocation_document,
+    verify_revocation_document,
 )
 from .rotation import (
     apply_rotation,
@@ -124,30 +160,6 @@ from .transport import (
     ws_extract_credential,
     ws_format_auth_message,
 )
-from .pinning import (
-    KeyPinStore,
-    PinningResult,
-    check_pinning,
-    check_pinning_set,
-)
-from .revocation import (
-    add_revoked_agent,
-    add_revoked_credential,
-    add_revoked_key,
-    build_revocation_document,
-    check_revocation,
-    check_revocation_freshness,
-    fetch_revocation_document,
-    fetch_revocation_document_if_present,
-    revocation_signing_input,
-    sign_revocation_document,
-    verify_revocation_document,
-)
-from .net import (
-    DEFAULT_MAX_RESPONSE_BYTES,
-    DEFAULT_TIMEOUT_SECS,
-    fetch_json_bounded,
-)
 from .types import (
     DATA_CLASSIFICATION_ORDER,
     AgentPinError,
@@ -166,18 +178,6 @@ from .verification import (
     check_key_usable,
     verify_credential,
     verify_credential_offline,
-)
-from .bundle import (
-    bundle_signing_input,
-    check_bundle_expiry,
-    create_trust_bundle,
-    find_bundle_discovery,
-    find_bundle_revocation,
-    load_trust_bundle,
-    save_trust_bundle,
-    sign_trust_bundle,
-    verify_credential_with_bundle,
-    verify_trust_bundle,
 )
 
 __version__ = "0.3.0"

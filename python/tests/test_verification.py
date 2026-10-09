@@ -189,11 +189,15 @@ class TestVerifyCredentialOffline:
             priv2, "test-2026-02", "example.com", "urn:agentpin:example.com:agent",
             "verifier.com", [Capability("read:data")], None, None, 3600,
         )
-        r2 = verify_credential_offline(jwt2, f["discovery"], f["revocation"], f["pin_store"], "verifier.com", f["config"])
+        r2 = verify_credential_offline(
+            jwt2, f["discovery"], f["revocation"], f["pin_store"], "verifier.com", f["config"]
+        )
         assert r2.valid, r2
         assert r2.key_pinning["status"] == "rotated"
         f["discovery"]["public_keys"] = f["discovery"]["public_keys"][1:]
-        r3 = verify_credential_offline(jwt2, f["discovery"], f["revocation"], f["pin_store"], "verifier.com", f["config"])
+        r3 = verify_credential_offline(
+            jwt2, f["discovery"], f["revocation"], f["pin_store"], "verifier.com", f["config"]
+        )
         assert r3.valid
         assert r3.key_pinning["status"] == "pinned"
 
@@ -298,7 +302,8 @@ class TestRevocationDocumentValidation:
         assert run(f["revocation"], strict).error_code == ErrorCode.DISCOVERY_INVALID
         signed = sign_revocation_document(dict(f["revocation"]), f["priv"], "test-2026-01")
         assert run(signed, strict).valid
-        assert run(dict(signed, updated_at="2030-01-01T00:00:00Z"), f["config"]).error_code == ErrorCode.DISCOVERY_INVALID
+        future = dict(signed, updated_at="2030-01-01T00:00:00Z")
+        assert run(future, f["config"]).error_code == ErrorCode.DISCOVERY_INVALID
         aged = VerifierConfig(revocation_max_age_secs=60)
         stale = dict(f["revocation"], updated_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
         assert run(stale, aged).error_code == ErrorCode.DISCOVERY_INVALID
@@ -310,7 +315,8 @@ def _raw_credential(priv, payload_json: str) -> str:
 
     from agentpin.crypto import sign_data
 
-    header = base64.urlsafe_b64encode(b'{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"test-2026-01"}').rstrip(b"=")
+    header_json = b'{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"test-2026-01"}'
+    header = base64.urlsafe_b64encode(header_json).rstrip(b"=")
     signing_input = header.decode() + "." + base64.urlsafe_b64encode(payload_json.encode()).rstrip(b"=").decode()
     der = base64.b64decode(sign_data(priv, signing_input.encode()))
     return signing_input + "." + base64.urlsafe_b64encode(der).rstrip(b"=").decode()
@@ -393,7 +399,9 @@ def test_revocation_document_with_wrong_field_names_fails_closed():
     wrong = {
         "agentpin_version": "0.1",
         "entity": "example.com",
-        "revoked_credentials": [{"id": payload["jti"], "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z"}],
+        "revoked_credentials": [
+            {"id": payload["jti"], "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z"}
+        ],
         "revoked_agents": [],
         "revoked_keys": [{"id": "test-2026-01", "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z"}],
         "updated_at": "2026-02-15T00:00:00Z",
@@ -568,9 +576,12 @@ def test_capability_taxonomy_enforced():
     for cfg in (f["config"], lax):
         r = verify_credential_offline(issue("admin:*"), admin, None, KeyPinStore(), "verifier.com", cfg)
         assert r.error_code == ErrorCode.CAPABILITY_EXCEEDED
-    custom = dict(f["discovery"], agents=[dict(f["discovery"]["agents"][0], capabilities=["scan:target", "com.example.scan:target"])])
+    agent0 = f["discovery"]["agents"][0]
+    custom = dict(f["discovery"], agents=[dict(agent0, capabilities=["scan:target", "com.example.scan:target"])])
     r = verify_credential_offline(issue("scan:target"), custom, None, KeyPinStore(), "verifier.com", f["config"])
     assert r.error_code == ErrorCode.CAPABILITY_EXCEEDED
     assert verify_credential_offline(issue("scan:target"), custom, None, KeyPinStore(), "verifier.com", lax).valid
     rev = dict(f["discovery"], agents=[dict(f["discovery"]["agents"][0], capabilities=["com.example.scan:target"])])
-    assert verify_credential_offline(issue("com.example.scan:target"), rev, None, KeyPinStore(), "verifier.com", f["config"]).valid
+    assert verify_credential_offline(
+        issue("com.example.scan:target"), rev, None, KeyPinStore(), "verifier.com", f["config"]
+    ).valid

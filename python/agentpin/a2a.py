@@ -25,7 +25,6 @@ from .discovery import AllowedDomains
 from .jwk import jwk_thumbprint, jwk_to_pem, pem_to_jwk
 from .types import AgentPinError, ErrorCode
 
-
 # ---------------------------------------------------------------------------
 # Capability -> Skill mapping
 # ---------------------------------------------------------------------------

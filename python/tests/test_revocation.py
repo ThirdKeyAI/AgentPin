@@ -75,7 +75,9 @@ class TestSignedRevocationDocument:
         from agentpin.types import AgentPinError
 
         priv, pub = generate_key_pair()
-        discovery = build_discovery_document("example.com", "maker", [pem_to_jwk(pub, "k1")], [], 2, "2026-01-15T00:00:00Z")
+        discovery = build_discovery_document(
+            "example.com", "maker", [pem_to_jwk(pub, "k1")], [], 2, "2026-01-15T00:00:00Z"
+        )
         doc = build_revocation_document("example.com")
         add_revoked_key(doc, "old", "superseded")
         verify_revocation_document(doc, discovery)

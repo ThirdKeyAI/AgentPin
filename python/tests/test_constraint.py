@@ -62,7 +62,12 @@ class TestMergeConstraints:
         }
         assert merge_constraints(disc, None) == disc
         merged = merge_constraints(
-            disc, {"rate_limit": "1/minute", "data_classification_max": "internal", "denied_domains": ["staging.client-corp.com"]}
+            disc,
+            {
+                "rate_limit": "1/minute",
+                "data_classification_max": "internal",
+                "denied_domains": ["staging.client-corp.com"],
+            },
         )
         assert merged["allowed_domains"] == disc["allowed_domains"]
         assert merged["rate_limit"] == "1/minute"

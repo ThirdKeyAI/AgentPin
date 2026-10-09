@@ -122,14 +122,18 @@ def test_discovery_binding_requires_published_key():
     published = build_discovery_document(
         "example.com", EntityType.BOTH, [pem_to_jwk(pub, "kid-1")], [], 0, "2026-01-15T00:00:00Z"
     )
-    ok = A2aAgentCardResolver(fetch=_stub_fetch({card_url: _StubResponse(200, card), doc_url: _StubResponse(200, published)}))
+    ok = A2aAgentCardResolver(
+        fetch=_stub_fetch({card_url: _StubResponse(200, card), doc_url: _StubResponse(200, published)})
+    )
     assert ok.resolve_discovery("example.com")["entity"] == "example.com"
 
     _, other_pub = generate_key_pair()
     unrelated = build_discovery_document(
         "example.com", EntityType.BOTH, [pem_to_jwk(other_pub, "other")], [], 0, "2026-01-15T00:00:00Z"
     )
-    bad = A2aAgentCardResolver(fetch=_stub_fetch({card_url: _StubResponse(200, card), doc_url: _StubResponse(200, unrelated)}))
+    bad = A2aAgentCardResolver(
+        fetch=_stub_fetch({card_url: _StubResponse(200, card), doc_url: _StubResponse(200, unrelated)})
+    )
     with pytest.raises(Exception, match="not published"):
         bad.resolve_discovery("example.com")
 

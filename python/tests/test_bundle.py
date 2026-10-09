@@ -1,8 +1,8 @@
 """Tests for trust bundle support."""
 
 import json
-import tempfile
 import os
+import tempfile
 
 import pytest
 
@@ -16,12 +16,12 @@ from agentpin.bundle import (
 )
 from agentpin.capability import Capability
 from agentpin.credential import issue_credential
-from agentpin.crypto import generate_key_pair, generate_key_id
+from agentpin.crypto import generate_key_id, generate_key_pair
 from agentpin.discovery import build_discovery_document
 from agentpin.jwk import pem_to_jwk
 from agentpin.jwt import decode_jwt_unverified
 from agentpin.pinning import KeyPinStore
-from agentpin.revocation import build_revocation_document, add_revoked_credential
+from agentpin.revocation import add_revoked_credential, build_revocation_document
 from agentpin.types import (
     AgentStatus,
     DataClassification,

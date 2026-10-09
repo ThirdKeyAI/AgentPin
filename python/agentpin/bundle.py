@@ -7,7 +7,7 @@ documents, enabling verification in environments where the standard
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from .crypto import CTX_BUNDLE, domain_separated_input, sign_data, verify_signature
 from .domain import normalize_domain

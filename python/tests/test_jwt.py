@@ -94,7 +94,8 @@ def test_strict_base64url():
     for bad in ["AQ==", "AQI=", "AQ+D", "AQ/D", "AQ ID", "AQIDA", "AR", "AQIE\n", "="]:
         with pytest.raises(ValueError):
             base64url_decode(bad)
-    header = base64.urlsafe_b64encode(b'{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"k"}').rstrip(b"=").decode()
+    header_json = b'{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"k"}'
+    header = base64.urlsafe_b64encode(header_json).rstrip(b"=").decode()
     payload = base64.urlsafe_b64encode(b'{"iss":"example.com"}').rstrip(b"=").decode()
     with pytest.raises(ValueError):
         decode_jwt_unverified(f"{header}=.{payload}.sig")

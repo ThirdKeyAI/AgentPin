@@ -71,7 +71,9 @@ def test_rejects_oversized_by_content_length_and_streaming():
 
 def test_rejects_non_json_content_type():
     with pytest.raises(AgentPinError, match="not application/json"):
-        fetch_json_bounded("https://example.com/x", http_get_impl=_get(_Resp(200, {"Content-Type": "text/html"}, b"{}")))
+        fetch_json_bounded(
+            "https://example.com/x", http_get_impl=_get(_Resp(200, {"Content-Type": "text/html"}, b"{}"))
+        )
 
 
 def test_not_found_is_none():

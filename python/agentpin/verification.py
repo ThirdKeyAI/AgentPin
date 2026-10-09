@@ -10,8 +10,8 @@ from typing import Any, Dict, Optional
 
 from .capability import Capability, validate_capability
 from .constraint import merge_constraints
-from .delegation import verify_attestation, verify_chain_depth
 from .credential import validate_credential_against_discovery
+from .delegation import verify_attestation, verify_chain_depth
 from .discovery import fetch_discovery_document, find_agent_by_id, find_key_by_kid, validate_discovery_document
 from .domain import default_revocation_endpoint, normalize_domain, validate_https_url_for_domain
 from .jwk import jwk_to_pem
@@ -131,7 +131,9 @@ def _verify_delegation_chain(chain, issuer, payload, discovery, chain_resolver, 
         agent = find_agent_by_id(doc, att.get("agent_id"))
         if agent is not None:
             if agent.get("status") != "active":
-                return fail(f"Delegation attester '{domain}' declares agent '{att.get('agent_id')}' as {agent.get('status')}")
+                return fail(
+                    f"Delegation attester '{domain}' declares agent '{att.get('agent_id')}' as {agent.get('status')}"
+                )
             try:
                 validate_credential_against_discovery(payload.get("capabilities", []), agent.get("capabilities", []))
             except AgentPinError:
