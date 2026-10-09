@@ -24,3 +24,15 @@ jobs:
         if: matrix.rust == 'stable'
       - run: cargo test --workspace -j2
       - run: cargo test --workspace -j2 --features fetch
+      - run: cargo test -p agentpin -j2 --features dns
+        if: matrix.rust == 'stable'
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit Rust dependencies
+        run: cargo audit --deny warnings

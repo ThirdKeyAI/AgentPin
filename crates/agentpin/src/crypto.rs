@@ -4,15 +4,36 @@ use p256::{
     pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey},
     SecretKey,
 };
-use rand::rngs::OsRng;
+use rand_core::OsRng;
 use sha2::{Digest, Sha256};
 
 use crate::error::Error;
 
-#[derive(Debug, Clone)]
+/// A freshly generated key pair.
+///
+/// The private PEM is zeroized when the value is dropped and is redacted
+/// from `Debug` output, so an incidental `{:?}` or log line never leaks key
+/// material (AP-23).
+#[derive(Clone)]
 pub struct KeyPair {
     pub private_key_pem: String,
     pub public_key_pem: String,
+}
+
+impl std::fmt::Debug for KeyPair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyPair")
+            .field("private_key_pem", &"<redacted>")
+            .field("public_key_pem", &self.public_key_pem)
+            .finish()
+    }
+}
+
+impl Drop for KeyPair {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.private_key_pem.zeroize();
+    }
 }
 
 /// Generate a new ECDSA P-256 keypair.
@@ -188,6 +209,16 @@ mod tests {
             .private_key_pem
             .starts_with("-----BEGIN PRIVATE KEY-----"));
         assert!(kp.public_key_pem.starts_with("-----BEGIN PUBLIC KEY-----"));
+    }
+
+    /// AP-23: Debug output never contains the private key.
+    #[test]
+    fn test_keypair_debug_redacts_private_key() {
+        let kp = generate_key_pair().unwrap();
+        let dbg = format!("{:?}", kp);
+        assert!(dbg.contains("<redacted>"));
+        assert!(!dbg.contains("PRIVATE KEY"));
+        assert!(dbg.contains("PUBLIC KEY"));
     }
 
     #[test]

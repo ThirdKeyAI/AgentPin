@@ -25,7 +25,7 @@ use std::time::Duration;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 use chrono::Utc;
 use p256::ecdsa::{SigningKey, VerifyingKey};
-use rand::RngCore;
+use rand_core::{OsRng, RngCore};
 
 use crate::crypto::{self, CTX_RESPONSE};
 use crate::error::Error;
@@ -51,7 +51,7 @@ fn default_nonce_store() -> &'static InMemoryNonceStore {
 /// Create a challenge with a 128-bit random nonce.
 pub fn create_challenge(verifier_credential: Option<&str>) -> Challenge {
     let mut nonce_bytes = [0u8; NONCE_BYTES];
-    rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
+    OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = BASE64URL.encode(nonce_bytes);
 
     Challenge {

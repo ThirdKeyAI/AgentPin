@@ -50,8 +50,8 @@ fn make_test_setup() -> (String, String, String, String, DiscoveryDocument) {
         updated_at: "2026-01-01T00:00:00Z".to_string(),
     };
     (
-        kp.private_key_pem,
-        kp.public_key_pem,
+        kp.private_key_pem.clone(),
+        kp.public_key_pem.clone(),
         kid,
         "urn:agentpin:example.com:test-agent".to_string(),
         doc,

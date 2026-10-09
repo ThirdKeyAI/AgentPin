@@ -21,3 +21,8 @@ jobs:
         run: |
           pip install -e ".[dev]"
           python -m pytest tests/ -v
+      - name: Audit Python dependencies
+        working-directory: python
+        run: |
+          pip install --upgrade pip pip-audit
+          pip-audit --progress-spinner off
