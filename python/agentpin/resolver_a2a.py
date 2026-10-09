@@ -14,6 +14,7 @@ from threading import RLock
 from typing import Any, Callable, Optional
 
 from .a2a import verify_agentpin_extension
+from .domain import normalize_domain
 from .resolver_local import card_endpoint_host, derive_discovery_from_card
 from .types import AgentPinError, ErrorCode
 
@@ -58,6 +59,7 @@ class A2aAgentCardResolver:
         """Fetch + verify the AgentCard at
         ``https://{domain}/.well-known/agent-card.json`` and return the
         derived discovery document."""
+        domain = normalize_domain(domain)
         url = f"https://{domain}{AGENT_CARD_PATH}"
 
         try:

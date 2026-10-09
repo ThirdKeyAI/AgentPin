@@ -85,3 +85,21 @@ describe('checkPinning', () => {
         assert.throws(() => checkPinning(store, 'example.com', jwk2), /changed/i);
     });
 });
+
+describe('pin key normalization (AP-3)', () => {
+    test('case variants share one pin set', async () => {
+        const { KeyPinStore, PinningResult } = await import('../src/pinning.js');
+        const store = new KeyPinStore();
+        const j1 = { kid: 'k1', kty: 'EC', crv: 'P-256', x: 'x1', y: 'y' };
+        const j2 = { kid: 'k2', kty: 'EC', crv: 'P-256', x: 'x2', y: 'y' };
+        assert.strictEqual(store.checkAndPin('example.com', j1), PinningResult.FIRST_USE);
+        assert.strictEqual(store.checkAndPin('EXAMPLE.COM', j1), PinningResult.MATCHED);
+        assert.strictEqual(store.checkAndPin('Example.Com.', j2), PinningResult.CHANGED);
+        assert.ok(store.getDomain('EXAMPLE.COM'));
+        const loaded = KeyPinStore.fromJson(JSON.stringify([
+            { domain: 'EXAMPLE.COM', pinned_keys: [{ kid: 'k', public_key_hash: 'h1', first_seen: 't', last_seen: 't', trust_level: 'tofu' }] },
+            { domain: 'example.com', pinned_keys: [{ kid: 'k2', public_key_hash: 'h2', first_seen: 't', last_seen: 't', trust_level: 'tofu' }] },
+        ]));
+        assert.strictEqual(loaded.getDomain('example.com').pinned_keys.length, 2);
+    });
+});

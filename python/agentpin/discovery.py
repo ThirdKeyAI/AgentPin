@@ -2,6 +2,7 @@
 
 from typing import Iterable, List, Optional
 
+from .domain import normalize_domain, validate_https_url_for_domain
 from .types import AgentPinError, ErrorCode
 
 
@@ -103,11 +104,29 @@ def validate_discovery_document(doc: dict, expected_entity: str) -> None:
     if doc.get("agentpin_version") != "0.1":
         raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Unsupported version: {doc.get('agentpin_version')}")
 
-    if doc.get("entity") != expected_entity:
+    # Compare entity and the expected domain in normalized form (AP-3).
+    expected = normalize_domain(expected_entity)
+    try:
+        entity = normalize_domain(doc.get("entity"))
+    except AgentPinError as e:
+        raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Invalid entity: {e}") from None
+    if entity != expected:
         raise AgentPinError(
             ErrorCode.DOMAIN_MISMATCH,
             f"Discovery entity '{doc.get('entity')}' does not match expected '{expected_entity}'",
         )
+    # Endpoints the verifier may fetch must be https on the entity's own
+    # host (AP-12; spec §17 for a2a_endpoint).
+    if doc.get("revocation_endpoint") is not None:
+        try:
+            validate_https_url_for_domain(doc.get("revocation_endpoint"), entity)
+        except AgentPinError as e:
+            raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Invalid revocation_endpoint: {e}") from None
+    if doc.get("a2a_endpoint") is not None:
+        try:
+            validate_https_url_for_domain(doc.get("a2a_endpoint"), entity)
+        except AgentPinError as e:
+            raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Invalid a2a_endpoint: {e}") from None
 
     if not doc.get("public_keys"):
         raise AgentPinError(ErrorCode.DISCOVERY_INVALID, "Discovery document must have at least one public key")
@@ -136,6 +155,7 @@ def fetch_discovery_document(domain: str) -> dict:
     """Fetch a discovery document from a domain over HTTPS."""
     import requests
 
+    domain = normalize_domain(domain)
     url = f"https://{domain}/.well-known/agent-identity.json"
     resp = requests.get(url, headers={"Accept": "application/json"}, allow_redirects=False, timeout=10)
 

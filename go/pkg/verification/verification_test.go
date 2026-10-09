@@ -278,3 +278,55 @@ func TestWildcardAudienceAccepted(t *testing.T) {
 		t.Fatalf("wildcard aud should pass: %+v", r)
 	}
 }
+
+// AP-3: a case variant of a pinned issuer must hit the existing pin, not
+// create a fresh first-use entry under a different key.
+func TestCaseVariantIssHitsExistingPin(t *testing.T) {
+	f := setup(t)
+	if r := VerifyCredentialOffline(f.jwt, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg); !r.Valid {
+		t.Fatalf("first verify: %+v", r)
+	}
+	kp2, _ := crypto.GenerateKeyPair()
+	priv2, _ := crypto.LoadPrivateKey(kp2.PrivateKeyPEM)
+	pub2, _ := crypto.LoadPublicKey(kp2.PublicKeyPEM)
+	evil := *f.discovery
+	evil.Entity = "EXAMPLE.COM"
+	evil.PublicKeys = []types.JWK{jwk.VerifyingKeyToJWK(pub2, "evil-key")}
+	evilJWT, _ := credential.IssueCredential(priv2, "evil-key", "EXAMPLE.COM",
+		"urn:agentpin:example.com:agent", "verifier.com", []types.Capability{"read:data"}, nil, nil, 3600)
+	r := VerifyCredentialOffline(evilJWT, &evil, nil, f.pinStore, "verifier.com", f.cfg)
+	if r.Valid || r.ErrorCode != types.ErrKeyPinMismatch {
+		t.Fatalf("case-variant iss must hit the pin: %+v", r)
+	}
+	if pd := f.pinStore.GetDomain("example.com"); pd == nil || len(pd.PinnedKeys) != 1 {
+		t.Fatalf("expected exactly one pin set under the normalized name")
+	}
+}
+
+// AP-3: issuer and entity are compared after normalization.
+func TestIssuerEntityComparedNormalized(t *testing.T) {
+	f := setup(t)
+	f.discovery.Entity = "Example.COM."
+	r := VerifyCredentialOffline(f.jwt, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg)
+	if !r.Valid || r.Issuer != "example.com" {
+		t.Fatalf("normalized entity comparison failed: %+v", r)
+	}
+}
+
+// AP-10 / AP-12: an iss that is not a bare hostname is rejected before it
+// can reach a file path, URL or pin store.
+func TestNonHostnameIssRejected(t *testing.T) {
+	f := setup(t)
+	for _, bad := range []string{"127.0.0.1:8443", "../../tmp/x", "/srv/uploads/x", "example.com/path", "user@example.com"} {
+		jwtStr, _ := credential.IssueCredential(f.priv, "test-2026-01", bad,
+			"urn:agentpin:example.com:agent", "", []types.Capability{"read:data"}, nil, nil, 3600)
+		r := VerifyCredentialOffline(jwtStr, f.discovery, nil, pinning.NewKeyPinStore(), "", f.cfg)
+		if r.Valid || r.ErrorCode != types.ErrDiscoveryInvalid {
+			t.Fatalf("iss %q: %+v", bad, r)
+		}
+		r = VerifyCredentialWithResolver(jwtStr, resolver.NewLocalFileResolver("/", ""), pinning.NewKeyPinStore(), "", f.cfg)
+		if r.ErrorCode != types.ErrDiscoveryInvalid {
+			t.Fatalf("iss %q via resolver: %+v", bad, r)
+		}
+	}
+}

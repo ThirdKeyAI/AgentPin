@@ -10,11 +10,19 @@ calls — supporting Symbiont's push-based external-agent registration flow.
 from datetime import datetime, timezone
 from threading import RLock
 from typing import Dict, Optional
-from urllib.parse import urlparse
 
 from .a2a import verify_agentpin_extension
 from .discovery import AllowedDomains
+from .domain import https_url_host, normalize_domain
 from .types import AgentPinError, AgentStatus, EntityType, ErrorCode
+
+
+def _store_key(domain: str) -> str:
+    """Store key: the normalized domain when valid, the raw string otherwise."""
+    try:
+        return normalize_domain(domain)
+    except AgentPinError:
+        return str(domain)
 
 
 def card_endpoint_host(card: dict) -> str:
@@ -24,13 +32,15 @@ def card_endpoint_host(card: dict) -> str:
         raise AgentPinError(
             ErrorCode.DISCOVERY_INVALID, "AgentCard has no agentpin extension"
         )
-    parsed = urlparse(ext["agentpin_endpoint"])
-    if not parsed.hostname:
+    # The endpoint must be https with a domain host and no userinfo, port or
+    # fragment; the returned host is normalized (AP-3, AP-12).
+    try:
+        return https_url_host(ext.get("agentpin_endpoint"))
+    except AgentPinError as e:
         raise AgentPinError(
             ErrorCode.DISCOVERY_INVALID,
-            "agentpin_endpoint URL has no host",
-        )
-    return parsed.hostname
+            f"Invalid agentpin_endpoint URL: {e}",
+        ) from None
 
 
 def _slug(input_: str) -> str:
@@ -129,7 +139,7 @@ class LocalAgentCardStore:
     def resolve_card(self, domain: str) -> Optional[dict]:
         """Return the raw AgentCard for a domain, or ``None``."""
         with self._lock:
-            return self._cards.get(domain)
+            return self._cards.get(_store_key(domain))
 
     def resolve_discovery(self, domain: str) -> dict:
         """Resolve the derived discovery document for a domain.
@@ -138,7 +148,7 @@ class LocalAgentCardStore:
         registered.
         """
         with self._lock:
-            doc = self._docs.get(domain)
+            doc = self._docs.get(_store_key(domain))
         if doc is None:
             raise AgentPinError(
                 ErrorCode.DISCOVERY_INVALID,
@@ -153,7 +163,8 @@ class LocalAgentCardStore:
 
     def remove(self, domain: str) -> bool:
         """Drop a registered AgentCard. Returns ``True`` when one was removed."""
+        key = _store_key(domain)
         with self._lock:
-            had = self._cards.pop(domain, None) is not None
-            self._docs.pop(domain, None)
+            had = self._cards.pop(key, None) is not None
+            self._docs.pop(key, None)
         return had

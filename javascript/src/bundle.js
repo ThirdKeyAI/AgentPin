@@ -8,7 +8,16 @@
 
 import { verifyCredentialOffline, defaultVerifierConfig } from './verification.js';
 import { decodeJwtUnverified } from './jwt.js';
+import { normalizeDomain } from './domain.js';
 import { ErrorCode } from './types.js';
+
+function bundleKey(entity) {
+    try {
+        return normalizeDomain(entity);
+    } catch {
+        return String(entity);
+    }
+}
 
 /**
  * Create a new empty trust bundle.
@@ -31,7 +40,8 @@ export function createTrustBundle(createdAt) {
  * @returns {object|null}
  */
 export function findBundleDiscovery(bundle, domain) {
-    return bundle.documents.find(d => d.entity === domain) || null;
+    const key = bundleKey(domain);
+    return bundle.documents.find(d => bundleKey(d.entity) === key) || null;
 }
 
 /**
@@ -41,7 +51,8 @@ export function findBundleDiscovery(bundle, domain) {
  * @returns {object|null}
  */
 export function findBundleRevocation(bundle, domain) {
-    return (bundle.revocations || []).find(r => r.entity === domain) || null;
+    const key = bundleKey(domain);
+    return (bundle.revocations || []).find(r => bundleKey(r.entity) === key) || null;
 }
 
 /**

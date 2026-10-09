@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/a2a"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
 )
 
@@ -52,7 +53,11 @@ func (r *A2aAgentCardResolver) LastCard(domain string) *types.A2aAgentCard {
 // ResolveDiscovery fetches and verifies the AgentCard at the standard
 // .well-known endpoint for domain, then returns the derived
 // DiscoveryDocument.
-func (r *A2aAgentCardResolver) ResolveDiscovery(domain string) (*types.DiscoveryDocument, error) {
+func (r *A2aAgentCardResolver) ResolveDiscovery(rawDomain string) (*types.DiscoveryDocument, error) {
+	domainName, err := domain.Normalize(rawDomain)
+	if err != nil {
+		return nil, types.NewVerificationError(types.ErrDiscoveryInvalid, err.Error())
+	}
 	client := r.Client
 	if client == nil {
 		client = &http.Client{
@@ -62,7 +67,7 @@ func (r *A2aAgentCardResolver) ResolveDiscovery(domain string) (*types.Discovery
 			},
 		}
 	}
-	url := fmt.Sprintf("https://%s%s", domain, A2aAgentCardPath)
+	url := fmt.Sprintf("https://%s%s", domainName, A2aAgentCardPath)
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, types.NewVerificationError(
@@ -104,10 +109,10 @@ func (r *A2aAgentCardResolver) ResolveDiscovery(domain string) (*types.Discovery
 	if err != nil {
 		return nil, err
 	}
-	if endpointHost != domain {
+	if endpointHost != domainName {
 		return nil, types.NewVerificationError(
 			types.ErrDomainMismatch,
-			fmt.Sprintf("AgentCard at %s declares agentpin endpoint host %s (mismatch)", domain, endpointHost),
+			fmt.Sprintf("AgentCard at %s declares agentpin endpoint host %s (mismatch)", domainName, endpointHost),
 		)
 	}
 	doc, err := DeriveDiscoveryFromCard(&card)
@@ -116,7 +121,7 @@ func (r *A2aAgentCardResolver) ResolveDiscovery(domain string) (*types.Discovery
 	}
 	r.mu.Lock()
 	r.lastCard = &card
-	r.lastFor = domain
+	r.lastFor = domainName
 	r.mu.Unlock()
 	return &doc, nil
 }

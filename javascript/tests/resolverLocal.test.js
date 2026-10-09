@@ -153,3 +153,25 @@ describe('credential verification through a card-derived discovery document', ()
         assert.equal(result.agent_id, 'urn:agentpin:example.com:tester');
     });
 });
+
+describe('endpoint and lookup hardening (AP-3, AP-12)', () => {
+    it('rejects non-https or IP agentpin endpoints at registration', () => {
+        const { privateKeyPem } = generateKeyPair();
+        for (const bad of [
+            'http://example.com/.well-known/agent-identity.json',
+            'https://127.0.0.1/.well-known/agent-identity.json',
+            'https://example.com:8443/.well-known/agent-identity.json',
+            'https://user@example.com/.well-known/agent-identity.json',
+        ]) {
+            const card = buildAndSignAgentCard('https://example.com/agent', declaration(), privateKeyPem, 'kid-1', bad);
+            assert.throws(() => new LocalAgentCardStore().register(card), bad);
+        }
+    });
+
+    it('normalizes lookups', () => {
+        const store = new LocalAgentCardStore();
+        store.register(signedCard());
+        assert.ok(store.resolveDiscovery('EXAMPLE.COM.'));
+        assert.ok(store.resolveCard('Example.com'));
+    });
+});

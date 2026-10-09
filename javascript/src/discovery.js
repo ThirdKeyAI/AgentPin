@@ -3,6 +3,7 @@
  */
 
 import { AgentPinError, ErrorCode } from './types.js';
+import { normalizeDomain, validateHttpsUrlForDomain } from './domain.js';
 
 /**
  * Build a new discovery document.
@@ -46,11 +47,35 @@ export function validateDiscoveryDocument(doc, expectedEntity) {
             `Unsupported version: ${doc.agentpin_version}`
         );
     }
-    if (doc.entity !== expectedEntity) {
+    // Compare entity and the expected domain in normalized form (AP-3).
+    const expected = normalizeDomain(expectedEntity);
+    let entity;
+    try {
+        entity = normalizeDomain(doc.entity);
+    } catch (e) {
+        throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, `Invalid entity: ${e.message}`);
+    }
+    if (entity !== expected) {
         throw new AgentPinError(
             ErrorCode.DOMAIN_MISMATCH,
             `Discovery entity '${doc.entity}' does not match expected '${expectedEntity}'`
         );
+    }
+    // Endpoints the verifier may fetch must be https on the entity's own
+    // host (AP-12; spec §17 for a2a_endpoint).
+    if (doc.revocation_endpoint !== undefined && doc.revocation_endpoint !== null) {
+        try {
+            validateHttpsUrlForDomain(doc.revocation_endpoint, entity);
+        } catch (e) {
+            throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, `Invalid revocation_endpoint: ${e.message}`);
+        }
+    }
+    if (doc.a2a_endpoint !== undefined && doc.a2a_endpoint !== null) {
+        try {
+            validateHttpsUrlForDomain(doc.a2a_endpoint, entity);
+        } catch (e) {
+            throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, `Invalid a2a_endpoint: ${e.message}`);
+        }
     }
     if (!doc.public_keys || doc.public_keys.length === 0) {
         throw new AgentPinError(
@@ -139,6 +164,7 @@ export const AllowedDomains = Object.freeze({
  * @returns {Promise<object>}
  */
 export async function fetchDiscoveryDocument(domain) {
+    domain = normalizeDomain(domain);
     const url = `https://${domain}/.well-known/agent-identity.json`;
 
     const response = await fetch(url, {

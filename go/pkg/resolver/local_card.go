@@ -2,14 +2,23 @@ package resolver
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/a2a"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
 )
+
+// storeKey is the normalized domain when valid, the raw string otherwise
+// (which can never match a registered card).
+func storeKey(d string) string {
+	if n, err := domain.Normalize(d); err == nil {
+		return n
+	}
+	return d
+}
 
 // LocalAgentCardStore is an in-memory store of pre-registered A2A AgentCards
 // keyed by their AgentPin discovery domain (v0.3.0).
@@ -67,24 +76,24 @@ func (s *LocalAgentCardStore) IsEmpty() bool {
 }
 
 // ResolveCard returns the original AgentCard for domain, or (zero, false).
-func (s *LocalAgentCardStore) ResolveCard(domain string) (types.A2aAgentCard, bool) {
+func (s *LocalAgentCardStore) ResolveCard(domainName string) (types.A2aAgentCard, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	c, ok := s.cards[domain]
+	c, ok := s.cards[storeKey(domainName)]
 	return c, ok
 }
 
 // ResolveDiscovery returns the derived DiscoveryDocument for domain. Returns
 // a typed VerificationError(ErrDiscoveryInvalid) when the domain isn't
 // registered.
-func (s *LocalAgentCardStore) ResolveDiscovery(domain string) (*types.DiscoveryDocument, error) {
+func (s *LocalAgentCardStore) ResolveDiscovery(domainName string) (*types.DiscoveryDocument, error) {
 	s.mu.RLock()
-	doc, ok := s.docs[domain]
+	doc, ok := s.docs[storeKey(domainName)]
 	s.mu.RUnlock()
 	if !ok {
 		return nil, types.NewVerificationError(
 			types.ErrDiscoveryInvalid,
-			fmt.Sprintf("Domain '%s' not in LocalAgentCardStore", domain),
+			fmt.Sprintf("Domain '%s' not in LocalAgentCardStore", domainName),
 		)
 	}
 	cp := doc
@@ -99,17 +108,19 @@ func (s *LocalAgentCardStore) ResolveRevocation(_ string, _ *types.DiscoveryDocu
 }
 
 // Remove drops a registered AgentCard. Returns true when one was removed.
-func (s *LocalAgentCardStore) Remove(domain string) bool {
+func (s *LocalAgentCardStore) Remove(domainName string) bool {
+	key := storeKey(domainName)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.cards[domain]
-	delete(s.cards, domain)
-	delete(s.docs, domain)
+	_, ok := s.cards[key]
+	delete(s.cards, key)
+	delete(s.docs, key)
 	return ok
 }
 
-// CardEndpointHost extracts the host portion of an AgentCard's
-// agentpin_endpoint URL.
+// CardEndpointHost extracts the normalized host of an AgentCard's
+// agentpin_endpoint URL. The endpoint must be https with a domain host and
+// no userinfo, port or fragment (AP-3, AP-12).
 func CardEndpointHost(card *types.A2aAgentCard) (string, error) {
 	if card == nil || card.Agentpin == nil {
 		return "", types.NewVerificationError(
@@ -117,20 +128,14 @@ func CardEndpointHost(card *types.A2aAgentCard) (string, error) {
 			"AgentCard has no agentpin extension",
 		)
 	}
-	u, err := url.Parse(card.Agentpin.AgentpinEndpoint)
+	host, err := domain.HTTPSURLHost(card.Agentpin.AgentpinEndpoint)
 	if err != nil {
 		return "", types.NewVerificationError(
 			types.ErrDiscoveryInvalid,
 			fmt.Sprintf("Invalid agentpin_endpoint URL: %s", err),
 		)
 	}
-	if u.Hostname() == "" {
-		return "", types.NewVerificationError(
-			types.ErrDiscoveryInvalid,
-			"agentpin_endpoint URL has no host",
-		)
-	}
-	return u.Hostname(), nil
+	return host, nil
 }
 
 // DeriveDiscoveryFromCard turns a signed A2A AgentCard into a minimal

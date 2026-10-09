@@ -86,3 +86,48 @@ func TestRejectEmptyKeys(t *testing.T) {
 		t.Fatal("empty keys should be rejected")
 	}
 }
+
+// AP-3: entity comparison is case-insensitive and ignores a trailing dot.
+func TestValidateEntityNormalized(t *testing.T) {
+	doc := BuildDiscoveryDocument("example.com", types.EntityMaker,
+		[]types.JWK{{Kid: "k", Kty: "EC", Crv: "P-256", X: "x", Y: "y", Use: "sig"}}, nil, 2, "2026-01-15T00:00:00Z")
+	doc.Entity = "EXAMPLE.com."
+	if err := ValidateDiscoveryDocument(&doc, "example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateDiscoveryDocument(&doc, "Example.COM"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// AP-12: revocation_endpoint / a2a_endpoint must be https on the entity's
+// own host.
+func TestValidateRejectsForeignOrPlaintextEndpoints(t *testing.T) {
+	bad := []string{
+		"http://169.254.169.254/latest/meta-data/",
+		"https://169.254.169.254/latest/meta-data/",
+		"https://other.com/.well-known/agent-identity-revocations.json",
+		"http://example.com/.well-known/agent-identity-revocations.json",
+		"https://example.com:8443/revocations.json",
+		"https://user@example.com/revocations.json",
+	}
+	for _, b := range bad {
+		doc := BuildDiscoveryDocument("example.com", types.EntityMaker,
+			[]types.JWK{{Kid: "k", Kty: "EC", Crv: "P-256", X: "x", Y: "y", Use: "sig"}}, nil, 2, "2026-01-15T00:00:00Z")
+		doc.RevocationEndpoint = b
+		if err := ValidateDiscoveryDocument(&doc, "example.com"); err == nil {
+			t.Errorf("revocation_endpoint %q accepted", b)
+		}
+		doc.RevocationEndpoint = ""
+		doc.A2aEndpoint = b
+		if err := ValidateDiscoveryDocument(&doc, "example.com"); err == nil {
+			t.Errorf("a2a_endpoint %q accepted", b)
+		}
+	}
+	doc := BuildDiscoveryDocument("example.com", types.EntityMaker,
+		[]types.JWK{{Kid: "k", Kty: "EC", Crv: "P-256", X: "x", Y: "y", Use: "sig"}}, nil, 2, "2026-01-15T00:00:00Z")
+	doc.A2aEndpoint = "https://EXAMPLE.com/.well-known/agent-card.json"
+	if err := ValidateDiscoveryDocument(&doc, "example.com"); err != nil {
+		t.Fatal(err)
+	}
+}

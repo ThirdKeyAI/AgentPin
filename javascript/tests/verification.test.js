@@ -222,3 +222,38 @@ describe('verifyCredentialOffline', () => {
         assert.ok(result.valid, 'Wildcard audience should be accepted');
     });
 });
+
+describe('issuer normalization (AP-3, AP-10, AP-12)', () => {
+    test('case variant of a pinned issuer hits the existing pin', () => {
+        const f = setup();
+        const r1 = verifyCredentialOffline(f.jwt, f.discovery, f.revocation, f.pinStore, 'verifier.com', f.config);
+        assert.ok(r1.valid, JSON.stringify(r1));
+        const kp2 = generateKeyPair();
+        const evil = { ...f.discovery, entity: 'EXAMPLE.COM', public_keys: [pemToJwk(kp2.publicKeyPem, 'evil-key')] };
+        const evilJwt = issueCredential(kp2.privateKeyPem, 'evil-key', 'EXAMPLE.COM',
+            'urn:agentpin:example.com:agent', 'verifier.com', [new Capability('read:data')], null, null, 3600);
+        const r2 = verifyCredentialOffline(evilJwt, evil, null, f.pinStore, 'verifier.com', f.config);
+        assert.strictEqual(r2.valid, false);
+        assert.strictEqual(r2.error_code, ErrorCode.KEY_PIN_MISMATCH);
+        assert.strictEqual(f.pinStore.getDomain('example.com').pinned_keys.length, 1);
+    });
+
+    test('issuer and entity are compared after normalization', () => {
+        const f = setup();
+        f.discovery.entity = 'Example.COM.';
+        const r = verifyCredentialOffline(f.jwt, f.discovery, f.revocation, f.pinStore, 'verifier.com', f.config);
+        assert.ok(r.valid, JSON.stringify(r));
+        assert.strictEqual(r.issuer, 'example.com');
+    });
+
+    test('non-hostname iss is rejected with DISCOVERY_INVALID', () => {
+        const f = setup();
+        for (const bad of ['127.0.0.1:8443', '../../tmp/x', '/srv/uploads/x', 'example.com/path', 'user@example.com']) {
+            const jwt = issueCredential(f.kp.privateKeyPem, 'test-2026-01', bad,
+                'urn:agentpin:example.com:agent', null, [new Capability('read:data')], null, null, 3600);
+            const r = verifyCredentialOffline(jwt, f.discovery, null, new KeyPinStore(), null, f.config);
+            assert.strictEqual(r.valid, false);
+            assert.strictEqual(r.error_code, ErrorCode.DISCOVERY_INVALID, bad);
+        }
+    });
+});

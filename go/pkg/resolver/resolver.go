@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/revocation"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
 )
@@ -38,9 +40,14 @@ func (r *WellKnownResolver) ResolveDiscovery(domain string) (*types.DiscoveryDoc
 }
 
 // ResolveRevocation implements DiscoveryResolver.
-func (r *WellKnownResolver) ResolveRevocation(_ string, doc *types.DiscoveryDocument) (*types.RevocationDocument, error) {
+func (r *WellKnownResolver) ResolveRevocation(domainName string, doc *types.DiscoveryDocument) (*types.RevocationDocument, error) {
 	if doc == nil || doc.RevocationEndpoint == "" {
 		return nil, nil
+	}
+	// The endpoint is attacker-publishable; never fetch anything but https
+	// on the issuer's own host (AP-12).
+	if err := domain.ValidateHTTPSURLForDomain(doc.RevocationEndpoint, domainName); err != nil {
+		return nil, err
 	}
 	return revocation.FetchRevocationDocument(r.Client, doc.RevocationEndpoint)
 }
@@ -59,12 +66,56 @@ func NewLocalFileResolver(discoveryDir, revocationDir string) *LocalFileResolver
 	return &LocalFileResolver{DiscoveryDir: discoveryDir, RevocationDir: revocationDir}
 }
 
-// ResolveDiscovery implements DiscoveryResolver.
-func (r *LocalFileResolver) ResolveDiscovery(domain string) (*types.DiscoveryDocument, error) {
-	path := filepath.Join(r.DiscoveryDir, domain+".json")
+// readContained resolves "{domain}{suffix}" inside dir, refusing anything
+// that is not a normalized hostname and anything whose resolved path escapes
+// dir (AP-10). Returns (nil, nil) when the file does not exist and a generic
+// error (no OS error text, no path) on any other failure.
+func readContained(dir, rawDomain, suffix string) ([]byte, error) {
+	domainName, err := domain.Normalize(rawDomain)
+	if err != nil {
+		return nil, err
+	}
+	base, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, errors.New("discovery directory is not accessible")
+	}
+	path := filepath.Join(base, domainName+suffix)
+	rel, err := filepath.Rel(base, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return nil, fmt.Errorf("document path for domain '%s' escapes the discovery directory", domainName)
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		resolvedBase, berr := filepath.EvalSymlinks(base)
+		if berr != nil {
+			return nil, errors.New("discovery directory is not accessible")
+		}
+		relResolved, rerr := filepath.Rel(resolvedBase, resolved)
+		if rerr != nil || relResolved == ".." || strings.HasPrefix(relResolved, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("document path for domain '%s' escapes the discovery directory", domainName)
+		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else {
+		return nil, fmt.Errorf("cannot read document for domain '%s'", domainName)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read %s: %w", path, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("cannot read document for domain '%s'", domainName)
+	}
+	return data, nil
+}
+
+// ResolveDiscovery implements DiscoveryResolver.
+func (r *LocalFileResolver) ResolveDiscovery(domainName string) (*types.DiscoveryDocument, error) {
+	data, err := readContained(r.DiscoveryDir, domainName, ".json")
+	if err != nil {
+		return nil, err
+	}
+	if data == nil {
+		return nil, fmt.Errorf("no discovery document for domain '%s'", domainName)
 	}
 	var doc types.DiscoveryDocument
 	if err := json.Unmarshal(data, &doc); err != nil {
@@ -74,18 +125,17 @@ func (r *LocalFileResolver) ResolveDiscovery(domain string) (*types.DiscoveryDoc
 }
 
 // ResolveRevocation implements DiscoveryResolver.
-func (r *LocalFileResolver) ResolveRevocation(domain string, _ *types.DiscoveryDocument) (*types.RevocationDocument, error) {
+func (r *LocalFileResolver) ResolveRevocation(domainName string, _ *types.DiscoveryDocument) (*types.RevocationDocument, error) {
 	dir := r.RevocationDir
 	if dir == "" {
 		dir = r.DiscoveryDir
 	}
-	path := filepath.Join(dir, domain+".revocations.json")
-	data, err := os.ReadFile(path)
+	data, err := readContained(dir, domainName, ".revocations.json")
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("cannot read %s: %w", path, err)
+		return nil, err
+	}
+	if data == nil {
+		return nil, nil
 	}
 	var doc types.RevocationDocument
 	if err := json.Unmarshal(data, &doc); err != nil {
@@ -108,13 +158,22 @@ func NewTrustBundleResolver(b *types.TrustBundle) *TrustBundleResolver {
 	}
 	for i := range b.Documents {
 		d := b.Documents[i]
-		r.discovery[d.Entity] = &d
+		r.discovery[bundleKey(d.Entity)] = &d
 	}
 	for i := range b.Revocations {
 		rev := b.Revocations[i]
-		r.revocations[rev.Entity] = &rev
+		r.revocations[bundleKey(rev.Entity)] = &rev
 	}
 	return r
+}
+
+// bundleKey is the normalized domain when the entity is a valid hostname,
+// the raw string otherwise (such entries can never match a normalized iss).
+func bundleKey(entity string) string {
+	if n, err := domain.Normalize(entity); err == nil {
+		return n
+	}
+	return entity
 }
 
 // TrustBundleResolverFromJSON builds a TrustBundleResolver from a JSON-encoded
@@ -128,18 +187,18 @@ func TrustBundleResolverFromJSON(data []byte) (*TrustBundleResolver, error) {
 }
 
 // ResolveDiscovery implements DiscoveryResolver.
-func (r *TrustBundleResolver) ResolveDiscovery(domain string) (*types.DiscoveryDocument, error) {
-	d, ok := r.discovery[domain]
+func (r *TrustBundleResolver) ResolveDiscovery(domainName string) (*types.DiscoveryDocument, error) {
+	d, ok := r.discovery[bundleKey(domainName)]
 	if !ok {
-		return nil, fmt.Errorf("domain '%s' not in trust bundle", domain)
+		return nil, fmt.Errorf("domain '%s' not in trust bundle", domainName)
 	}
 	cp := *d
 	return &cp, nil
 }
 
 // ResolveRevocation implements DiscoveryResolver.
-func (r *TrustBundleResolver) ResolveRevocation(domain string, _ *types.DiscoveryDocument) (*types.RevocationDocument, error) {
-	rev, ok := r.revocations[domain]
+func (r *TrustBundleResolver) ResolveRevocation(domainName string, _ *types.DiscoveryDocument) (*types.RevocationDocument, error) {
+	rev, ok := r.revocations[bundleKey(domainName)]
 	if !ok {
 		return nil, nil
 	}

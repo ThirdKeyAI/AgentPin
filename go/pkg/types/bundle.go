@@ -1,5 +1,14 @@
 package types
 
+import "github.com/ThirdKeyAi/agentpin/go/pkg/domain"
+
+func bundleKey(entity string) string {
+	if n, err := domain.Normalize(entity); err == nil {
+		return n
+	}
+	return entity
+}
+
 // TrustBundle is a pre-shared collection of discovery and revocation
 // documents for offline / air-gapped verification.
 type TrustBundle struct {
@@ -11,9 +20,10 @@ type TrustBundle struct {
 
 // FindDiscovery returns the first discovery document whose entity matches
 // domain, or nil.
-func (b *TrustBundle) FindDiscovery(domain string) *DiscoveryDocument {
+func (b *TrustBundle) FindDiscovery(domainName string) *DiscoveryDocument {
+	key := bundleKey(domainName)
 	for i := range b.Documents {
-		if b.Documents[i].Entity == domain {
+		if bundleKey(b.Documents[i].Entity) == key {
 			return &b.Documents[i]
 		}
 	}
@@ -22,9 +32,10 @@ func (b *TrustBundle) FindDiscovery(domain string) *DiscoveryDocument {
 
 // FindRevocation returns the first revocation document whose entity matches
 // domain, or nil.
-func (b *TrustBundle) FindRevocation(domain string) *RevocationDocument {
+func (b *TrustBundle) FindRevocation(domainName string) *RevocationDocument {
+	key := bundleKey(domainName)
 	for i := range b.Revocations {
-		if b.Revocations[i].Entity == domain {
+		if bundleKey(b.Revocations[i].Entity) == key {
 			return &b.Revocations[i]
 		}
 	}

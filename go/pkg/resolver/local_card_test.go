@@ -161,3 +161,38 @@ func TestLocalAgentCardStoreResolveRevocationReturnsNil(t *testing.T) {
 		t.Fatalf("expected nil rev, got rev=%v err=%v", rev, err)
 	}
 }
+
+// AP-12: the agentpin_endpoint must be https with a domain host.
+func TestRegisterRejectsNonHTTPSOrIPEndpoint(t *testing.T) {
+	kp, _ := crypto.GenerateKeyPair()
+	decl := &types.AgentDeclaration{AgentID: "urn:agentpin:example.com:tester", Name: "Tester",
+		Capabilities: []types.Capability{"read:*"}, Status: types.AgentActive}
+	for _, bad := range []string{
+		"http://example.com/.well-known/agent-identity.json",
+		"https://127.0.0.1/.well-known/agent-identity.json",
+		"https://example.com:8443/.well-known/agent-identity.json",
+		"https://user@example.com/.well-known/agent-identity.json",
+	} {
+		card, err := a2a.BuildAndSignAgentCard("https://example.com/agent", decl, kp.PrivateKeyPEM, "kid-1", bad, a2a.BuildOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := NewLocalAgentCardStore().Register(card); err == nil {
+			t.Errorf("endpoint %q accepted", bad)
+		}
+	}
+}
+
+// AP-3: store lookups are case-insensitive.
+func TestLocalAgentCardStoreNormalizesLookup(t *testing.T) {
+	s := NewLocalAgentCardStore()
+	if err := s.Register(signedCard(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveDiscovery("EXAMPLE.COM."); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.ResolveCard("Example.com"); !ok {
+		t.Fatal("ResolveCard must normalize")
+	}
+}

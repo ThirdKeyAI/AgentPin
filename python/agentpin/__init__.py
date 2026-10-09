@@ -56,6 +56,12 @@ from .a2a import (
     sign_agent_card,
     verify_agentpin_extension,
 )
+from .domain import (
+    default_revocation_endpoint,
+    https_url_host,
+    normalize_domain,
+    validate_https_url_for_domain,
+)
 from .dns import (
     fetch_dns_txt,
     parse_txt_record,
@@ -221,6 +227,11 @@ __all__ = [
     "extension_key_thumbprint",
     "sign_agent_card",
     "verify_agentpin_extension",
+    # Domain normalization
+    "normalize_domain",
+    "https_url_host",
+    "validate_https_url_for_domain",
+    "default_revocation_endpoint",
     # DNS TXT (v0.3.0)
     "fetch_dns_txt",
     "parse_txt_record",

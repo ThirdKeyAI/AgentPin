@@ -75,6 +75,7 @@ impl Default for A2aAgentCardResolver {
 #[async_trait::async_trait]
 impl AsyncDiscoveryResolver for A2aAgentCardResolver {
     async fn resolve_discovery(&self, domain: &str) -> Result<DiscoveryDocument, Error> {
+        let domain = &crate::domain::normalize_domain(domain)?;
         let url = format!("https://{}{}", domain, AGENT_CARD_PATH);
         let client = reqwest::Client::builder()
             .timeout(self.timeout)
@@ -103,7 +104,7 @@ impl AsyncDiscoveryResolver for A2aAgentCardResolver {
         // domain we just fetched from — defends against a card that points at
         // some other domain's AgentPin discovery.
         let endpoint_host = card_endpoint_host(&card)?;
-        if endpoint_host != domain {
+        if &endpoint_host != domain {
             return Err(Error::Discovery(format!(
                 "AgentCard at {} declares agentpin endpoint host {} (mismatch)",
                 domain, endpoint_host

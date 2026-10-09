@@ -10,7 +10,17 @@
 
 import { verifyAgentpinExtension } from './a2a.js';
 import { AllowedDomains } from './discovery.js';
+import { httpsUrlHost, normalizeDomain } from './domain.js';
 import { AgentStatus, EntityType, AgentPinError, ErrorCode } from './types.js';
+
+/** Store key: the normalized domain when valid, the raw string otherwise. */
+function storeKey(domain) {
+    try {
+        return normalizeDomain(domain);
+    } catch {
+        return String(domain);
+    }
+}
 
 /**
  * Derive the host portion of an AgentCard's agentpin endpoint URL.
@@ -28,22 +38,16 @@ export function cardEndpointHost(card) {
             'AgentCard has no agentpin extension'
         );
     }
-    let url;
+    // The endpoint must be https with a domain host and no userinfo, port
+    // or fragment; the returned host is normalized (AP-3, AP-12).
     try {
-        url = new URL(ext.agentpin_endpoint);
+        return httpsUrlHost(ext.agentpin_endpoint);
     } catch (err) {
         throw new AgentPinError(
             ErrorCode.DISCOVERY_INVALID,
             `Invalid agentpin_endpoint URL: ${err.message || err}`
         );
     }
-    if (!url.hostname) {
-        throw new AgentPinError(
-            ErrorCode.DISCOVERY_INVALID,
-            'agentpin_endpoint URL has no host'
-        );
-    }
-    return url.hostname;
 }
 
 function slug(input) {
@@ -157,7 +161,7 @@ export class LocalAgentCardStore {
      * @returns {object|null}
      */
     resolveCard(domain) {
-        return this._cards.get(domain) || null;
+        return this._cards.get(storeKey(domain)) || null;
     }
 
     /**
@@ -170,7 +174,7 @@ export class LocalAgentCardStore {
      * @returns {object}
      */
     resolveDiscovery(domain) {
-        const doc = this._docs.get(domain);
+        const doc = this._docs.get(storeKey(domain));
         if (!doc) {
             throw new AgentPinError(
                 ErrorCode.DISCOVERY_INVALID,
@@ -193,8 +197,9 @@ export class LocalAgentCardStore {
      * @param {string} domain
      */
     remove(domain) {
-        const had = this._cards.delete(domain);
-        this._docs.delete(domain);
+        const key = storeKey(domain);
+        const had = this._cards.delete(key);
+        this._docs.delete(key);
         return had;
     }
 }

@@ -11,6 +11,7 @@ from typing import Optional
 from .constraint import constraints_subset_of
 from .credential import validate_credential_against_discovery
 from .discovery import fetch_discovery_document, find_agent_by_id, find_key_by_kid, validate_discovery_document
+from .domain import normalize_domain, validate_https_url_for_domain
 from .jwk import jwk_to_pem
 from .jwt import decode_jwt_unverified, verify_jwt
 from .pinning import KeyPinStore, PinningResult, check_pinning
@@ -60,6 +61,13 @@ def verify_credential_offline(
     except Exception as e:
         return _failure(ErrorCode.ALGORITHM_REJECTED, f"JWT parse failed: {e}")
 
+    # Normalize the issuer domain before it is used as a lookup key anywhere
+    # (pin store, entity comparison, resolver paths/URLs) — AP-3.
+    try:
+        issuer = normalize_domain(payload.get("iss"))
+    except AgentPinError as e:
+        return _failure(ErrorCode.DISCOVERY_INVALID, f"Invalid issuer domain: {e}")
+
     # Step 2: Check temporal validity
     now = math.floor(time.time())
     skew = config.clock_skew_secs
@@ -81,7 +89,7 @@ def verify_credential_offline(
 
     # Step 3: Validate discovery document
     try:
-        validate_discovery_document(discovery, payload["iss"])
+        validate_discovery_document(discovery, issuer)
     except AgentPinError as e:
         return _failure(ErrorCode.DISCOVERY_INVALID, f"Discovery validation failed: {e}")
 
@@ -143,7 +151,7 @@ def verify_credential_offline(
     # Step 10: Delegation chain (offline: note only)
     result = _success(
         payload["sub"],
-        payload["iss"],
+        issuer,
         payload.get("capabilities", []),
         payload.get("constraints"),
         {"status": "unknown", "first_seen": None},
@@ -160,17 +168,17 @@ def verify_credential_offline(
 
     # Step 11: TOFU key pinning
     try:
-        pin_result = check_pinning(pin_store, payload["iss"], jwk)
+        pin_result = check_pinning(pin_store, issuer, jwk)
         if pin_result == PinningResult.FIRST_USE:
             result.key_pinning = {"status": "first_use", "first_seen": datetime.now(timezone.utc).isoformat()}
         elif pin_result == PinningResult.MATCHED:
-            domain_data = pin_store.get_domain(payload["iss"])
+            domain_data = pin_store.get_domain(issuer)
             first_seen = None
             if domain_data and domain_data.get("pinned_keys"):
                 first_seen = domain_data["pinned_keys"][0].get("first_seen")
             result.key_pinning = {"status": "pinned", "first_seen": first_seen}
     except AgentPinError:
-        return _failure(ErrorCode.KEY_PIN_MISMATCH, f"Key for '{payload['iss']}' has changed since last pinned")
+        return _failure(ErrorCode.KEY_PIN_MISMATCH, f"Key for '{issuer}' has changed since last pinned")
 
     # Step 12: Check audience
     if audience and payload.get("aud"):
@@ -200,16 +208,25 @@ def verify_credential(
     except Exception as e:
         return _failure(ErrorCode.ALGORITHM_REJECTED, f"JWT parse failed: {e}")
 
+    try:
+        issuer = normalize_domain(payload.get("iss"))
+    except AgentPinError as e:
+        return _failure(ErrorCode.DISCOVERY_INVALID, f"Invalid issuer domain: {e}")
+
     # Fetch discovery document
     try:
-        discovery = fetch_discovery_document(payload["iss"])
+        discovery = fetch_discovery_document(issuer)
     except Exception as e:
         return _failure(ErrorCode.DISCOVERY_FETCH_FAILED, f"Failed to fetch discovery document: {e}")
 
-    # Fetch revocation document
+    # Fetch revocation document (https on the issuer's own host only — AP-12)
     revocation = None
     rev_endpoint = discovery.get("revocation_endpoint")
     if rev_endpoint:
+        try:
+            validate_https_url_for_domain(rev_endpoint, issuer)
+        except AgentPinError as e:
+            return _failure(ErrorCode.DISCOVERY_INVALID, f"Invalid revocation_endpoint: {e}")
         try:
             revocation = fetch_revocation_document(rev_endpoint)
         except Exception:

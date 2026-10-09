@@ -10,6 +10,7 @@ import { validateDiscoveryDocument, findKeyByKid, findAgentById, fetchDiscoveryD
 import { checkRevocation, fetchRevocationDocument } from './revocation.js';
 import { checkPinning, PinningResult } from './pinning.js';
 import { constraintsSubsetOf } from './constraint.js';
+import { normalizeDomain, validateHttpsUrlForDomain } from './domain.js';
 import { ErrorCode, AgentPinError } from './types.js';
 
 /**
@@ -83,6 +84,15 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
         return failureResult(ErrorCode.ALGORITHM_REJECTED, `JWT parse failed: ${e.message}`);
     }
 
+    // Normalize the issuer domain before it is used as a lookup key anywhere
+    // (pin store, entity comparison, resolver paths/URLs) — AP-3.
+    let issuer;
+    try {
+        issuer = normalizeDomain(payload.iss);
+    } catch (e) {
+        return failureResult(ErrorCode.DISCOVERY_INVALID, `Invalid issuer domain: ${e.message}`);
+    }
+
     // Step 2: Check temporal validity
     const now = Math.floor(Date.now() / 1000);
     const skew = config.clockSkewSecs;
@@ -108,7 +118,7 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
 
     // Step 3: Validate discovery document (entity matches iss)
     try {
-        validateDiscoveryDocument(discovery, payload.iss);
+        validateDiscoveryDocument(discovery, issuer);
     } catch (e) {
         return failureResult(ErrorCode.DISCOVERY_INVALID, `Discovery validation failed: ${e.message}`);
     }
@@ -179,7 +189,7 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
     // Step 10: Validate delegation chain (offline mode: note only)
     let result = successResult(
         payload.sub,
-        payload.iss,
+        issuer,
         payload.capabilities,
         payload.constraints,
         { status: 'unknown', first_seen: null }
@@ -198,14 +208,14 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
 
     // Step 11: TOFU key pinning
     try {
-        const pinResult = checkPinning(pinStore, payload.iss, jwk);
+        const pinResult = checkPinning(pinStore, issuer, jwk);
         if (pinResult === PinningResult.FIRST_USE) {
             result.key_pinning = {
                 status: 'first_use',
                 first_seen: new Date().toISOString(),
             };
         } else if (pinResult === PinningResult.MATCHED) {
-            const domainData = pinStore.getDomain(payload.iss);
+            const domainData = pinStore.getDomain(issuer);
             const firstSeen = domainData?.pinned_keys?.[0]?.first_seen || null;
             result.key_pinning = {
                 status: 'pinned',
@@ -215,7 +225,7 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
     } catch {
         return failureResult(
             ErrorCode.KEY_PIN_MISMATCH,
-            `Key for '${payload.iss}' has changed since last pinned`
+            `Key for '${issuer}' has changed since last pinned`
         );
     }
 
@@ -251,17 +261,29 @@ export async function verifyCredential(credentialJwt, pinStore, audience, config
         return failureResult(ErrorCode.ALGORITHM_REJECTED, `JWT parse failed: ${e.message}`);
     }
 
+    let issuer;
+    try {
+        issuer = normalizeDomain(payload.iss);
+    } catch (e) {
+        return failureResult(ErrorCode.DISCOVERY_INVALID, `Invalid issuer domain: ${e.message}`);
+    }
+
     // Fetch discovery document
     let discovery;
     try {
-        discovery = await fetchDiscoveryDocument(payload.iss);
+        discovery = await fetchDiscoveryDocument(issuer);
     } catch (e) {
         return failureResult(ErrorCode.DISCOVERY_FETCH_FAILED, `Failed to fetch discovery document: ${e.message}`);
     }
 
-    // Fetch revocation document
+    // Fetch revocation document (https on the issuer's own host only — AP-12)
     let revocation = null;
     if (discovery.revocation_endpoint) {
+        try {
+            validateHttpsUrlForDomain(discovery.revocation_endpoint, issuer);
+        } catch (e) {
+            return failureResult(ErrorCode.DISCOVERY_INVALID, `Invalid revocation_endpoint: ${e.message}`);
+        }
         try {
             revocation = await fetchRevocationDocument(discovery.revocation_endpoint);
         } catch {

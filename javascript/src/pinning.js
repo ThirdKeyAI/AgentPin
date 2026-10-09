@@ -3,7 +3,17 @@
  */
 
 import { jwkThumbprint } from './jwk.js';
+import { normalizeDomain } from './domain.js';
 import { AgentPinError, ErrorCode, TrustLevel } from './types.js';
+
+/** Pin-store key: the normalized hostname when valid, the raw string otherwise (AP-3). */
+function pinKey(domain) {
+    try {
+        return normalizeDomain(domain);
+    } catch {
+        return String(domain);
+    }
+}
 
 /** Pinning result enum values. */
 export const PinningResult = Object.freeze({
@@ -29,6 +39,7 @@ export class KeyPinStore {
      * @returns {string} One of PinningResult values
      */
     checkAndPin(domain, jwk) {
+        domain = pinKey(domain);
         const keyHash = jwkThumbprint(jwk);
         const now = new Date().toISOString();
 
@@ -62,6 +73,7 @@ export class KeyPinStore {
      * @param {object} jwk
      */
     addKey(domain, jwk) {
+        domain = pinKey(domain);
         const keyHash = jwkThumbprint(jwk);
         const now = new Date().toISOString();
 
@@ -88,7 +100,7 @@ export class KeyPinStore {
      * @returns {object|null}
      */
     getDomain(domain) {
-        return this.domains.get(domain) || null;
+        return this.domains.get(pinKey(domain)) || null;
     }
 
     /**
@@ -108,7 +120,18 @@ export class KeyPinStore {
         const store = new KeyPinStore();
         const domains = JSON.parse(json);
         for (const d of domains) {
-            store.domains.set(d.domain, d);
+            const key = pinKey(d.domain);
+            const existing = store.domains.get(key);
+            if (existing) {
+                // Merge entries that differ only by case into one pin set.
+                for (const pk of d.pinned_keys || []) {
+                    if (!existing.pinned_keys.some((e) => e.public_key_hash === pk.public_key_hash)) {
+                        existing.pinned_keys.push(pk);
+                    }
+                }
+            } else {
+                store.domains.set(key, { ...d, domain: key, pinned_keys: [...(d.pinned_keys || [])] });
+            }
         }
         return store;
     }

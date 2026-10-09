@@ -13,6 +13,7 @@
 
 import { verifyAgentpinExtension } from './a2a.js';
 import { cardEndpointHost, deriveDiscoveryFromCard } from './resolverLocal.js';
+import { normalizeDomain } from './domain.js';
 import { AgentPinError, ErrorCode } from './types.js';
 
 const AGENT_CARD_PATH = '/.well-known/agent-card.json';
@@ -53,6 +54,7 @@ export class A2aAgentCardResolver {
                 'No fetch implementation available — pass `fetchImpl` or run on Node >= 18'
             );
         }
+        domain = normalizeDomain(domain);
         const url = `https://${domain}${AGENT_CARD_PATH}`;
         const controller = typeof AbortController === 'function' ? new AbortController() : null;
         const timer = controller

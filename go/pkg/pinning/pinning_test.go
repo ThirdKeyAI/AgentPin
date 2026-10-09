@@ -75,3 +75,31 @@ func TestDifferentDomainsIndependent(t *testing.T) {
 		t.Fatalf("cross-domain: got %v", r)
 	}
 }
+
+// AP-3: pins are keyed on the normalized domain.
+func TestPinKeyNormalized(t *testing.T) {
+	s := NewKeyPinStore()
+	j1 := &types.JWK{Kid: "k1", Kty: "EC", Crv: "P-256", X: "x1", Y: "y"}
+	j2 := &types.JWK{Kid: "k2", Kty: "EC", Crv: "P-256", X: "x2", Y: "y"}
+	if s.CheckAndPin("example.com", j1) != ResultFirstUse {
+		t.Fatal("first use")
+	}
+	if s.CheckAndPin("EXAMPLE.COM", j1) != ResultMatched {
+		t.Fatal("case variant must match the existing pin")
+	}
+	if s.CheckAndPin("Example.Com.", j2) != ResultChanged {
+		t.Fatal("other key under a case variant must be detected")
+	}
+	if s.GetDomain("EXAMPLE.COM") == nil {
+		t.Fatal("GetDomain must normalize")
+	}
+	json := `[{"domain":"EXAMPLE.COM","pinned_keys":[{"kid":"k","public_key_hash":"h1","first_seen":"t","last_seen":"t","trust_level":"tofu"}]},
+	          {"domain":"example.com","pinned_keys":[{"kid":"k2","public_key_hash":"h2","first_seen":"t","last_seen":"t","trust_level":"tofu"}]}]`
+	loaded := NewKeyPinStore()
+	if err := loaded.LoadFromJSON([]byte(json)); err != nil {
+		t.Fatal(err)
+	}
+	if pd := loaded.GetDomain("example.com"); pd == nil || len(pd.PinnedKeys) != 2 {
+		t.Fatalf("mixed-case entries must merge on load: %+v", pd)
+	}
+}

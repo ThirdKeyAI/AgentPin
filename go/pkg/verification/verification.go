@@ -25,6 +25,7 @@ import (
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/credential"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/jwk"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/jwt"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/pinning"
@@ -101,6 +102,13 @@ func VerifyCredentialOffline(
 		return failure(types.ErrAlgorithmRejected, fmt.Sprintf("JWT parse failed: %v", err))
 	}
 
+	// Normalize the issuer domain before it is used as a lookup key anywhere
+	// (pin store, entity comparison, resolver paths/URLs) — AP-3.
+	issuer, err := domain.Normalize(payload.Iss)
+	if err != nil {
+		return failure(types.ErrDiscoveryInvalid, fmt.Sprintf("Invalid issuer domain: %v", err))
+	}
+
 	// Step 9: Temporal validity (also covered by spec step "expiration").
 	now := time.Now().Unix()
 	skew := config.ClockSkewSecs
@@ -125,7 +133,7 @@ func VerifyCredentialOffline(
 	}
 
 	// Steps 5-6: Validate discovery document (entity matches iss).
-	if err := discovery.ValidateDiscoveryDocument(disc, payload.Iss); err != nil {
+	if err := discovery.ValidateDiscoveryDocument(disc, issuer); err != nil {
 		return failure(types.ErrDiscoveryInvalid, fmt.Sprintf("Discovery validation failed: %v", err))
 	}
 
@@ -184,7 +192,7 @@ func VerifyCredentialOffline(
 	result := Result{
 		Valid:        true,
 		AgentID:      payload.Sub,
-		Issuer:       payload.Iss,
+		Issuer:       issuer,
 		Capabilities: payload.Capabilities,
 		Constraints:  payload.Constraints,
 		Warnings:     []string{},
@@ -207,9 +215,9 @@ func VerifyCredentialOffline(
 	}
 
 	// Step 8: TOFU key pinning.
-	pr, perr := pinning.CheckPinning(pinStore, payload.Iss, kk)
+	pr, perr := pinning.CheckPinning(pinStore, issuer, kk)
 	if perr != nil {
-		return failure(types.ErrKeyPinMismatch, fmt.Sprintf("Key for '%s' has changed since last pinned", payload.Iss))
+		return failure(types.ErrKeyPinMismatch, fmt.Sprintf("Key for '%s' has changed since last pinned", issuer))
 	}
 	switch pr {
 	case pinning.ResultFirstUse:
@@ -219,7 +227,7 @@ func VerifyCredentialOffline(
 		}
 	case pinning.ResultMatched:
 		var first string
-		if pd := pinStore.GetDomain(payload.Iss); pd != nil && len(pd.PinnedKeys) > 0 {
+		if pd := pinStore.GetDomain(issuer); pd != nil && len(pd.PinnedKeys) > 0 {
 			first = pd.PinnedKeys[0].FirstSeen
 		}
 		result.KeyPinning = &KeyPinningStatus{Status: "pinned", FirstSeen: first}
@@ -253,12 +261,17 @@ func VerifyCredentialWithResolver(
 		return failure(types.ErrAlgorithmRejected, fmt.Sprintf("JWT parse failed: %v", err))
 	}
 
-	disc, err := r.ResolveDiscovery(payload.Iss)
+	issuer, err := domain.Normalize(payload.Iss)
+	if err != nil {
+		return failure(types.ErrDiscoveryInvalid, fmt.Sprintf("Invalid issuer domain: %v", err))
+	}
+
+	disc, err := r.ResolveDiscovery(issuer)
 	if err != nil {
 		return failure(types.ErrDiscoveryFetchFailed, fmt.Sprintf("Failed to resolve discovery document: %v", err))
 	}
 
-	rev, err := r.ResolveRevocation(payload.Iss, disc)
+	rev, err := r.ResolveRevocation(issuer, disc)
 	if err != nil {
 		return failure(types.ErrDiscoveryFetchFailed, "Revocation document unreachable (fail-closed)")
 	}

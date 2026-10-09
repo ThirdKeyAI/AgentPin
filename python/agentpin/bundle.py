@@ -9,10 +9,18 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from .domain import normalize_domain
 from .jwt import decode_jwt_unverified
 from .pinning import KeyPinStore
-from .types import ErrorCode, VerificationResult, VerifierConfig
+from .types import AgentPinError, ErrorCode, VerificationResult, VerifierConfig
 from .verification import verify_credential_offline
+
+
+def _bundle_key(entity: object) -> str:
+    try:
+        return normalize_domain(entity)
+    except AgentPinError:
+        return str(entity)
 
 
 def create_trust_bundle(created_at: Optional[str] = None) -> Dict[str, Any]:
@@ -27,16 +35,18 @@ def create_trust_bundle(created_at: Optional[str] = None) -> Dict[str, Any]:
 
 def find_bundle_discovery(bundle: Dict[str, Any], domain: str) -> Optional[Dict[str, Any]]:
     """Find a discovery document in a bundle by domain."""
+    key = _bundle_key(domain)
     for doc in bundle.get("documents", []):
-        if doc.get("entity") == domain:
+        if _bundle_key(doc.get("entity")) == key:
             return doc
     return None
 
 
 def find_bundle_revocation(bundle: Dict[str, Any], domain: str) -> Optional[Dict[str, Any]]:
     """Find a revocation document in a bundle by domain."""
+    key = _bundle_key(domain)
     for doc in bundle.get("revocations", []):
-        if doc.get("entity") == domain:
+        if _bundle_key(doc.get("entity")) == key:
             return doc
     return None
 

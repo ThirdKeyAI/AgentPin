@@ -9,6 +9,7 @@ import (
 	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/revocation"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
+	"strings"
 )
 
 func makeDiscovery(domain string) types.DiscoveryDocument {
@@ -140,5 +141,54 @@ func TestChainResolverFallthrough(t *testing.T) {
 	chain := NewChainResolver([]DiscoveryResolver{empty, with})
 	if _, err := chain.ResolveDiscovery("example.com"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// AP-10: an untrusted domain string can never escape the discovery
+// directory, and errors never echo OS error text or paths.
+func TestLocalFileResolverRejectsTraversal(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "x.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewLocalFileResolver(dir, "")
+	rel := "../" + filepath.Base(outside) + "/x"
+	for _, bad := range []string{filepath.Join(outside, "x"), rel, "..", "../x", "a/../../x", `x\..\y`} {
+		_, err := r.ResolveDiscovery(bad)
+		if err == nil {
+			t.Fatalf("%q resolved", bad)
+		}
+		if strings.Contains(err.Error(), "no such file") || strings.Contains(err.Error(), dir) {
+			t.Fatalf("error leaks OS detail or path: %v", err)
+		}
+	}
+	_, err := r.ResolveDiscovery("missing.com")
+	if err == nil || strings.Contains(err.Error(), dir) || strings.Contains(err.Error(), "no such file") {
+		t.Fatalf("missing-document error should be generic: %v", err)
+	}
+}
+
+// AP-3: file and bundle lookups use the normalized domain.
+func TestResolversNormalizeLookups(t *testing.T) {
+	dir := t.TempDir()
+	doc := discovery.BuildDiscoveryDocument("local.example.com", types.EntityMaker,
+		[]types.JWK{{Kid: "k", Kty: "EC", Crv: "P-256", X: "x", Y: "y", Use: "sig"}}, nil, 2, "2026-01-15T00:00:00Z")
+	data, _ := json.Marshal(doc)
+	if err := os.WriteFile(filepath.Join(dir, "local.example.com.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewLocalFileResolver(dir, "").ResolveDiscovery("LOCAL.Example.COM."); err != nil {
+		t.Fatalf("file lookup not normalized: %v", err)
+	}
+	bdoc := discovery.BuildDiscoveryDocument("Example.COM", types.EntityMaker,
+		[]types.JWK{{Kid: "k", Kty: "EC", Crv: "P-256", X: "x", Y: "y", Use: "sig"}}, nil, 2, "2026-01-15T00:00:00Z")
+	b := types.TrustBundle{AgentpinBundleVersion: "0.1", Documents: []types.DiscoveryDocument{bdoc}}
+	tb := NewTrustBundleResolver(&b)
+	if _, err := tb.ResolveDiscovery("example.com"); err != nil {
+		t.Fatalf("bundle lookup not normalized: %v", err)
+	}
+	if _, err := tb.ResolveDiscovery("EXAMPLE.COM."); err != nil {
+		t.Fatalf("bundle lookup not normalized: %v", err)
 	}
 }

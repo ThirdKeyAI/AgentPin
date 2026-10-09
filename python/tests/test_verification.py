@@ -1,5 +1,7 @@
 """Tests for credential verification (12-step flow)."""
 
+import pytest
+
 from agentpin.capability import Capability
 from agentpin.credential import issue_credential
 from agentpin.crypto import generate_key_pair
@@ -214,3 +216,46 @@ class TestVerifyCredentialOffline:
             jwt_str, discovery, None, KeyPinStore(), "any-verifier.com", VerifierConfig()
         )
         assert result.valid, "Wildcard audience should be accepted"
+
+
+class TestIssuerNormalization:
+    """AP-3 / AP-10 / AP-12 regression tests."""
+
+    def test_case_variant_iss_hits_existing_pin(self):
+        f = setup()
+        r1 = verify_credential_offline(
+            f["jwt"], f["discovery"], f["revocation"], f["pin_store"], "verifier.com", f["config"]
+        )
+        assert r1.valid, r1
+        priv2, pub2 = generate_key_pair()
+        evil = dict(f["discovery"], entity="EXAMPLE.COM", public_keys=[pem_to_jwk(pub2, "evil-key")])
+        evil_jwt = issue_credential(
+            priv2, "evil-key", "EXAMPLE.COM", "urn:agentpin:example.com:agent",
+            "verifier.com", [Capability("read:data")], None, None, 3600,
+        )
+        r2 = verify_credential_offline(evil_jwt, evil, None, f["pin_store"], "verifier.com", f["config"])
+        assert not r2.valid
+        assert r2.error_code == ErrorCode.KEY_PIN_MISMATCH
+        assert len(f["pin_store"].get_domain("example.com")["pinned_keys"]) == 1
+
+    def test_issuer_entity_compared_normalized(self):
+        f = setup()
+        f["discovery"]["entity"] = "Example.COM."
+        r = verify_credential_offline(
+            f["jwt"], f["discovery"], f["revocation"], f["pin_store"], "verifier.com", f["config"]
+        )
+        assert r.valid, r
+        assert r.issuer == "example.com"
+
+    @pytest.mark.parametrize(
+        "bad_iss", ["127.0.0.1:8443", "../../tmp/x", "/srv/uploads/x", "example.com/path", "user@example.com"]
+    )
+    def test_non_hostname_iss_rejected(self, bad_iss):
+        f = setup()
+        jwt_str = issue_credential(
+            f["priv"], "test-2026-01", bad_iss, "urn:agentpin:example.com:agent",
+            None, [Capability("read:data")], None, None, 3600,
+        )
+        r = verify_credential_offline(jwt_str, f["discovery"], None, KeyPinStore(), None, f["config"])
+        assert not r.valid
+        assert r.error_code == ErrorCode.DISCOVERY_INVALID

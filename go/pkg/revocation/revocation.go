@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ThirdKeyAi/agentpin/go/internal/version"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
 )
 
@@ -90,6 +91,11 @@ func CheckRevocation(doc *types.RevocationDocument, jti, agentID, kid string) er
 
 // FetchRevocationDocument fetches a revocation document from url.
 func FetchRevocationDocument(client *http.Client, url string) (*types.RevocationDocument, error) {
+	// Only https URLs with a domain host are ever fetched (AP-12). Same-host
+	// binding to the issuer is enforced by the caller / discovery validation.
+	if _, err := domain.HTTPSURLHost(url); err != nil {
+		return nil, err
+	}
 	if client == nil {
 		client = &http.Client{
 			Timeout: 10 * time.Second,

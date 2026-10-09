@@ -155,3 +155,28 @@ def test_credential_verifies_through_card_derived_discovery():
     )
     assert result.valid, result
     assert result.agent_id == "urn:agentpin:example.com:tester"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "http://example.com/.well-known/agent-identity.json",
+        "https://127.0.0.1/.well-known/agent-identity.json",
+        "https://example.com:8443/.well-known/agent-identity.json",
+        "https://user@example.com/.well-known/agent-identity.json",
+    ],
+)
+def test_register_rejects_non_https_or_ip_endpoint(bad):
+    """AP-12: the agentpin_endpoint must be https with a domain host."""
+    private_pem, _ = generate_key_pair()
+    card = build_and_sign_agent_card("https://example.com/agent", _declaration(), private_pem, "kid-1", bad)
+    with pytest.raises(Exception):
+        LocalAgentCardStore().register(card)
+
+
+def test_store_normalizes_lookups():
+    """AP-3: store lookups are case-insensitive."""
+    store = LocalAgentCardStore()
+    store.register(_signed_card())
+    assert store.resolve_discovery("EXAMPLE.COM.")
+    assert store.resolve_card("Example.com")

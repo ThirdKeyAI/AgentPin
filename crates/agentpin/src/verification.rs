@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::credential::validate_credential_against_discovery;
 use crate::discovery::{find_agent_by_id, find_key_by_kid, validate_discovery_document};
+use crate::domain::normalize_domain;
 use crate::error::{Error, ErrorCode};
 use crate::jwk::jwk_to_verifying_key;
 use crate::jwt;
@@ -136,6 +137,18 @@ pub fn verify_credential_offline(
         }
     };
 
+    // Normalize the issuer domain before it is used as a lookup key anywhere
+    // (pin store, entity comparison, resolver paths/URLs) — AP-3.
+    let issuer = match normalize_domain(&payload.iss) {
+        Ok(d) => d,
+        Err(e) => {
+            return VerificationResult::failure(
+                ErrorCode::DiscoveryInvalid,
+                &format!("Invalid issuer domain: {}", e),
+            )
+        }
+    };
+
     // Step 2: Check temporal validity
     let now = Utc::now().timestamp();
     let skew = config.clock_skew_secs;
@@ -171,7 +184,7 @@ pub fn verify_credential_offline(
     }
 
     // Step 3: Validate discovery document (entity matches iss)
-    if let Err(e) = validate_discovery_document(discovery, &payload.iss) {
+    if let Err(e) = validate_discovery_document(discovery, &issuer) {
         return VerificationResult::failure(
             ErrorCode::DiscoveryInvalid,
             &format!("Discovery validation failed: {}", e),
@@ -269,7 +282,7 @@ pub fn verify_credential_offline(
     // in online mode. In offline mode we note presence but can't verify.
     let mut result = VerificationResult::success(
         &payload.sub,
-        &payload.iss,
+        &issuer,
         payload.capabilities.clone(),
         payload.constraints.clone(),
         KeyPinningStatus {
@@ -298,7 +311,7 @@ pub fn verify_credential_offline(
     }
 
     // Step 11: TOFU key pinning
-    match check_pinning(pin_store, &payload.iss, jwk) {
+    match check_pinning(pin_store, &issuer, jwk) {
         Ok(PinningResult::FirstUse) => {
             result.key_pinning = Some(KeyPinningStatus {
                 status: "first_use".to_string(),
@@ -307,7 +320,7 @@ pub fn verify_credential_offline(
         }
         Ok(PinningResult::Matched) => {
             let first_seen = pin_store
-                .get_domain(&payload.iss)
+                .get_domain(&issuer)
                 .and_then(|d| d.pinned_keys.first())
                 .map(|pk| pk.first_seen.clone());
             result.key_pinning = Some(KeyPinningStatus {
@@ -318,7 +331,7 @@ pub fn verify_credential_offline(
         Ok(PinningResult::Changed) | Err(_) => {
             return VerificationResult::failure(
                 ErrorCode::KeyPinMismatch,
-                &format!("Key for '{}' has changed since last pinned", payload.iss),
+                &format!("Key for '{}' has changed since last pinned", issuer),
             );
         }
     }
@@ -363,7 +376,17 @@ pub fn verify_credential_with_resolver(
         }
     };
 
-    let discovery = match resolver.resolve_discovery(&payload.iss) {
+    let issuer = match normalize_domain(&payload.iss) {
+        Ok(d) => d,
+        Err(e) => {
+            return VerificationResult::failure(
+                ErrorCode::DiscoveryInvalid,
+                &format!("Invalid issuer domain: {}", e),
+            )
+        }
+    };
+
+    let discovery = match resolver.resolve_discovery(&issuer) {
         Ok(doc) => doc,
         Err(e) => {
             return VerificationResult::failure(
@@ -373,7 +396,7 @@ pub fn verify_credential_with_resolver(
         }
     };
 
-    let revocation = match resolver.resolve_revocation(&payload.iss, &discovery) {
+    let revocation = match resolver.resolve_revocation(&issuer, &discovery) {
         Ok(doc) => doc,
         Err(_) => {
             return VerificationResult::failure(
@@ -412,7 +435,17 @@ pub async fn verify_credential_with_async_resolver(
         }
     };
 
-    let discovery = match resolver.resolve_discovery(&payload.iss).await {
+    let issuer = match normalize_domain(&payload.iss) {
+        Ok(d) => d,
+        Err(e) => {
+            return VerificationResult::failure(
+                ErrorCode::DiscoveryInvalid,
+                &format!("Invalid issuer domain: {}", e),
+            )
+        }
+    };
+
+    let discovery = match resolver.resolve_discovery(&issuer).await {
         Ok(doc) => doc,
         Err(e) => {
             return VerificationResult::failure(
@@ -422,7 +455,7 @@ pub async fn verify_credential_with_async_resolver(
         }
     };
 
-    let revocation = match resolver.resolve_revocation(&payload.iss, &discovery).await {
+    let revocation = match resolver.resolve_revocation(&issuer, &discovery).await {
         Ok(doc) => doc,
         Err(_) => {
             return VerificationResult::failure(
@@ -453,52 +486,14 @@ pub async fn verify_credential(
     audience: Option<&str>,
     config: &VerifierConfig,
 ) -> VerificationResult {
-    // Parse JWT to extract issuer domain
-    let (_header, payload, _sig) = match jwt::decode_jwt_unverified(credential_jwt) {
-        Ok(parts) => parts,
-        Err(e) => {
-            return VerificationResult::failure(
-                ErrorCode::AlgorithmRejected,
-                &format!("JWT parse failed: {}", e),
-            )
-        }
-    };
-
-    // Fetch discovery document
-    let discovery = match crate::discovery::fetch_discovery_document(&payload.iss).await {
-        Ok(doc) => doc,
-        Err(e) => {
-            return VerificationResult::failure(
-                ErrorCode::DiscoveryFetchFailed,
-                &format!("Failed to fetch discovery document: {}", e),
-            )
-        }
-    };
-
-    // Fetch revocation document
-    let revocation = if let Some(ref endpoint) = discovery.revocation_endpoint {
-        match crate::revocation::fetch_revocation_document(endpoint).await {
-            Ok(doc) => Some(doc),
-            Err(_) => {
-                // Fail closed: if revocation endpoint is unreachable, reject
-                return VerificationResult::failure(
-                    ErrorCode::DiscoveryFetchFailed,
-                    "Revocation endpoint unreachable (fail-closed)",
-                );
-            }
-        }
-    } else {
-        None
-    };
-
-    verify_credential_offline(
+    verify_credential_with_async_resolver(
         credential_jwt,
-        &discovery,
-        revocation.as_ref(),
+        &crate::resolver::WellKnownResolver,
         pin_store,
         audience,
         config,
     )
+    .await
 }
 
 #[cfg(test)]
@@ -876,6 +871,138 @@ mod tests {
         );
         assert!(!result.valid);
         assert_eq!(result.error_code, Some(ErrorCode::DiscoveryInvalid));
+    }
+
+    /// AP-3: a case variant of a pinned issuer must hit the existing pin,
+    /// not create a fresh first-use entry under a different key.
+    #[test]
+    fn test_case_variant_iss_hits_existing_pin() {
+        let mut f = setup();
+        let r1 = verify_credential_offline(
+            &f.jwt,
+            &f.discovery,
+            Some(&f.revocation),
+            &mut f.pin_store,
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert!(r1.valid, "{:?}", r1);
+
+        // Attacker controlling the host publishes a doc for "EXAMPLE.COM"
+        // with their own key and issues credentials with iss "EXAMPLE.COM".
+        let kp2 = crypto::generate_key_pair().unwrap();
+        let sk2 = crypto::load_signing_key(&kp2.private_key_pem).unwrap();
+        let vk2 = crypto::load_verifying_key(&kp2.public_key_pem).unwrap();
+        let mut evil_doc = f.discovery.clone();
+        evil_doc.entity = "EXAMPLE.COM".to_string();
+        evil_doc.public_keys = vec![verifying_key_to_jwk(&vk2, "evil-key")];
+        let evil_jwt = issue_credential(
+            &sk2,
+            "evil-key",
+            "EXAMPLE.COM",
+            "urn:agentpin:example.com:agent",
+            Some("verifier.com"),
+            vec![Capability::from("read:data")],
+            None,
+            None,
+            3600,
+        )
+        .unwrap();
+        let r2 = verify_credential_offline(
+            &evil_jwt,
+            &evil_doc,
+            None,
+            &mut f.pin_store,
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert!(!r2.valid);
+        assert_eq!(r2.error_code, Some(ErrorCode::KeyPinMismatch));
+        // Only one pin entry exists, under the normalized name.
+        assert!(f.pin_store.get_domain("example.com").is_some());
+        assert_eq!(
+            f.pin_store
+                .get_domain("example.com")
+                .unwrap()
+                .pinned_keys
+                .len(),
+            1
+        );
+    }
+
+    /// AP-3: issuer and entity are compared after normalization, so a
+    /// trailing dot or different case on either side is not a mismatch.
+    #[test]
+    fn test_issuer_entity_compared_normalized() {
+        let mut f = setup();
+        f.discovery.entity = "Example.COM.".to_string();
+        let r = verify_credential_offline(
+            &f.jwt,
+            &f.discovery,
+            Some(&f.revocation),
+            &mut f.pin_store,
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert!(r.valid, "{:?}", r);
+        assert_eq!(r.issuer.as_deref(), Some("example.com"));
+    }
+
+    /// AP-10 / AP-12: an iss that is not a bare hostname is rejected before
+    /// it can reach a file path, URL or pin store.
+    #[test]
+    fn test_non_hostname_iss_rejected() {
+        let f = setup();
+        for bad_iss in [
+            "127.0.0.1:8443",
+            "../../tmp/x",
+            "/srv/uploads/x",
+            "example.com/path",
+            "user@example.com",
+        ] {
+            let kp = crypto::generate_key_pair().unwrap();
+            let sk = crypto::load_signing_key(&kp.private_key_pem).unwrap();
+            let jwt = issue_credential(
+                &sk,
+                "test-2026-01",
+                bad_iss,
+                "urn:agentpin:example.com:agent",
+                None,
+                vec![Capability::from("read:data")],
+                None,
+                None,
+                3600,
+            )
+            .unwrap();
+            let r = verify_credential_offline(
+                &jwt,
+                &f.discovery,
+                None,
+                &mut KeyPinStore::new(),
+                None,
+                &f.config,
+            );
+            assert!(!r.valid);
+            assert_eq!(
+                r.error_code,
+                Some(ErrorCode::DiscoveryInvalid),
+                "iss={}",
+                bad_iss
+            );
+            let r = verify_credential_with_resolver(
+                &jwt,
+                &crate::resolver::LocalFileResolver::new(std::path::Path::new("/"), None),
+                &mut KeyPinStore::new(),
+                None,
+                &f.config,
+            );
+            assert_eq!(
+                r.error_code,
+                Some(ErrorCode::DiscoveryInvalid),
+                "iss={}",
+                bad_iss
+            );
+        }
     }
 
     #[test]

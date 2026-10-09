@@ -86,14 +86,14 @@ impl LocalAgentCardStore {
         self.inner
             .lock()
             .ok()
-            .and_then(|m| m.get(domain).map(|s| s.card.clone()))
+            .and_then(|m| m.get(&store_key(domain)).map(|s| s.card.clone()))
     }
 
     /// Drop a registered AgentCard. Returns `true` when one was removed.
     pub fn remove(&self, domain: &str) -> bool {
         self.inner
             .lock()
-            .map(|mut m| m.remove(domain).is_some())
+            .map(|mut m| m.remove(&store_key(domain)).is_some())
             .unwrap_or(false)
     }
 }
@@ -110,9 +110,11 @@ impl DiscoveryResolver for LocalAgentCardStore {
             .inner
             .lock()
             .map_err(|e| Error::Discovery(format!("LocalAgentCardStore mutex poisoned: {e}")))?;
-        map.get(domain).map(|s| s.discovery.clone()).ok_or_else(|| {
-            Error::Discovery(format!("Domain '{}' not in LocalAgentCardStore", domain))
-        })
+        map.get(&store_key(domain))
+            .map(|s| s.discovery.clone())
+            .ok_or_else(|| {
+                Error::Discovery(format!("Domain '{}' not in LocalAgentCardStore", domain))
+            })
     }
 
     fn resolve_revocation(
@@ -133,16 +135,22 @@ impl DiscoveryResolver for LocalAgentCardStore {
 /// Derive the host portion of the AgentCard's agentpin endpoint URL.
 ///
 /// `https://example.com/.well-known/agent-identity.json` -> `example.com`.
-pub(crate) fn card_endpoint_host(card: &A2aAgentCard) -> Result<String, Error> {
+///
+/// The endpoint must be an `https` URL with a domain host and no userinfo,
+/// port or fragment; the returned host is normalized (AP-3, AP-12).
+pub fn card_endpoint_host(card: &A2aAgentCard) -> Result<String, Error> {
     let ext = card
         .agentpin
         .as_ref()
         .ok_or_else(|| Error::Discovery("AgentCard has no agentpin extension".to_string()))?;
-    let url = url::Url::parse(&ext.agentpin_endpoint)
-        .map_err(|e| Error::Discovery(format!("Invalid agentpin_endpoint URL: {e}")))?;
-    url.host_str()
-        .map(|h| h.to_string())
-        .ok_or_else(|| Error::Discovery("agentpin_endpoint URL has no host".to_string()))
+    crate::domain::https_url_host(&ext.agentpin_endpoint)
+        .map_err(|e| Error::Discovery(format!("Invalid agentpin_endpoint URL: {}", e)))
+}
+
+/// Normalized store key for a domain (raw string when not a valid hostname,
+/// which can never match a registered card).
+fn store_key(domain: &str) -> String {
+    crate::domain::normalize_domain(domain).unwrap_or_else(|_| domain.to_string())
 }
 
 /// Derive a minimal [`DiscoveryDocument`] from an A2A AgentCard.
@@ -333,6 +341,35 @@ mod tests {
         let store = LocalAgentCardStore::new();
         assert!(store.register(card).is_err());
         assert!(store.is_empty());
+    }
+
+    /// AP-12: the agentpin_endpoint must be https with a domain host.
+    #[test]
+    fn register_rejects_non_https_or_ip_endpoint() {
+        let kp = generate_key_pair().unwrap();
+        let decl = declaration();
+        for bad in [
+            "http://example.com/.well-known/agent-identity.json",
+            "https://127.0.0.1/.well-known/agent-identity.json",
+            "https://example.com:8443/.well-known/agent-identity.json",
+            "https://user@example.com/.well-known/agent-identity.json",
+        ] {
+            let card = A2aAgentCardBuilder::from_declaration("https://example.com/agent", &decl)
+                .agentpin_endpoint(bad)
+                .sign(&kp.private_key_pem, "kid-1")
+                .unwrap();
+            let store = LocalAgentCardStore::new();
+            assert!(store.register(card).is_err(), "endpoint {:?} accepted", bad);
+        }
+    }
+
+    /// AP-3: store lookups are case-insensitive.
+    #[test]
+    fn resolve_discovery_normalizes_lookup() {
+        let store = LocalAgentCardStore::new();
+        store.register(signed_card()).unwrap();
+        assert!(store.resolve_discovery("EXAMPLE.COM.").is_ok());
+        assert!(store.resolve_card("Example.com").is_some());
     }
 
     #[test]

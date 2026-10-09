@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 
+from .domain import https_url_host
 from .types import AgentPinError, ErrorCode
 
 
@@ -70,7 +71,16 @@ def fetch_revocation_document(url: str) -> dict:
     """Fetch a revocation document from a URL."""
     import requests
 
-    resp = requests.get(url, headers={"Accept": "application/json"}, timeout=10)
+    # Only https URLs with a domain host are ever fetched, and never through
+    # a redirect (AP-12). Same-host binding to the issuer is enforced by the
+    # caller / discovery validation.
+    https_url_host(url)
+    resp = requests.get(url, headers={"Accept": "application/json"}, allow_redirects=False, timeout=10)
+    if resp.is_redirect or resp.is_permanent_redirect:
+        raise AgentPinError(
+            ErrorCode.DISCOVERY_FETCH_FAILED,
+            f"Redirect detected fetching {url} (status {resp.status_code}). Redirects are not allowed.",
+        )
 
     if not resp.ok:
         raise AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, f"HTTP {resp.status_code} fetching {url}")

@@ -78,6 +78,9 @@ pub fn check_revocation(
 /// Fetch a revocation document from a URL.
 #[cfg(feature = "fetch")]
 pub async fn fetch_revocation_document(url: &str) -> Result<RevocationDocument, Error> {
+    // Only https URLs with a domain host are ever fetched (AP-12). Same-host
+    // binding to the issuer is enforced by the caller / discovery validation.
+    crate::domain::https_url_host(url).map_err(|e| Error::Revocation(e.to_string()))?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()

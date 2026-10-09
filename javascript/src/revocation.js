@@ -3,6 +3,7 @@
  */
 
 import { AgentPinError, ErrorCode } from './types.js';
+import { httpsUrlHost } from './domain.js';
 
 /**
  * Build an empty revocation document.
@@ -105,7 +106,12 @@ export function checkRevocation(doc, jti, agentId, kid) {
  * @returns {Promise<object>}
  */
 export async function fetchRevocationDocument(url) {
+    // Only https URLs with a domain host are ever fetched, and never
+    // through a redirect (AP-12). Same-host binding to the issuer is
+    // enforced by the caller / discovery validation.
+    httpsUrlHost(url);
     const response = await fetch(url, {
+        redirect: 'error',
         headers: { 'Accept': 'application/json' },
     });
 

@@ -28,15 +28,25 @@ impl TrustBundle {
         }
     }
 
-    /// Find a discovery document by domain (entity field).
+    /// Find a discovery document by domain (entity field), compared in
+    /// normalized form.
     pub fn find_discovery(&self, domain: &str) -> Option<&DiscoveryDocument> {
-        self.documents.iter().find(|d| d.entity == domain)
+        let key = bundle_key(domain);
+        self.documents.iter().find(|d| bundle_key(&d.entity) == key)
     }
 
-    /// Find a revocation document by domain (entity field).
+    /// Find a revocation document by domain (entity field), compared in
+    /// normalized form.
     pub fn find_revocation(&self, domain: &str) -> Option<&RevocationDocument> {
-        self.revocations.iter().find(|r| r.entity == domain)
+        let key = bundle_key(domain);
+        self.revocations
+            .iter()
+            .find(|r| bundle_key(&r.entity) == key)
     }
+}
+
+fn bundle_key(entity: &str) -> String {
+    crate::domain::normalize_domain(entity).unwrap_or_else(|_| entity.to_string())
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ThirdKeyAi/agentpin/go/internal/version"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
 )
 
@@ -43,11 +44,32 @@ func ValidateDiscoveryDocument(doc *types.DiscoveryDocument, expectedEntity stri
 	if doc.AgentpinVersion != version.ProtocolVersion {
 		return fmt.Errorf("unsupported version: %s", doc.AgentpinVersion)
 	}
-	if doc.Entity != expectedEntity {
+	// Compare entity and the expected domain in normalized form (AP-3).
+	expected, err := domain.Normalize(expectedEntity)
+	if err != nil {
+		return err
+	}
+	entity, err := domain.Normalize(doc.Entity)
+	if err != nil {
+		return fmt.Errorf("invalid entity: %w", err)
+	}
+	if entity != expected {
 		return types.NewVerificationError(
 			types.ErrDomainMismatch,
 			fmt.Sprintf("Discovery entity '%s' does not match expected '%s'", doc.Entity, expectedEntity),
 		)
+	}
+	// Endpoints the verifier may fetch must be https on the entity's own
+	// host (AP-12; spec §17 for a2a_endpoint).
+	if doc.RevocationEndpoint != "" {
+		if err := domain.ValidateHTTPSURLForDomain(doc.RevocationEndpoint, entity); err != nil {
+			return fmt.Errorf("invalid revocation_endpoint: %w", err)
+		}
+	}
+	if doc.A2aEndpoint != "" {
+		if err := domain.ValidateHTTPSURLForDomain(doc.A2aEndpoint, entity); err != nil {
+			return fmt.Errorf("invalid a2a_endpoint: %w", err)
+		}
 	}
 	if len(doc.PublicKeys) == 0 {
 		return errors.New("discovery document must have at least one public key")
@@ -82,7 +104,11 @@ func FindAgentByID(doc *types.DiscoveryDocument, agentID string) *types.AgentDec
 // FetchDiscoveryDocument fetches `https://{domain}/.well-known/agent-identity.json`
 // and validates it. Redirects are rejected: the discovery endpoint MUST be
 // served directly from the canonical hostname.
-func FetchDiscoveryDocument(client *http.Client, domain string) (*types.DiscoveryDocument, error) {
+func FetchDiscoveryDocument(client *http.Client, rawDomain string) (*types.DiscoveryDocument, error) {
+	domainName, err := domain.Normalize(rawDomain)
+	if err != nil {
+		return nil, err
+	}
 	if client == nil {
 		client = &http.Client{
 			Timeout: 10 * time.Second,
@@ -91,7 +117,7 @@ func FetchDiscoveryDocument(client *http.Client, domain string) (*types.Discover
 			},
 		}
 	}
-	url := fmt.Sprintf("https://%s/.well-known/agent-identity.json", domain)
+	url := fmt.Sprintf("https://%s/.well-known/agent-identity.json", domainName)
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch %s: %w", url, err)
@@ -112,7 +138,7 @@ func FetchDiscoveryDocument(client *http.Client, domain string) (*types.Discover
 	if err := json.Unmarshal(body, &doc); err != nil {
 		return nil, fmt.Errorf("invalid JSON from %s: %w", url, err)
 	}
-	if err := ValidateDiscoveryDocument(&doc, domain); err != nil {
+	if err := ValidateDiscoveryDocument(&doc, domainName); err != nil {
 		return nil, err
 	}
 	return &doc, nil

@@ -23,6 +23,12 @@ pub struct KeyPinStore {
     domains: HashMap<String, PinnedDomain>,
 }
 
+/// Pin-store key for a domain: the normalized hostname when valid, the raw
+/// string otherwise (AP-3).
+fn pin_key(domain: &str) -> String {
+    crate::domain::normalize_domain(domain).unwrap_or_else(|_| domain.to_string())
+}
+
 impl KeyPinStore {
     pub fn new() -> Self {
         Self {
@@ -33,6 +39,7 @@ impl KeyPinStore {
     /// Check a key against the pin store. If this is the first time seeing
     /// the domain, the key is pinned (TOFU). Returns the pinning result.
     pub fn check_and_pin(&mut self, domain: &str, jwk: &Jwk) -> PinningResult {
+        let domain = &pin_key(domain);
         let key_hash = jwk_thumbprint(jwk);
         let now = Utc::now().to_rfc3339();
 
@@ -69,6 +76,7 @@ impl KeyPinStore {
 
     /// Add a key to an existing domain's pin set (e.g., during key rotation).
     pub fn add_key(&mut self, domain: &str, jwk: &Jwk) {
+        let domain = &pin_key(domain);
         let key_hash = jwk_thumbprint(jwk);
         let now = Utc::now().to_rfc3339();
 
@@ -97,7 +105,7 @@ impl KeyPinStore {
 
     /// Get pinned domain info.
     pub fn get_domain(&self, domain: &str) -> Option<&PinnedDomain> {
-        self.domains.get(domain)
+        self.domains.get(&pin_key(domain))
     }
 
     /// Serialize the store to JSON.
@@ -109,7 +117,28 @@ impl KeyPinStore {
     /// Deserialize the store from JSON.
     pub fn from_json(json: &str) -> Result<Self, Error> {
         let domains: Vec<PinnedDomain> = serde_json::from_str(json)?;
-        let map = domains.into_iter().map(|d| (d.domain.clone(), d)).collect();
+        let mut map: HashMap<String, PinnedDomain> = HashMap::new();
+        for mut d in domains {
+            let key = pin_key(&d.domain);
+            d.domain = key.clone();
+            // Merge duplicate entries that differ only by case into one pin set.
+            match map.get_mut(&key) {
+                Some(existing) => {
+                    for pk in d.pinned_keys {
+                        if !existing
+                            .pinned_keys
+                            .iter()
+                            .any(|e| e.public_key_hash == pk.public_key_hash)
+                        {
+                            existing.pinned_keys.push(pk);
+                        }
+                    }
+                }
+                None => {
+                    map.insert(key, d);
+                }
+            }
+        }
         Ok(Self { domains: map })
     }
 }
@@ -218,6 +247,37 @@ mod tests {
         let jwk2 = make_test_jwk("key-2", "x-value-2");
         let result = check_pinning(&mut store, "example.com", &jwk2);
         assert!(result.is_err());
+    }
+
+    /// AP-3: pins are keyed on the normalized domain, so case variants and
+    /// trailing dots share one pin set.
+    #[test]
+    fn test_pin_key_normalized() {
+        let mut store = KeyPinStore::new();
+        let jwk1 = make_test_jwk("key-1", "x-value-1");
+        let jwk2 = make_test_jwk("key-2", "x-value-2");
+        assert_eq!(
+            store.check_and_pin("example.com", &jwk1),
+            PinningResult::FirstUse
+        );
+        assert_eq!(
+            store.check_and_pin("EXAMPLE.COM", &jwk1),
+            PinningResult::Matched
+        );
+        assert_eq!(
+            store.check_and_pin("Example.Com.", &jwk2),
+            PinningResult::Changed
+        );
+        assert!(store.get_domain("EXAMPLE.COM").is_some());
+
+        // Persisted stores with mixed-case entries are merged on load.
+        let json = r#"[{"domain":"EXAMPLE.COM","pinned_keys":[{"kid":"k","public_key_hash":"h1","first_seen":"t","last_seen":"t","trust_level":"tofu"}]},
+                       {"domain":"example.com","pinned_keys":[{"kid":"k2","public_key_hash":"h2","first_seen":"t","last_seen":"t","trust_level":"tofu"}]}]"#;
+        let loaded = KeyPinStore::from_json(json).unwrap();
+        assert_eq!(
+            loaded.get_domain("example.com").unwrap().pinned_keys.len(),
+            2
+        );
     }
 
     #[test]

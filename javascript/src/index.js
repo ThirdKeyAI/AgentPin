@@ -162,6 +162,13 @@ export {
 } from './resolverA2a.js';
 
 export {
+    normalizeDomain,
+    httpsUrlHost,
+    validateHttpsUrlForDomain,
+    defaultRevocationEndpoint,
+} from './domain.js';
+
+export {
     parseTxtRecord,
     verifyDnsMatch,
     txtRecordName,

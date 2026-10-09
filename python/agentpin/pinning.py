@@ -4,8 +4,17 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from .domain import normalize_domain
 from .jwk import jwk_thumbprint
 from .types import AgentPinError, ErrorCode, TrustLevel
+
+
+def _pin_key(domain: str) -> str:
+    """Pin-store key: the normalized hostname when valid, the raw string otherwise (AP-3)."""
+    try:
+        return normalize_domain(domain)
+    except AgentPinError:
+        return str(domain)
 
 
 class PinningResult:
@@ -26,6 +35,7 @@ class KeyPinStore:
         Returns:
             One of PinningResult values.
         """
+        domain = _pin_key(domain)
         key_hash = jwk_thumbprint(jwk)
         now = datetime.now(timezone.utc).isoformat()
 
@@ -54,6 +64,7 @@ class KeyPinStore:
 
     def add_key(self, domain: str, jwk: dict) -> None:
         """Add a key to an existing domain's pin set (e.g., during key rotation)."""
+        domain = _pin_key(domain)
         key_hash = jwk_thumbprint(jwk)
         now = datetime.now(timezone.utc).isoformat()
 
@@ -74,7 +85,7 @@ class KeyPinStore:
 
     def get_domain(self, domain: str) -> Optional[dict]:
         """Get pinned domain info."""
-        return self.domains.get(domain)
+        return self.domains.get(_pin_key(domain))
 
     def to_json(self) -> str:
         """Serialize the store to JSON."""
@@ -86,7 +97,18 @@ class KeyPinStore:
         store = cls()
         domains: List[dict] = json.loads(json_str)
         for d in domains:
-            store.domains[d["domain"]] = d
+            key = _pin_key(d["domain"])
+            existing = store.domains.get(key)
+            if existing is None:
+                entry = dict(d)
+                entry["domain"] = key
+                entry["pinned_keys"] = list(d.get("pinned_keys", []))
+                store.domains[key] = entry
+                continue
+            # Merge entries that differ only by case into one pin set.
+            for pk in d.get("pinned_keys", []):
+                if not any(e.get("public_key_hash") == pk.get("public_key_hash") for e in existing["pinned_keys"]):
+                    existing["pinned_keys"].append(pk)
         return store
 
 

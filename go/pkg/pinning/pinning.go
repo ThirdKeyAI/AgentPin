@@ -9,9 +9,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/jwk"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
 )
+
+// pinKey is the normalized hostname when valid, the raw string otherwise
+// (AP-3).
+func pinKey(d string) string {
+	if n, err := domain.Normalize(d); err == nil {
+		return n
+	}
+	return d
+}
 
 // Result is the outcome of a CheckAndPin call.
 type Result int
@@ -53,6 +63,7 @@ func NewKeyPinStore() *KeyPinStore {
 // CheckAndPin checks j against the pinned keys for domain. On first use it
 // pins j and returns ResultFirstUse.
 func (s *KeyPinStore) CheckAndPin(domain string, j *types.JWK) Result {
+	domain = pinKey(domain)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -86,6 +97,7 @@ func (s *KeyPinStore) CheckAndPin(domain string, j *types.JWK) Result {
 
 // AddKey adds an additional pinned key to a domain (e.g., during key rotation).
 func (s *KeyPinStore) AddKey(domain string, j *types.JWK) {
+	domain = pinKey(domain)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -113,6 +125,7 @@ func (s *KeyPinStore) AddKey(domain string, j *types.JWK) {
 
 // GetDomain returns the pinned-domain entry for domain, or nil.
 func (s *KeyPinStore) GetDomain(domain string) *types.PinnedDomain {
+	domain = pinKey(domain)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	pd, ok := s.domains[domain]
@@ -147,7 +160,25 @@ func (s *KeyPinStore) LoadFromJSON(data []byte) error {
 	s.domains = make(map[string]*types.PinnedDomain, len(domains))
 	for i := range domains {
 		d := domains[i]
-		s.domains[d.Domain] = &d
+		key := pinKey(d.Domain)
+		d.Domain = key
+		if existing, ok := s.domains[key]; ok {
+			// Merge entries that differ only by case into one pin set.
+			for _, pk := range d.PinnedKeys {
+				dup := false
+				for _, e := range existing.PinnedKeys {
+					if e.PublicKeyHash == pk.PublicKeyHash {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					existing.PinnedKeys = append(existing.PinnedKeys, pk)
+				}
+			}
+			continue
+		}
+		s.domains[key] = &d
 	}
 	return nil
 }

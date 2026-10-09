@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::domain::{normalize_domain, validate_https_url_for_domain};
 use crate::error::Error;
 use crate::types::bundle::TrustBundle;
 use crate::types::discovery::DiscoveryDocument;
@@ -76,10 +77,13 @@ impl AsyncDiscoveryResolver for WellKnownResolver {
 
     async fn resolve_revocation(
         &self,
-        _domain: &str,
+        domain: &str,
         discovery: &DiscoveryDocument,
     ) -> Result<Option<RevocationDocument>, Error> {
         if let Some(ref endpoint) = discovery.revocation_endpoint {
+            // The endpoint is attacker-publishable; never fetch anything but
+            // https on the issuer's own host (AP-12).
+            validate_https_url_for_domain(endpoint, domain)?;
             let doc = crate::revocation::fetch_revocation_document(endpoint).await?;
             Ok(Some(doc))
         } else {
@@ -111,11 +115,42 @@ impl LocalFileResolver {
     }
 }
 
+impl LocalFileResolver {
+    /// Resolve `{domain}{suffix}` inside `dir`, refusing anything that is
+    /// not a normalized hostname and anything whose canonical path escapes
+    /// `dir` (AP-10). Returns `Ok(None)` when the file does not exist and a
+    /// generic error (no OS error text, no path) on any other failure.
+    fn read_contained(dir: &Path, domain: &str, suffix: &str) -> Result<Option<String>, Error> {
+        let domain = normalize_domain(domain)?;
+        let path = dir.join(format!("{}{}", domain, suffix));
+        if !path.exists() {
+            return Ok(None);
+        }
+        let base = dir
+            .canonicalize()
+            .map_err(|_| Error::Discovery("Discovery directory is not accessible".to_string()))?;
+        let canonical = path.canonicalize().map_err(|_| {
+            Error::Discovery(format!("Cannot read document for domain '{}'", domain))
+        })?;
+        if !canonical.starts_with(&base) {
+            return Err(Error::Discovery(format!(
+                "Document path for domain '{}' escapes the discovery directory",
+                domain
+            )));
+        }
+        let data = std::fs::read_to_string(&canonical).map_err(|_| {
+            Error::Discovery(format!("Cannot read document for domain '{}'", domain))
+        })?;
+        Ok(Some(data))
+    }
+}
+
 impl DiscoveryResolver for LocalFileResolver {
     fn resolve_discovery(&self, domain: &str) -> Result<DiscoveryDocument, Error> {
-        let path = self.discovery_dir.join(format!("{}.json", domain));
-        let data = std::fs::read_to_string(&path)
-            .map_err(|e| Error::Discovery(format!("Cannot read {}: {}", path.display(), e)))?;
+        let data =
+            Self::read_contained(&self.discovery_dir, domain, ".json")?.ok_or_else(|| {
+                Error::Discovery(format!("No discovery document for domain '{}'", domain))
+            })?;
         let doc: DiscoveryDocument = serde_json::from_str(&data)?;
         Ok(doc)
     }
@@ -126,14 +161,13 @@ impl DiscoveryResolver for LocalFileResolver {
         _discovery: &DiscoveryDocument,
     ) -> Result<Option<RevocationDocument>, Error> {
         let dir = self.revocation_dir.as_ref().unwrap_or(&self.discovery_dir);
-        let path = dir.join(format!("{}.revocations.json", domain));
-        if !path.exists() {
-            return Ok(None);
+        match Self::read_contained(dir, domain, ".revocations.json")? {
+            None => Ok(None),
+            Some(data) => {
+                let doc: RevocationDocument = serde_json::from_str(&data)?;
+                Ok(Some(doc))
+            }
         }
-        let data = std::fs::read_to_string(&path)
-            .map_err(|e| Error::Discovery(format!("Cannot read {}: {}", path.display(), e)))?;
-        let doc: RevocationDocument = serde_json::from_str(&data)?;
-        Ok(Some(doc))
     }
 }
 
@@ -152,11 +186,11 @@ impl TrustBundleResolver {
     pub fn new(bundle: &TrustBundle) -> Self {
         let mut discovery = HashMap::new();
         for doc in &bundle.documents {
-            discovery.insert(doc.entity.clone(), doc.clone());
+            discovery.insert(bundle_key(&doc.entity), doc.clone());
         }
         let mut revocations = HashMap::new();
         for doc in &bundle.revocations {
-            revocations.insert(doc.entity.clone(), doc.clone());
+            revocations.insert(bundle_key(&doc.entity), doc.clone());
         }
         Self {
             discovery,
@@ -171,10 +205,17 @@ impl TrustBundleResolver {
     }
 }
 
+/// Lookup key for bundle entries: the normalized domain when the entity is
+/// a valid hostname, the raw string otherwise (such entries can never match
+/// a normalized `iss`).
+fn bundle_key(entity: &str) -> String {
+    normalize_domain(entity).unwrap_or_else(|_| entity.to_string())
+}
+
 impl DiscoveryResolver for TrustBundleResolver {
     fn resolve_discovery(&self, domain: &str) -> Result<DiscoveryDocument, Error> {
         self.discovery
-            .get(domain)
+            .get(&bundle_key(domain))
             .cloned()
             .ok_or_else(|| Error::Discovery(format!("Domain '{}' not in trust bundle", domain)))
     }
@@ -184,7 +225,7 @@ impl DiscoveryResolver for TrustBundleResolver {
         domain: &str,
         _discovery: &DiscoveryDocument,
     ) -> Result<Option<RevocationDocument>, Error> {
-        Ok(self.revocations.get(domain).cloned())
+        Ok(self.revocations.get(&bundle_key(domain)).cloned())
     }
 }
 
@@ -325,6 +366,77 @@ mod tests {
         let resolver = LocalFileResolver::new(dir.path(), None);
         let resolved = resolver.resolve_discovery("local.example.com").unwrap();
         assert_eq!(resolved.entity, "local.example.com");
+    }
+
+    /// AP-10: an untrusted domain string can never escape the discovery
+    /// directory, and errors never echo OS error text or paths.
+    #[test]
+    fn test_local_file_resolver_rejects_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let doc = make_discovery("evil.example");
+        std::fs::write(
+            outside.path().join("x.json"),
+            serde_json::to_string(&doc).unwrap(),
+        )
+        .unwrap();
+        let resolver = LocalFileResolver::new(dir.path(), None);
+        let abs = outside.path().join("x").to_string_lossy().to_string();
+        let rel = format!(
+            "../{}/x",
+            outside.path().file_name().unwrap().to_string_lossy()
+        );
+        for bad in [
+            abs.as_str(),
+            rel.as_str(),
+            "..",
+            "../x",
+            "a/../../x",
+            r"x\..\y",
+        ] {
+            let err = resolver.resolve_discovery(bad).unwrap_err().to_string();
+            assert!(!err.contains("No such file"), "OS error leaked: {}", err);
+            assert!(
+                !err.contains(dir.path().to_str().unwrap()),
+                "path leaked: {}",
+                err
+            );
+        }
+        // Missing-document errors are generic too.
+        let err = resolver
+            .resolve_discovery("missing.com")
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains(dir.path().to_str().unwrap()));
+        assert!(!err.contains("os error"));
+    }
+
+    /// AP-3: file lookups use the normalized domain.
+    #[test]
+    fn test_local_file_resolver_case_insensitive() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = make_discovery("local.example.com");
+        std::fs::write(
+            dir.path().join("local.example.com.json"),
+            serde_json::to_string(&doc).unwrap(),
+        )
+        .unwrap();
+        let resolver = LocalFileResolver::new(dir.path(), None);
+        assert!(resolver.resolve_discovery("LOCAL.Example.COM.").is_ok());
+    }
+
+    /// AP-3: trust bundle lookups use the normalized domain.
+    #[test]
+    fn test_trust_bundle_resolver_normalized_lookup() {
+        let bundle = TrustBundle {
+            agentpin_bundle_version: "0.1".to_string(),
+            created_at: "2026-02-10T00:00:00Z".to_string(),
+            documents: vec![make_discovery("Example.COM")],
+            revocations: vec![],
+        };
+        let resolver = TrustBundleResolver::new(&bundle);
+        assert!(resolver.resolve_discovery("example.com").is_ok());
+        assert!(resolver.resolve_discovery("EXAMPLE.COM.").is_ok());
     }
 
     #[test]
