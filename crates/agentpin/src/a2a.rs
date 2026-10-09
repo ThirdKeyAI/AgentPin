@@ -155,6 +155,7 @@ impl<'a> A2aAgentCardBuilder<'a> {
                 streaming: self.streaming,
                 push_notifications: self.push_notifications,
                 allowed_domains,
+                extra: Default::default(),
             },
             skills,
             agentpin: None,

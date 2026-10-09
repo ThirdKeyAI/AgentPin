@@ -86,6 +86,13 @@ pub struct A2aAgentCapabilities {
     /// Absent = no restriction; `[]` = restricted to nothing (AP-6).
     #[serde(default, skip_serializing_if = "AllowedDomains::is_unrestricted")]
     pub allowed_domains: AllowedDomains,
+    /// Unmodeled A2A fields, preserved verbatim and covered by the signature.
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// Minimal A2A `AgentSkill` representation.
@@ -103,6 +110,13 @@ pub struct A2aAgentSkill {
     /// Optional description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Unmodeled A2A fields, preserved verbatim and covered by the signature.
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +159,7 @@ pub fn capability_to_skill(cap: &Capability) -> A2aAgentSkill {
         id: id.clone(),
         name: id,
         description: None,
+        extra: Default::default(),
     }
 }
 

@@ -96,7 +96,11 @@ type A2aAgentCapabilities struct {
 	// AllowedDomains is omitted when nil (unrestricted) and emitted whenever
 	// non-nil, including as `[]` (restricted to nothing) — AP-6.
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	// Extra holds unmodeled fields, preserved verbatim and signed.
+	Extra map[string]json.RawMessage `json:"-"`
 }
+
+var capabilitiesKnownKeys = map[string]bool{"streaming": true, "pushNotifications": true, "allowed_domains": true}
 
 // MarshalJSON emits allowed_domains whenever it is non-nil, including when
 // empty, so "restricted to nothing" survives a round trip.
@@ -108,7 +112,47 @@ func (c A2aAgentCapabilities) MarshalJSON() ([]byte, error) {
 	if c.AllowedDomains != nil {
 		out["allowed_domains"] = c.AllowedDomains
 	}
+	for k, v := range c.Extra {
+		if !capabilitiesKnownKeys[k] {
+			out[k] = v
+		}
+	}
 	return json.Marshal(out)
+}
+
+// UnmarshalJSON keeps unknown fields in Extra.
+func (c *A2aAgentCapabilities) UnmarshalJSON(data []byte) error {
+	type plain A2aAgentCapabilities
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	extra, err := unknownFields(data, capabilitiesKnownKeys)
+	if err != nil {
+		return err
+	}
+	p.Extra = extra
+	*c = A2aAgentCapabilities(p)
+	return nil
+}
+
+// unknownFields returns the members of the JSON object data whose keys are
+// not in known, or nil when there are none.
+func unknownFields(data []byte, known map[string]bool) (map[string]json.RawMessage, error) {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return nil, err
+	}
+	var extra map[string]json.RawMessage
+	for k, v := range all {
+		if !known[k] {
+			if extra == nil {
+				extra = map[string]json.RawMessage{}
+			}
+			extra[k] = v
+		}
+	}
+	return extra, nil
 }
 
 // A2aAgentSkill mirrors the A2A "AgentSkill" shape. AgentPin's Capability
@@ -117,6 +161,41 @@ type A2aAgentSkill struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	// Extra holds unmodeled fields (tags, examples, ...), preserved verbatim
+	// and signed.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+var skillKnownKeys = map[string]bool{"id": true, "name": true, "description": true}
+
+// MarshalJSON emits the modeled fields plus every Extra field.
+func (s A2aAgentSkill) MarshalJSON() ([]byte, error) {
+	out := map[string]interface{}{"id": s.ID, "name": s.Name}
+	if s.Description != "" {
+		out["description"] = s.Description
+	}
+	for k, v := range s.Extra {
+		if !skillKnownKeys[k] {
+			out[k] = v
+		}
+	}
+	return json.Marshal(out)
+}
+
+// UnmarshalJSON keeps unknown fields in Extra.
+func (s *A2aAgentSkill) UnmarshalJSON(data []byte) error {
+	type plain A2aAgentSkill
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	extra, err := unknownFields(data, skillKnownKeys)
+	if err != nil {
+		return err
+	}
+	p.Extra = extra
+	*s = A2aAgentSkill(p)
+	return nil
 }
 
 // AgentpinExtension is the AgentPin extension carried inside an A2A

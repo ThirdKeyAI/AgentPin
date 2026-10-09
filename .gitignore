@@ -9,6 +9,7 @@ Cargo.lock
 # deliberately committed throwaway keypairs used only for SDK interop tests.
 # They are NOT used to sign anything in production.
 !go/pkg/verification/testdata/*.private.pem
+!testdata/conformance/*.private.pem
 
 # IDE
 .idea/
