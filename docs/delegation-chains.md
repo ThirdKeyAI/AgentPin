@@ -8,7 +8,7 @@ AgentPin supports a two-layer trust model where **Makers** (who build agent soft
 
 ```
 ┌─────────────────────────────┐     ┌─────────────────────────────┐
-│ Maker (anthropic.com)       │     │ Deployer (tarnover.com)     │
+│ Maker (maker-corp.com)      │     │ Deployer (tarnover.com)     │
 │                             │     │                             │
 │ "We built this agent type"  │────>│ "We run an instance of it"  │
 │                             │     │                             │
@@ -31,11 +31,11 @@ The Maker publishes a discovery document declaring agent types and their maximum
 ```json
 {
   "agentpin_version": "0.1",
-  "entity": "anthropic.com",
+  "entity": "maker-corp.com",
   "entity_type": "maker",
   "public_keys": [
     {
-      "kid": "anthropic-2026-01",
+      "kid": "maker-2026-01",
       "kty": "EC",
       "crv": "P-256",
       "x": "...",
@@ -45,8 +45,8 @@ The Maker publishes a discovery document declaring agent types and their maximum
   ],
   "agents": [
     {
-      "agent_id": "urn:agentpin:anthropic.com:claude-agent-v4",
-      "name": "Claude Agent Runtime v4",
+      "agent_id": "urn:agentpin:maker-corp.com:assistant-agent-v4",
+      "name": "Assistant Agent Runtime v4",
       "capabilities": ["read:*", "write:text", "execute:code", "delegate:agent"],
       "status": "active"
     }
@@ -77,7 +77,7 @@ The Deployer's discovery document references the Maker's agent type and includes
   "agents": [
     {
       "agent_id": "urn:agentpin:tarnover.com:scout-v2",
-      "agent_type": "urn:agentpin:anthropic.com:claude-agent-v4",
+      "agent_type": "urn:agentpin:maker-corp.com:assistant-agent-v4",
       "name": "Scout Security Analyzer",
       "capabilities": ["read:public-api", "read:codebase", "write:report"],
       "constraints": {
@@ -113,9 +113,9 @@ const credential = issueCredential(
     { allowed_domains: ['*.client-corp.com'] },
     [
         {
-            domain: 'anthropic.com',
-            kid: 'anthropic-2026-01',
-            agent_type: 'urn:agentpin:anthropic.com:claude-agent-v4',
+            domain: 'maker-corp.com',
+            kid: 'maker-2026-01',
+            agent_type: 'urn:agentpin:maker-corp.com:assistant-agent-v4',
             attestation: makerAttestation,
         },
     ],
@@ -190,14 +190,14 @@ When a credential includes a delegation chain, the verifier walks the chain:
 import { verifyCredentialOffline, verifyCredentialWithBundle, KeyPinStore } from 'agentpin';
 
 // The verifier receives a credential from tarnover.com's agent
-// The credential includes a delegation chain pointing back to anthropic.com.
+// The credential includes a delegation chain pointing back to maker-corp.com.
 // The verifier needs the Maker's discovery document too: pass a chain
 // resolver (any object with a synchronous resolveDiscovery(domain)), or use
 // a trust bundle that contains both documents.
 
 const chainResolver = {
     resolveDiscovery(domain) {
-        if (domain === 'anthropic.com') return makerDiscovery;
+        if (domain === 'maker-corp.com') return makerDiscovery;
         throw new Error(`unknown attester ${domain}`);
     },
 };
@@ -215,7 +215,7 @@ const result = verifyCredentialOffline(
 // With the default config, `valid` is only true when the chain verified
 if (result.valid) {
     console.log(result.delegation_verified);           // true
-    console.log(result.delegation_chain);              // [{ domain: 'anthropic.com', role: 'maker', verified: true }]
+    console.log(result.delegation_chain);              // [{ domain: 'maker-corp.com', role: 'maker', verified: true }]
     console.log('Issuer:', result.issuer);             // tarnover.com
     console.log('Agent:', result.agent_id);            // urn:agentpin:tarnover.com:scout-v2
     console.log('Capabilities:', result.capabilities); // ['read:public-api', 'write:report']
@@ -236,7 +236,7 @@ from agentpin import verify_credential_offline, KeyPinStore
 
 class ChainResolver:
     def resolve_discovery(self, domain):
-        if domain == "anthropic.com":
+        if domain == "maker-corp.com":
             return maker_discovery
         raise RuntimeError(f"unknown attester {domain}")
 
@@ -274,7 +274,7 @@ attestation = sign_maker_attestation(
     maker_private_key_pem=maker_private_key,
     deployer_agent_declaration={
         "agent_id": "urn:agentpin:tarnover.com:scout-v2",
-        "agent_type": "urn:agentpin:anthropic.com:claude-agent-v4",
+        "agent_type": "urn:agentpin:maker-corp.com:assistant-agent-v4",
         "capabilities": ["read:public-api", "read:codebase", "write:report"],
     },
 )
@@ -310,19 +310,19 @@ verify_attestation(
 
 ### Scenario: Security Scanning Service
 
-1. **Anthropic** (Maker) publishes Claude Agent Runtime with broad capabilities
+1. **Maker Corp** (Maker) publishes Assistant Agent Runtime with broad capabilities
 2. **Tarnover** (Deployer) deploys a security scanning instance with narrowed capabilities
 3. **Client Corp** (Verifier) receives a credential and verifies the full chain
 
 ```
-anthropic.com (Maker)
-├── Agent type: claude-agent-v4
+maker-corp.com (Maker)
+├── Agent type: assistant-agent-v4
 ├── Capabilities: read:*, write:text, execute:code, delegate:agent
 └── Attestation: "I authorize tarnover.com to deploy scout-v2"
 
     tarnover.com (Deployer)
     ├── Agent instance: scout-v2
-    ├── Type: claude-agent-v4 (from anthropic.com)
+    ├── Type: assistant-agent-v4 (from maker-corp.com)
     ├── Capabilities: read:public-api, read:codebase, write:report
     └── Constraints: allowed_domains=*.client-corp.com, rate_limit=100/hour
 
@@ -330,11 +330,11 @@ anthropic.com (Maker)
         ├── Agent: urn:agentpin:tarnover.com:scout-v2
         ├── Capabilities: read:public-api, write:report
         ├── Audience: client-corp.com
-        └── Delegation chain → anthropic.com
+        └── Delegation chain → maker-corp.com
 ```
 
 The verifier at client-corp.com can confirm:
-- The agent software was built by Anthropic (trusted Maker)
+- The agent software was built by Maker Corp (trusted Maker)
 - The instance is operated by Tarnover (authorized Deployer)
 - The capabilities are properly scoped
 - The Maker explicitly authorized this deployment
