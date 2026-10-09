@@ -95,6 +95,7 @@ export {
     KeyPinStore,
     PinningResult,
     checkPinning,
+    checkPinningSet,
 } from './pinning.js';
 
 export {

@@ -21,6 +21,8 @@ class PinningResult:
     FIRST_USE = "first_use"
     MATCHED = "matched"
     CHANGED = "changed"
+    # Not pinned, but published next to an already-pinned key: pinned as a rotation (spec §7.2).
+    ROTATED = "rotated"
 
 
 class KeyPinStore:
@@ -30,37 +32,50 @@ class KeyPinStore:
         self.domains: Dict[str, dict] = {}
 
     def check_and_pin(self, domain: str, jwk: dict) -> str:
-        """Check a key against the pin store. TOFU pins on first use.
+        """Check a single key against the pin store. TOFU pins on first use.
+
+        Prefer :meth:`check_and_pin_set` when the full validated discovery
+        document is available.
 
         Returns:
             One of PinningResult values.
+        """
+        return self.check_and_pin_set(domain, jwk, [jwk])
+
+    def check_and_pin_set(self, domain: str, jwk: dict, document_keys: List[dict]) -> str:
+        """Check ``jwk`` using the key set of a validated discovery document.
+
+        - First use: every key in ``document_keys`` (plus ``jwk``) is pinned.
+        - Known domain, ``jwk`` pinned: MATCHED.
+        - Known domain, ``jwk`` not pinned, but another key in ``document_keys``
+          is already pinned: ``jwk`` is pinned and ROTATED is returned
+          (rotation continuity, spec §7.2).
+        - Otherwise CHANGED; nothing is modified.
         """
         domain = _pin_key(domain)
         key_hash = jwk_thumbprint(jwk)
         now = datetime.now(timezone.utc).isoformat()
 
-        if domain in self.domains:
-            pinned = self.domains[domain]
-            for pk in pinned["pinned_keys"]:
-                if pk["public_key_hash"] == key_hash:
-                    pk["last_seen"] = now
-                    return PinningResult.MATCHED
-            return PinningResult.CHANGED
+        pinned = self.domains.get(domain)
+        if pinned is None:
+            self.domains[domain] = {"domain": domain, "pinned_keys": []}
+            self.add_key(domain, jwk)
+            for k in document_keys or []:
+                self.add_key(domain, k)
+            return PinningResult.FIRST_USE
 
-        # First time — TOFU pin
-        self.domains[domain] = {
-            "domain": domain,
-            "pinned_keys": [
-                {
-                    "kid": jwk.get("kid", ""),
-                    "public_key_hash": key_hash,
-                    "first_seen": now,
-                    "last_seen": now,
-                    "trust_level": TrustLevel.TOFU,
-                }
-            ],
-        }
-        return PinningResult.FIRST_USE
+        for pk in pinned["pinned_keys"]:
+            if pk["public_key_hash"] == key_hash:
+                pk["last_seen"] = now
+                return PinningResult.MATCHED
+
+        pinned_hashes = {pk["public_key_hash"] for pk in pinned["pinned_keys"]}
+        for k in document_keys or []:
+            h = jwk_thumbprint(k)
+            if h != key_hash and h in pinned_hashes:
+                self.add_key(domain, jwk)
+                return PinningResult.ROTATED
+        return PinningResult.CHANGED
 
     def add_key(self, domain: str, jwk: dict) -> None:
         """Add a key to an existing domain's pin set (e.g., during key rotation)."""
@@ -121,7 +136,12 @@ def check_pinning(store: KeyPinStore, domain: str, jwk: dict) -> str:
     Raises:
         AgentPinError: if key has changed since last pinned.
     """
-    result = store.check_and_pin(domain, jwk)
+    return check_pinning_set(store, domain, jwk, [jwk])
+
+
+def check_pinning_set(store: KeyPinStore, domain: str, jwk: dict, document_keys: List[dict]) -> str:
+    """check_pinning over a validated document's key set; see KeyPinStore.check_and_pin_set."""
+    result = store.check_and_pin_set(domain, jwk, document_keys)
     if result == PinningResult.CHANGED:
         raise AgentPinError(
             ErrorCode.KEY_PIN_MISMATCH,

@@ -7,7 +7,7 @@ use crate::domain::normalize_domain;
 use crate::error::{Error, ErrorCode};
 use crate::jwk::jwk_to_verifying_key;
 use crate::jwt;
-use crate::pinning::{check_pinning, KeyPinStore, PinningResult};
+use crate::pinning::{check_pinning_set, KeyPinStore, PinningResult};
 use crate::resolver::DiscoveryResolver;
 use crate::revocation::check_revocation;
 use crate::types::capability::{validate_capability, Capability};
@@ -622,13 +622,25 @@ fn verify_credential_core(
         }
     }
 
-    // Step 11: TOFU key pinning
-    match check_pinning(pin_store, &issuer, jwk) {
+    // Step 11: TOFU key pinning. The whole validated key set is pinned on
+    // first use and a rotated key is accepted when the document still carries
+    // an already-pinned key (spec §7.2/§7.3).
+    match check_pinning_set(pin_store, &issuer, jwk, &discovery.public_keys) {
         Ok(PinningResult::FirstUse) => {
             result.key_pinning = Some(KeyPinningStatus {
                 status: "first_use".to_string(),
                 first_seen: Some(Utc::now().to_rfc3339()),
             });
+        }
+        Ok(PinningResult::Rotated) => {
+            result.key_pinning = Some(KeyPinningStatus {
+                status: "rotated".to_string(),
+                first_seen: Some(Utc::now().to_rfc3339()),
+            });
+            result.warnings.push(format!(
+                "Key '{}' for '{}' was pinned by rotation continuity",
+                jwk.kid, issuer
+            ));
         }
         Ok(PinningResult::Matched) => {
             let first_seen = pin_store
@@ -1165,6 +1177,92 @@ mod tests {
         );
         assert!(!result2.valid);
         assert_eq!(result2.error_code, Some(ErrorCode::KeyPinMismatch));
+    }
+
+    #[test]
+    fn test_key_rotation_with_continuity_is_accepted_and_pinned() {
+        let mut f = setup();
+        let result1 = verify_credential_offline(
+            &f.jwt,
+            &f.discovery,
+            Some(&f.revocation),
+            &mut f.pin_store,
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert!(result1.valid);
+
+        // Spec §7.2 rotation: publish the new key next to the old one, then
+        // sign with the new key.
+        let kp2 = crypto::generate_key_pair().unwrap();
+        let vk2 = crypto::load_verifying_key(&kp2.public_key_pem).unwrap();
+        f.discovery
+            .public_keys
+            .push(verifying_key_to_jwk(&vk2, "test-2026-02"));
+        let sk2 = crypto::load_signing_key(&kp2.private_key_pem).unwrap();
+        let jwt2 = issue_credential(
+            &sk2,
+            "test-2026-02",
+            "example.com",
+            "urn:agentpin:example.com:agent",
+            Some("verifier.com"),
+            vec![Capability::from("read:data")],
+            None,
+            None,
+            3600,
+        )
+        .unwrap();
+        let result2 = verify_credential_offline(
+            &jwt2,
+            &f.discovery,
+            Some(&f.revocation),
+            &mut f.pin_store,
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert!(result2.valid, "{:?}", result2);
+        assert_eq!(result2.key_pinning.as_ref().unwrap().status, "rotated");
+        assert!(!result2.warnings.is_empty());
+
+        // The old key is retired from the document; the new key is now pinned.
+        f.discovery.public_keys.remove(0);
+        let result3 = verify_credential_offline(
+            &jwt2,
+            &f.discovery,
+            Some(&f.revocation),
+            &mut f.pin_store,
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert!(result3.valid, "{:?}", result3);
+        assert_eq!(result3.key_pinning.as_ref().unwrap().status, "pinned");
+    }
+
+    #[test]
+    fn test_first_use_pins_every_published_key() {
+        let mut f = setup();
+        let kp2 = crypto::generate_key_pair().unwrap();
+        let vk2 = crypto::load_verifying_key(&kp2.public_key_pem).unwrap();
+        f.discovery
+            .public_keys
+            .push(verifying_key_to_jwk(&vk2, "test-2026-02"));
+        let r = verify_credential_offline(
+            &f.jwt,
+            &f.discovery,
+            Some(&f.revocation),
+            &mut f.pin_store,
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert!(r.valid);
+        assert_eq!(
+            f.pin_store
+                .get_domain("example.com")
+                .unwrap()
+                .pinned_keys
+                .len(),
+            2
+        );
     }
 
     #[test]

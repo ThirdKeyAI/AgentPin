@@ -12,7 +12,7 @@ import {
     checkRevocation, fetchRevocationDocument, fetchRevocationDocumentIfPresent,
     verifyRevocationDocument, checkRevocationFreshness,
 } from './revocation.js';
-import { checkPinning, PinningResult } from './pinning.js';
+import { checkPinningSet, PinningResult } from './pinning.js';
 import { mergeConstraints } from './constraint.js';
 import { verifyAttestation, verifyChainDepth } from './delegation.js';
 import { normalizeDomain, validateHttpsUrlForDomain, defaultRevocationEndpoint } from './domain.js';
@@ -409,14 +409,22 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
         }
     }
 
-    // Step 11: TOFU key pinning
+    // Step 11: TOFU key pinning. The whole validated key set is pinned on
+    // first use and a rotated key is accepted when the document still carries
+    // an already-pinned key (spec §7.2/§7.3).
     try {
-        const pinResult = checkPinning(pinStore, issuer, jwk);
+        const pinResult = checkPinningSet(pinStore, issuer, jwk, discovery.public_keys || []);
         if (pinResult === PinningResult.FIRST_USE) {
             result.key_pinning = {
                 status: 'first_use',
                 first_seen: new Date().toISOString(),
             };
+        } else if (pinResult === PinningResult.ROTATED) {
+            result.key_pinning = {
+                status: 'rotated',
+                first_seen: new Date().toISOString(),
+            };
+            result.warnings.push(`Key '${jwk.kid}' for '${issuer}' was pinned by rotation continuity`);
         } else if (pinResult === PinningResult.MATCHED) {
             const domainData = pinStore.getDomain(issuer);
             const firstSeen = domainData?.pinned_keys?.[0]?.first_seen || null;

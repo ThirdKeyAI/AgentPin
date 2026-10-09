@@ -178,6 +178,25 @@ class TestVerifyCredentialOffline:
         assert not result2.valid
         assert result2.error_code == ErrorCode.KEY_PIN_MISMATCH
 
+    def test_key_rotation_with_continuity_accepted(self):
+        f = setup()
+        assert verify_credential_offline(
+            f["jwt"], f["discovery"], f["revocation"], f["pin_store"], "verifier.com", f["config"]
+        ).valid
+        priv2, pub2 = generate_key_pair()
+        f["discovery"]["public_keys"] = f["discovery"]["public_keys"] + [pem_to_jwk(pub2, "test-2026-02")]
+        jwt2 = issue_credential(
+            priv2, "test-2026-02", "example.com", "urn:agentpin:example.com:agent",
+            "verifier.com", [Capability("read:data")], None, None, 3600,
+        )
+        r2 = verify_credential_offline(jwt2, f["discovery"], f["revocation"], f["pin_store"], "verifier.com", f["config"])
+        assert r2.valid, r2
+        assert r2.key_pinning["status"] == "rotated"
+        f["discovery"]["public_keys"] = f["discovery"]["public_keys"][1:]
+        r3 = verify_credential_offline(jwt2, f["discovery"], f["revocation"], f["pin_store"], "verifier.com", f["config"])
+        assert r3.valid
+        assert r3.key_pinning["status"] == "pinned"
+
     def test_domain_mismatch(self):
         f = setup()
         f["discovery"]["entity"] = "other.com"

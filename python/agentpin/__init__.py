@@ -128,6 +128,7 @@ from .pinning import (
     KeyPinStore,
     PinningResult,
     check_pinning,
+    check_pinning_set,
 )
 from .revocation import (
     add_revoked_agent,
@@ -288,6 +289,7 @@ __all__ = [
     "KeyPinStore",
     "PinningResult",
     "check_pinning",
+    "check_pinning_set",
     # Delegation
     "canonical_attestation_input",
     "create_attestation",

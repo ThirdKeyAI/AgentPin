@@ -16,7 +16,7 @@ from .discovery import fetch_discovery_document, find_agent_by_id, find_key_by_k
 from .domain import default_revocation_endpoint, normalize_domain, validate_https_url_for_domain
 from .jwk import jwk_to_pem
 from .jwt import MalformedCredentialError, decode_jwt_unverified, verify_jwt
-from .pinning import KeyPinStore, PinningResult, check_pinning
+from .pinning import KeyPinStore, PinningResult, check_pinning_set
 from .revocation import (
     check_revocation,
     check_revocation_freshness,
@@ -337,11 +337,16 @@ def verify_credential_offline(
                 "Delegation chain present but not verified (require_delegation_verification is False)"
             )
 
-    # Step 11: TOFU key pinning
+    # Step 11: TOFU key pinning. The whole validated key set is pinned on
+    # first use and a rotated key is accepted when the document still carries
+    # an already-pinned key (spec §7.2/§7.3).
     try:
-        pin_result = check_pinning(pin_store, issuer, jwk)
+        pin_result = check_pinning_set(pin_store, issuer, jwk, discovery.get("public_keys") or [])
         if pin_result == PinningResult.FIRST_USE:
             result.key_pinning = {"status": "first_use", "first_seen": datetime.now(timezone.utc).isoformat()}
+        elif pin_result == PinningResult.ROTATED:
+            result.key_pinning = {"status": "rotated", "first_seen": datetime.now(timezone.utc).isoformat()}
+            result.warnings.append(f"Key '{jwk.get('kid', '')}' for '{issuer}' was pinned by rotation continuity")
         elif pin_result == PinningResult.MATCHED:
             domain_data = pin_store.get_domain(issuer)
             first_seen = None

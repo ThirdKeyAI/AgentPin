@@ -211,6 +211,48 @@ func TestKeyPinChangeRejected(t *testing.T) {
 	}
 }
 
+func TestKeyRotationWithContinuityAccepted(t *testing.T) {
+	f := setup(t)
+	if r1 := VerifyCredentialOffline(f.jwt, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg); !r1.Valid {
+		t.Fatalf("first verify failed: %+v", r1)
+	}
+	// Spec §7.2 rotation: publish the new key next to the old one, sign with it.
+	kp2, _ := crypto.GenerateKeyPair()
+	priv2, _ := crypto.LoadPrivateKey(kp2.PrivateKeyPEM)
+	pub2, _ := crypto.LoadPublicKey(kp2.PublicKeyPEM)
+	f.discovery.PublicKeys = append(f.discovery.PublicKeys, jwk.VerifyingKeyToJWK(pub2, "test-2026-02"))
+	jwt2, _ := credential.IssueCredential(
+		priv2, "test-2026-02", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, nil, nil, 3600,
+	)
+	r2 := VerifyCredentialOffline(jwt2, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg)
+	if !r2.Valid || r2.KeyPinning == nil || r2.KeyPinning.Status != "rotated" {
+		t.Fatalf("rotation with continuity rejected: %+v", r2)
+	}
+	if len(r2.Warnings) == 0 {
+		t.Fatal("rotation should be surfaced as a warning")
+	}
+	// Retire the old key; the new one is now pinned.
+	f.discovery.PublicKeys = f.discovery.PublicKeys[1:]
+	r3 := VerifyCredentialOffline(jwt2, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg)
+	if !r3.Valid || r3.KeyPinning.Status != "pinned" {
+		t.Fatalf("after retirement: %+v", r3)
+	}
+}
+
+func TestFirstUsePinsEveryPublishedKey(t *testing.T) {
+	f := setup(t)
+	kp2, _ := crypto.GenerateKeyPair()
+	pub2, _ := crypto.LoadPublicKey(kp2.PublicKeyPEM)
+	f.discovery.PublicKeys = append(f.discovery.PublicKeys, jwk.VerifyingKeyToJWK(pub2, "test-2026-02"))
+	if r := VerifyCredentialOffline(f.jwt, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg); !r.Valid {
+		t.Fatalf("%+v", r)
+	}
+	if n := len(f.pinStore.GetDomain("example.com").PinnedKeys); n != 2 {
+		t.Fatalf("pinned %d keys, want 2", n)
+	}
+}
+
 func TestVerifyWithTrustBundleResolver(t *testing.T) {
 	f := setup(t)
 	b := types.TrustBundle{

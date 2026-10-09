@@ -440,8 +440,10 @@ func verifyCredentialCore(
 		}
 	}
 
-	// Step 8: TOFU key pinning.
-	pr, perr := pinning.CheckPinning(pinStore, issuer, kk)
+	// Step 8: TOFU key pinning. The whole validated key set is pinned on
+	// first use and a rotated key is accepted when the document still carries
+	// an already-pinned key (spec §7.2/§7.3).
+	pr, perr := pinning.CheckPinningSet(pinStore, issuer, kk, disc.PublicKeys)
 	if perr != nil {
 		return failure(types.ErrKeyPinMismatch, fmt.Sprintf("Key for '%s' has changed since last pinned", issuer))
 	}
@@ -451,6 +453,13 @@ func verifyCredentialCore(
 			Status:    "first_use",
 			FirstSeen: time.Now().UTC().Format(time.RFC3339),
 		}
+	case pinning.ResultRotated:
+		result.KeyPinning = &KeyPinningStatus{
+			Status:    "rotated",
+			FirstSeen: time.Now().UTC().Format(time.RFC3339),
+		}
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("Key '%s' for '%s' was pinned by rotation continuity", kk.Kid, issuer))
 	case pinning.ResultMatched:
 		var first string
 		if pd := pinStore.GetDomain(issuer); pd != nil && len(pd.PinnedKeys) > 0 {

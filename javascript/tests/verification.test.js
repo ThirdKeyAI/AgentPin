@@ -187,6 +187,22 @@ describe('verifyCredentialOffline', () => {
         assert.strictEqual(result2.error_code, ErrorCode.KEY_PIN_MISMATCH);
     });
 
+    test('key rotation with continuity accepted and pinned', () => {
+        const f = setup();
+        assert.ok(verifyCredentialOffline(f.jwt, f.discovery, f.revocation, f.pinStore, 'verifier.com', f.config).valid);
+        const kp2 = generateKeyPair();
+        f.discovery.public_keys = [...f.discovery.public_keys, pemToJwk(kp2.publicKeyPem, 'test-2026-02')];
+        const jwt2 = issueCredential(kp2.privateKeyPem, 'test-2026-02', 'example.com',
+            'urn:agentpin:example.com:agent', 'verifier.com', [new Capability('read:data')], null, null, 3600);
+        const r2 = verifyCredentialOffline(jwt2, f.discovery, f.revocation, f.pinStore, 'verifier.com', f.config);
+        assert.ok(r2.valid, JSON.stringify(r2));
+        assert.strictEqual(r2.key_pinning.status, 'rotated');
+        f.discovery.public_keys = f.discovery.public_keys.slice(1);
+        const r3 = verifyCredentialOffline(jwt2, f.discovery, f.revocation, f.pinStore, 'verifier.com', f.config);
+        assert.ok(r3.valid);
+        assert.strictEqual(r3.key_pinning.status, 'pinned');
+    });
+
     test('domain mismatch', () => {
         const f = setup();
         f.discovery.entity = 'other.com';
