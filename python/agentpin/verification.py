@@ -164,6 +164,8 @@ def verify_credential_offline(
             check_revocation(revocation, payload["jti"], payload["sub"], header["kid"])
         except AgentPinError as e:
             return _failure(e.code, str(e))
+        except (KeyError, TypeError, AttributeError) as e:
+            return _failure(ErrorCode.DISCOVERY_INVALID, f"Revocation document invalid: {e}")
 
     # Step 7: Validate agent status
     agent = find_agent_by_id(discovery, payload["sub"])

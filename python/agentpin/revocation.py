@@ -58,17 +58,17 @@ def check_revocation(doc: dict, jti: str, agent_id: str, kid: str) -> None:
     Raises:
         AgentPinError: if revoked
     """
-    for rc in doc.get("revoked_credentials", []):
-        if rc["jti"] == jti:
-            raise AgentPinError(ErrorCode.CREDENTIAL_REVOKED, f"Credential {jti} revoked: {rc['reason']}")
+    for rc in doc.get("revoked_credentials") or []:
+        if isinstance(rc, dict) and rc.get("jti") == jti:
+            raise AgentPinError(ErrorCode.CREDENTIAL_REVOKED, f"Credential {jti} revoked: {rc.get('reason')}")
 
-    for ra in doc.get("revoked_agents", []):
-        if ra["agent_id"] == agent_id:
-            raise AgentPinError(ErrorCode.AGENT_INACTIVE, f"Agent {agent_id} revoked: {ra['reason']}")
+    for ra in doc.get("revoked_agents") or []:
+        if isinstance(ra, dict) and ra.get("agent_id") == agent_id:
+            raise AgentPinError(ErrorCode.AGENT_INACTIVE, f"Agent {agent_id} revoked: {ra.get('reason')}")
 
-    for rk in doc.get("revoked_keys", []):
-        if rk["kid"] == kid:
-            raise AgentPinError(ErrorCode.KEY_REVOKED, f"Key {kid} revoked: {rk['reason']}")
+    for rk in doc.get("revoked_keys") or []:
+        if isinstance(rk, dict) and rk.get("kid") == kid:
+            raise AgentPinError(ErrorCode.KEY_REVOKED, f"Key {kid} revoked: {rk.get('reason')}")
 
 
 def fetch_revocation_document(url: str, **fetch_opts: Any) -> dict:
@@ -146,6 +146,22 @@ def verify_revocation_document(doc: dict, discovery: dict) -> None:
             f"Revocation document entity '{doc.get('entity')}' does not match discovery entity "
             f"'{discovery.get('entity')}'",
         )
+    # Structural check (AP-8): every entry must carry its identifying field.
+    # An operator who publishes the wrong field name (e.g. "id") must get a
+    # hard failure, not a document that silently never matches anything.
+    for list_name, field in (
+        ("revoked_credentials", "jti"),
+        ("revoked_agents", "agent_id"),
+        ("revoked_keys", "kid"),
+    ):
+        entries = doc.get(list_name)
+        if entries is None:
+            continue
+        if not isinstance(entries, list):
+            raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"{list_name} is not an array")
+        for i, entry in enumerate(entries):
+            if not isinstance(entry, dict) or not isinstance(entry.get(field), str) or not entry.get(field):
+                raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"{list_name}[{i}] is missing {field}")
     if doc.get("signature") is not None:
         kid = doc.get("kid")
         if not isinstance(kid, str) or not kid:

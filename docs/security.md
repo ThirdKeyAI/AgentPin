@@ -279,19 +279,25 @@ Publish at `/.well-known/agent-identity-revocations.json` with a short cache TTL
   "agentpin_version": "0.1",
   "entity": "example.com",
   "revoked_credentials": [
-    { "id": "jti-123", "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z" }
+    { "jti": "jti-123", "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z" }
   ],
-  "revoked_agents": [],
+  "revoked_agents": [
+    { "agent_id": "urn:agentpin:example.com:retired-agent", "reason": "cessation_of_operation", "revoked_at": "2026-02-15T00:00:00Z" }
+  ],
   "revoked_keys": [
-    { "id": "example-2025-01", "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z" }
+    { "kid": "example-2025-01", "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z" }
   ],
   "updated_at": "2026-02-15T00:00:00Z"
 }
 ```
 
+The identifying fields are `jti` (credentials), `agent_id` (agents) and `kid` (keys), exactly as in spec §8.2. Every SDK validates the document structurally before using it: an entry that lacks its identifying field makes the whole document invalid and the credential is rejected with `DISCOVERY_INVALID`, so a mis-published schema can never silently disable revocation.
+
+Optionally sign the document with one of the discovery-document keys (`sign_revocation_document` / `signRevocationDocument` / `SignRevocationDocument`); it then carries `kid` and `signature` fields and every verifier checks the signature against the discovery keys. Verifiers can require this with `require_signed_revocation` and bound staleness with `revocation_max_age_secs`.
+
 ### Revocation Checking
 
-Verifiers MUST check revocation on every verification, regardless of discovery document cache state.
+Verifiers MUST check revocation on every verification, regardless of discovery document cache state. When the discovery document declares no `revocation_endpoint`, verifiers fetch the default `https://{domain}/.well-known/agent-identity-revocations.json`; a 404 there means no revocations are published, any other failure rejects the credential (fail-closed).
 
 ---
 

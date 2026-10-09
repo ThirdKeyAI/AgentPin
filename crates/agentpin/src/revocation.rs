@@ -293,6 +293,24 @@ mod tests {
         assert!(check_revocation_freshness(&doc, 3600).is_err());
     }
 
+    /// AP-8: a revocation document using the wrong field names (the schema
+    /// the old docs published) does not parse, so verifiers fail closed.
+    #[test]
+    fn test_wrong_field_names_do_not_parse() {
+        let wrong = r#"{
+          "agentpin_version": "0.1",
+          "entity": "example.com",
+          "revoked_credentials": [{"id": "jti-123", "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z"}],
+          "revoked_agents": [],
+          "revoked_keys": [{"id": "example-2025-01", "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z"}],
+          "updated_at": "2026-02-15T00:00:00Z"
+        }"#;
+        assert!(serde_json::from_str::<RevocationDocument>(wrong).is_err());
+        let right = wrong.replace("\"id\": \"jti-123\"", "\"jti\": \"jti-123\"")
+            .replace("\"id\": \"example-2025-01\"", "\"kid\": \"example-2025-01\"");
+        assert!(serde_json::from_str::<RevocationDocument>(&right).is_ok());
+    }
+
     #[test]
     fn test_check_revocation_clean() {
         let doc = build_revocation_document("example.com");

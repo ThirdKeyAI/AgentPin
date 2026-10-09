@@ -168,19 +168,23 @@ if agent is None or agent["status"] != "active":
 The verifier checks the revocation document (if available) for three revocation types:
 
 ```javascript
+// The document is validated structurally first: it must belong to the issuer
+// (entity), every entry must carry its identifying field, and a signature
+// (if present) must verify under a discovery key — otherwise DISCOVERY_INVALID.
+
 // Check credential-level revocation (by jti)
-if (revocation.revoked_credentials?.some(r => r.id === payload.jti)) {
-    return { valid: false, error_code: 'revoked' };
+if (revocation.revoked_credentials?.some(r => r.jti === payload.jti)) {
+    return { valid: false, error_code: 'CREDENTIAL_REVOKED' };
 }
 
-// Check agent-level revocation
-if (revocation.revoked_agents?.some(r => r.id === payload.sub)) {
-    return { valid: false, error_code: 'revoked' };
+// Check agent-level revocation (by agent_id)
+if (revocation.revoked_agents?.some(r => r.agent_id === payload.sub)) {
+    return { valid: false, error_code: 'AGENT_INACTIVE' };
 }
 
-// Check key-level revocation
-if (revocation.revoked_keys?.some(r => r.id === header.kid)) {
-    return { valid: false, error_code: 'revoked' };
+// Check key-level revocation (by kid)
+if (revocation.revoked_keys?.some(r => r.kid === header.kid)) {
+    return { valid: false, error_code: 'KEY_REVOKED' };
 }
 ```
 

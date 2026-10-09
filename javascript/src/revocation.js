@@ -79,7 +79,7 @@ export function addRevokedKey(doc, kid, reason) {
  * @throws {AgentPinError} if revoked
  */
 export function checkRevocation(doc, jti, agentId, kid) {
-    const rc = doc.revoked_credentials.find(r => r.jti === jti);
+    const rc = (doc.revoked_credentials || []).find(r => r && r.jti === jti);
     if (rc) {
         throw new AgentPinError(
             ErrorCode.CREDENTIAL_REVOKED,
@@ -87,7 +87,7 @@ export function checkRevocation(doc, jti, agentId, kid) {
         );
     }
 
-    const ra = doc.revoked_agents.find(r => r.agent_id === agentId);
+    const ra = (doc.revoked_agents || []).find(r => r && r.agent_id === agentId);
     if (ra) {
         throw new AgentPinError(
             ErrorCode.AGENT_INACTIVE,
@@ -95,7 +95,7 @@ export function checkRevocation(doc, jti, agentId, kid) {
         );
     }
 
-    const rk = doc.revoked_keys.find(r => r.kid === kid);
+    const rk = (doc.revoked_keys || []).find(r => r && r.kid === kid);
     if (rk) {
         throw new AgentPinError(
             ErrorCode.KEY_REVOKED,
@@ -191,6 +191,26 @@ export function verifyRevocationDocument(doc, discovery) {
             ErrorCode.DISCOVERY_INVALID,
             `Revocation document entity '${doc.entity}' does not match discovery entity '${discovery.entity}'`
         );
+    }
+    // Structural check (AP-8): every entry must carry its identifying field.
+    // An operator who publishes the wrong field name (e.g. "id") must get a
+    // hard failure, not a document that silently never matches anything.
+    const lists = [
+        ['revoked_credentials', 'jti'],
+        ['revoked_agents', 'agent_id'],
+        ['revoked_keys', 'kid'],
+    ];
+    for (const [list, field] of lists) {
+        const entries = doc[list];
+        if (entries === undefined || entries === null) continue;
+        if (!Array.isArray(entries)) {
+            throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, `${list} is not an array`);
+        }
+        entries.forEach((entry, i) => {
+            if (!entry || typeof entry !== 'object' || typeof entry[field] !== 'string' || !entry[field]) {
+                throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, `${list}[${i}] is missing ${field}`);
+            }
+        });
     }
     if (doc.signature !== undefined && doc.signature !== null) {
         if (typeof doc.kid !== 'string' || !doc.kid) {

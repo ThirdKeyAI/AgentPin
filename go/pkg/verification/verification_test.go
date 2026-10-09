@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/credential"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/crypto"
@@ -430,5 +431,31 @@ func TestCredentialTTLMaxEnforced(t *testing.T) {
 	lax.MaxTTLSecs = 10 * 86400
 	if r := VerifyCredentialOffline(twoDays, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", lax); r.ErrorCode != types.ErrCredentialExpired {
 		t.Fatalf("default ttl_max 86400 should reject: %+v", r)
+	}
+}
+
+// AP-8: a revocation document that uses the wrong field names (the schema
+// the old docs published) must fail closed, not be silently ignored.
+func TestRevocationDocumentWithWrongFieldNamesFailsClosed(t *testing.T) {
+	f := setup(t)
+	_, payload, _, _ := jwt.DecodeJWTUnverified(f.jwt)
+	raw := fmt.Sprintf(`{
+	  "agentpin_version": "0.1",
+	  "entity": "example.com",
+	  "revoked_credentials": [{"id": %q, "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z"}],
+	  "revoked_agents": [],
+	  "revoked_keys": [{"id": "test-2026-01", "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z"}],
+	  "updated_at": "2026-02-15T00:00:00Z"
+	}`, payload.Jti)
+	var rev types.RevocationDocument
+	if err := json.Unmarshal([]byte(raw), &rev); err != nil {
+		t.Fatal(err)
+	}
+	r := VerifyCredentialOffline(f.jwt, f.discovery, &rev, pinning.NewKeyPinStore(), "verifier.com", f.cfg)
+	if r.Valid {
+		t.Fatal("malformed revocation document must not be ignored")
+	}
+	if r.ErrorCode != types.ErrDiscoveryInvalid {
+		t.Fatalf("ErrorCode: %s", r.ErrorCode)
 	}
 }

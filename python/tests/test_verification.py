@@ -365,3 +365,26 @@ class TestClaimValidation:
             verify_credential_offline(two_days, f["discovery"], None, KeyPinStore(), "verifier.com", lax).error_code
             == ErrorCode.CREDENTIAL_EXPIRED
         )
+
+
+def test_revocation_document_with_wrong_field_names_fails_closed():
+    """AP-8: the schema the old docs published must fail closed, not crash or be ignored."""
+    f = setup()
+    _, payload, _ = decode_jwt_unverified(f["jwt"])
+    wrong = {
+        "agentpin_version": "0.1",
+        "entity": "example.com",
+        "revoked_credentials": [{"id": payload["jti"], "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z"}],
+        "revoked_agents": [],
+        "revoked_keys": [{"id": "test-2026-01", "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z"}],
+        "updated_at": "2026-02-15T00:00:00Z",
+    }
+    r = verify_credential_offline(f["jwt"], f["discovery"], wrong, KeyPinStore(), "verifier.com")
+    assert not r.valid
+    assert r.error_code == ErrorCode.DISCOVERY_INVALID
+
+
+def test_check_revocation_tolerates_malformed_entries_without_raising():
+    from agentpin.revocation import check_revocation
+
+    check_revocation({"revoked_credentials": [None, "x", {"id": "j"}], "revoked_keys": None}, "j", "a", "k")

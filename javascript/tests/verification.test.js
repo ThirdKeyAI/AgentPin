@@ -339,3 +339,21 @@ describe('claim validation (AP-5, AP-14, AP-18)', () => {
         assert.strictEqual(verifyCredentialOffline(twoDays, f.discovery, null, new KeyPinStore(), 'verifier.com', lax).error_code, ErrorCode.CREDENTIAL_EXPIRED);
     });
 });
+
+describe('revocation document structure (AP-8)', () => {
+    test('a document using the wrong field names fails closed instead of being ignored', () => {
+        const f = setup();
+        const { payload } = decodeJwtUnverified(f.jwt);
+        const wrong = {
+            agentpin_version: '0.1',
+            entity: 'example.com',
+            revoked_credentials: [{ id: payload.jti, reason: 'key_compromise', revoked_at: '2026-02-15T00:00:00Z' }],
+            revoked_agents: [],
+            revoked_keys: [{ id: 'test-2026-01', reason: 'key_compromise', revoked_at: '2026-02-15T00:00:00Z' }],
+            updated_at: '2026-02-15T00:00:00Z',
+        };
+        const r = verifyCredentialOffline(f.jwt, f.discovery, wrong, new KeyPinStore(), 'verifier.com', f.config);
+        assert.strictEqual(r.valid, false);
+        assert.strictEqual(r.error_code, ErrorCode.DISCOVERY_INVALID);
+    });
+});

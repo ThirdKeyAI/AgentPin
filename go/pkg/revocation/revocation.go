@@ -178,6 +178,24 @@ func VerifyRevocationDocument(doc *types.RevocationDocument, disc *types.Discove
 	if docEntity != discEntity {
 		return fmt.Errorf("revocation document entity '%s' does not match discovery entity '%s'", doc.Entity, disc.Entity)
 	}
+	// Structural check (AP-8): every entry must carry its identifying field.
+	// An operator who publishes the wrong field name (e.g. "id") must get a
+	// hard failure, not a document that silently never matches anything.
+	for i, rc := range doc.RevokedCredentials {
+		if rc.Jti == "" {
+			return fmt.Errorf("revoked_credentials[%d] is missing jti", i)
+		}
+	}
+	for i, ra := range doc.RevokedAgents {
+		if ra.AgentID == "" {
+			return fmt.Errorf("revoked_agents[%d] is missing agent_id", i)
+		}
+	}
+	for i, rk := range doc.RevokedKeys {
+		if rk.Kid == "" {
+			return fmt.Errorf("revoked_keys[%d] is missing kid", i)
+		}
+	}
 	if doc.Signature != "" {
 		if doc.Kid == "" {
 			return errors.New("signed revocation document has no kid")
