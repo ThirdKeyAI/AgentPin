@@ -258,16 +258,24 @@ func (r *ChainResolver) ResolveDiscovery(domain string) (*types.DiscoveryDocumen
 	return nil, lastErr
 }
 
-// ResolveRevocation implements DiscoveryResolver.
-func (r *ChainResolver) ResolveRevocation(domain string, doc *types.DiscoveryDocument) (*types.RevocationDocument, error) {
+// ResolveRevocation implements DiscoveryResolver. (nil, nil) ("no data
+// here") moves on to the next resolver; an error is remembered and only
+// surfaces when no later resolver produces a document, so a failing source
+// can never turn into "nothing to check" (AP-11, spec §8.4 fail-closed).
+func (r *ChainResolver) ResolveRevocation(domainName string, doc *types.DiscoveryDocument) (*types.RevocationDocument, error) {
+	var lastErr error
 	for _, sub := range r.Resolvers {
-		rev, err := sub.ResolveRevocation(domain, doc)
+		rev, err := sub.ResolveRevocation(domainName, doc)
 		if err != nil {
+			lastErr = err
 			continue
 		}
 		if rev != nil {
 			return rev, nil
 		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
 	}
 	return nil, nil
 }

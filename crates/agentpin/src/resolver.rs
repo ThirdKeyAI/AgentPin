@@ -279,19 +279,27 @@ impl DiscoveryResolver for ChainResolver {
         Err(last_err)
     }
 
+    /// Try each resolver in order. `Ok(None)` ("no data here") moves on to
+    /// the next resolver; an `Err` is remembered and only surfaces when no
+    /// later resolver produces a document, so a failing source can never
+    /// turn into "nothing to check" (AP-11, spec §8.4 fail-closed).
     fn resolve_revocation(
         &self,
         domain: &str,
         discovery: &DiscoveryDocument,
     ) -> Result<Option<RevocationDocument>, Error> {
+        let mut last_err: Option<Error> = None;
         for resolver in &self.resolvers {
             match resolver.resolve_revocation(domain, discovery) {
                 Ok(Some(doc)) => return Ok(Some(doc)),
                 Ok(None) => continue,
-                Err(_) => continue,
+                Err(e) => last_err = Some(e),
             }
         }
-        Ok(None)
+        match last_err {
+            Some(e) => Err(e),
+            None => Ok(None),
+        }
     }
 }
 
@@ -555,6 +563,57 @@ mod tests {
         assert!(chain.resolve_discovery("a.com").is_ok());
         assert!(chain.resolve_discovery("b.com").is_ok());
         assert!(chain.resolve_discovery("c.com").is_err());
+    }
+
+    /// A resolver whose revocation lookup always fails.
+    struct FailingRevocation;
+    impl DiscoveryResolver for FailingRevocation {
+        fn resolve_discovery(&self, domain: &str) -> Result<DiscoveryDocument, Error> {
+            Err(Error::Discovery(format!("no discovery for {}", domain)))
+        }
+        fn resolve_revocation(
+            &self,
+            _domain: &str,
+            _discovery: &DiscoveryDocument,
+        ) -> Result<Option<RevocationDocument>, Error> {
+            Err(Error::Revocation(
+                "revocation source unreachable".to_string(),
+            ))
+        }
+    }
+
+    /// AP-11: a failing revocation source inside a chain fails closed unless
+    /// a later resolver actually produces a document.
+    #[test]
+    fn test_chain_resolver_revocation_fail_closed() {
+        let doc = make_discovery("example.com");
+        let no_data = TrustBundleResolver::new(&TrustBundle::new("2026-02-10T00:00:00Z"));
+        let chain = ChainResolver::new(vec![Box::new(FailingRevocation), Box::new(no_data)]);
+        assert!(chain.resolve_revocation("example.com", &doc).is_err());
+
+        let rev = build_revocation_document("example.com");
+        let has_rev = TrustBundleResolver::new(&TrustBundle {
+            agentpin_bundle_version: "0.1".to_string(),
+            created_at: "2026-02-10T00:00:00Z".to_string(),
+            documents: vec![make_discovery("example.com")],
+            revocations: vec![rev],
+            expires_at: None,
+            kid: None,
+            signature: None,
+        });
+        let chain = ChainResolver::new(vec![Box::new(FailingRevocation), Box::new(has_rev)]);
+        assert!(chain
+            .resolve_revocation("example.com", &doc)
+            .unwrap()
+            .is_some());
+
+        // No failures and no data is still "nothing to check".
+        let empty = TrustBundleResolver::new(&TrustBundle::new("2026-02-10T00:00:00Z"));
+        let chain = ChainResolver::new(vec![Box::new(empty)]);
+        assert!(chain
+            .resolve_revocation("example.com", &doc)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

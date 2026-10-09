@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"errors"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/revocation"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
@@ -190,5 +191,39 @@ func TestResolversNormalizeLookups(t *testing.T) {
 	}
 	if _, err := tb.ResolveDiscovery("EXAMPLE.COM."); err != nil {
 		t.Fatalf("bundle lookup not normalized: %v", err)
+	}
+}
+
+type failingRevocation struct{}
+
+func (failingRevocation) ResolveDiscovery(d string) (*types.DiscoveryDocument, error) {
+	return nil, errors.New("no discovery for " + d)
+}
+
+func (failingRevocation) ResolveRevocation(string, *types.DiscoveryDocument) (*types.RevocationDocument, error) {
+	return nil, errors.New("revocation source unreachable")
+}
+
+// AP-11: a failing revocation source inside a chain fails closed unless a
+// later resolver actually produces a document.
+func TestChainResolverRevocationFailClosed(t *testing.T) {
+	doc := discovery.BuildDiscoveryDocument("example.com", types.EntityMaker,
+		[]types.JWK{{Kid: "k", Kty: "EC", Crv: "P-256", X: "x", Y: "y", Use: "sig"}}, nil, 2, "2026-01-15T00:00:00Z")
+	empty := NewTrustBundleResolver(&types.TrustBundle{AgentpinBundleVersion: "0.1"})
+	chain := NewChainResolver([]DiscoveryResolver{failingRevocation{}, empty})
+	if _, err := chain.ResolveRevocation("example.com", &doc); err == nil {
+		t.Fatal("failing source with no later data must fail closed")
+	}
+	rev := revocation.BuildRevocationDocument("example.com")
+	withRev := NewTrustBundleResolver(&types.TrustBundle{AgentpinBundleVersion: "0.1",
+		Documents: []types.DiscoveryDocument{doc}, Revocations: []types.RevocationDocument{rev}})
+	chain = NewChainResolver([]DiscoveryResolver{failingRevocation{}, withRev})
+	got, err := chain.ResolveRevocation("example.com", &doc)
+	if err != nil || got == nil {
+		t.Fatalf("later data must win: %v %v", got, err)
+	}
+	chain = NewChainResolver([]DiscoveryResolver{empty})
+	if got, err := chain.ResolveRevocation("example.com", &doc); err != nil || got != nil {
+		t.Fatalf("no failures and no data is still nil: %v %v", got, err)
 	}
 }
