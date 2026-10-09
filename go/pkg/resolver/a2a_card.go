@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/a2a"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/fetch"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
@@ -28,13 +29,20 @@ type A2aAgentCardResolver struct {
 	// (10 s timeout, no redirects) is used; a supplied client's redirect
 	// policy is always overridden so redirects are rejected.
 	Client *http.Client
+	// SkipDiscoveryBinding disables spec §4.10.4 step 5. By default, after
+	// the card signature verifies, the domain's
+	// .well-known/agent-identity.json is fetched and the card key must be
+	// published there by thumbprint (AP-4). Skip only when another channel
+	// establishes the card's provenance.
+	SkipDiscoveryBinding bool
 
 	mu       sync.RWMutex
 	lastCard *types.A2aAgentCard
 	lastFor  string
 }
 
-// NewA2aAgentCardResolver returns a resolver using the default HTTP client.
+// NewA2aAgentCardResolver returns a resolver using the default HTTP client
+// with discovery binding required.
 func NewA2aAgentCardResolver() *A2aAgentCardResolver {
 	return &A2aAgentCardResolver{}
 }
@@ -89,6 +97,18 @@ func (r *A2aAgentCardResolver) ResolveDiscovery(rawDomain string) (*types.Discov
 			types.ErrDomainMismatch,
 			fmt.Sprintf("AgentCard at %s declares agentpin endpoint host %s (mismatch)", domainName, endpointHost),
 		)
+	}
+	// Spec §4.10.4 step 5 (AP-4): bind the card to the AgentPin identity by
+	// requiring its key in the authoritative discovery document.
+	if !r.SkipDiscoveryBinding {
+		authoritative, err := discovery.FetchDiscoveryDocument(r.Client, domainName)
+		if err != nil {
+			return nil, types.NewVerificationError(types.ErrDiscoveryFetchFailed, err.Error())
+		}
+		if !CardKeyPublishedIn(authoritative, &card) {
+			return nil, types.NewVerificationError(types.ErrDiscoveryInvalid,
+				fmt.Sprintf("AgentCard key for %s is not published in the domain's discovery document", domainName))
+		}
 	}
 	doc, err := DeriveDiscoveryFromCard(&card)
 	if err != nil {

@@ -16,7 +16,8 @@ from typing import Any, Callable, Optional
 from .a2a import verify_agentpin_extension
 from .domain import normalize_domain
 from .net import fetch_json_bounded
-from .resolver_local import card_endpoint_host, derive_discovery_from_card
+from .discovery import fetch_discovery_document
+from .resolver_local import card_endpoint_host, card_key_published_in, derive_discovery_from_card
 from .types import AgentPinError, ErrorCode
 
 
@@ -41,9 +42,16 @@ class A2aAgentCardResolver:
         *,
         timeout: float = DEFAULT_TIMEOUT_SECS,
         fetch: Optional[_FetchFn] = None,
+        require_discovery_binding: bool = True,
     ) -> None:
+        """``require_discovery_binding`` (default ``True``) implements spec
+        §4.10.4 step 5: after the card signature verifies, the domain's
+        ``.well-known/agent-identity.json`` is fetched and the card key must
+        be published there by thumbprint (AP-4). Disable only when another
+        channel establishes the card's provenance."""
         self.timeout = timeout
         self._fetch = fetch
+        self.require_discovery_binding = require_discovery_binding
         self._last_card: Optional[dict] = None
         self._last_domain: Optional[str] = None
         self._lock = RLock()
@@ -84,6 +92,21 @@ class A2aAgentCardResolver:
                 f"AgentCard at {domain} declares agentpin endpoint host "
                 f"{endpoint_host} (mismatch)",
             )
+
+        # Spec §4.10.4 step 5 (AP-4): bind the card to the AgentPin identity
+        # by requiring its key in the authoritative discovery document.
+        if self.require_discovery_binding:
+            if self._fetch is not None:
+                authoritative = fetch_discovery_document(
+                    domain, timeout=self.timeout, http_get_impl=self._wrapped_fetch
+                )
+            else:
+                authoritative = fetch_discovery_document(domain, timeout=self.timeout)
+            if not card_key_published_in(authoritative, card):
+                raise AgentPinError(
+                    ErrorCode.DISCOVERY_INVALID,
+                    f"AgentCard key for {domain} is not published in the domain's discovery document",
+                )
 
         discovery = derive_discovery_from_card(card)
         with self._lock:

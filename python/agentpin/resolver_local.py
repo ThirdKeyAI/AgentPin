@@ -9,11 +9,12 @@ calls — supporting Symbiont's push-based external-agent registration flow.
 
 from datetime import datetime, timezone
 from threading import RLock
-from typing import Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
-from .a2a import verify_agentpin_extension
+from .a2a import extension_key_thumbprint, verify_agentpin_extension
 from .discovery import AllowedDomains
 from .domain import https_url_host, normalize_domain
+from .jwk import jwk_thumbprint
 from .types import AgentPinError, AgentStatus, EntityType, ErrorCode
 
 
@@ -105,29 +106,108 @@ def derive_discovery_from_card(card: dict) -> dict:
     }
 
 
+def card_key_published_in(doc: Optional[dict], card: Optional[dict]) -> bool:
+    """``True`` when the card's extension key appears, by RFC 7638 thumbprint,
+    in ``doc["public_keys"]`` (spec §4.10.4 step 5)."""
+    ext = card.get("agentpin") if isinstance(card, dict) else None
+    if not ext or not isinstance(doc, dict) or not isinstance(doc.get("public_keys"), list):
+        return False
+    tp = extension_key_thumbprint(ext)
+    return any(isinstance(k, dict) and jwk_thumbprint(k) == tp for k in doc["public_keys"])
+
+
 class LocalAgentCardStore:
     """In-memory store of pre-registered A2A AgentCards keyed by their
     AgentPin discovery domain.
 
     Cards are added via :meth:`register` (after the extension signature is
-    verified) and looked up via :meth:`resolve_discovery`. Pair with a chain
-    resolver to fall back to HTTP for unregistered domains.
+    verified and the trust anchor accepts the key) and looked up via
+    :meth:`resolve_discovery`. Pair with a chain resolver to fall back to
+    HTTP for unregistered domains.
+
+    Trust anchor (spec §4.10.4 step 5, AP-4, design issue 9): an AgentCard
+    is self-certifying, so verifying its signature proves nothing about which
+    domain it speaks for. The constructor therefore takes one of:
+
+    - ``trusted_thumbprints`` — allowlist of JWK thumbprints the operator
+      verified out of band (the default is an empty allowlist, which refuses
+      every registration until :meth:`trust_thumbprint` is called);
+    - ``resolver`` — the card key must be published, by thumbprint, in the
+      endpoint domain's discovery document as returned by
+      ``resolver.resolve_discovery(domain)``;
+    - ``unanchored=True`` — explicit opt-out for callers whose registration
+      channel already authenticates the registrant for the domain it claims
+      (the "documented substitute provenance check" the spec allows).
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        trusted_thumbprints: Optional[Iterable[str]] = None,
+        resolver: Optional[Any] = None,
+        unanchored: bool = False,
+    ) -> None:
         self._cards: Dict[str, dict] = {}
         self._docs: Dict[str, dict] = {}
         self._lock = RLock()
+        self._unanchored = bool(unanchored)
+        self._resolver = resolver
+        self._trusted: Optional[set] = None if (unanchored or resolver is not None) else set(trusted_thumbprints or [])
+
+    def trust_thumbprint(self, thumbprint: str) -> None:
+        """Add a trusted key thumbprint (allowlist-anchored stores only)."""
+        with self._lock:
+            if self._trusted is None:
+                raise AgentPinError(
+                    ErrorCode.DISCOVERY_INVALID, "LocalAgentCardStore is not anchored on a thumbprint allowlist"
+                )
+            self._trusted.add(thumbprint)
+
+    def _check_anchor(self, card: dict, domain: str) -> None:
+        tp = extension_key_thumbprint(card["agentpin"])
+        if self._unanchored:
+            return
+        if self._resolver is not None:
+            doc = self._resolver.resolve_discovery(domain)
+            if not card_key_published_in(doc, card):
+                raise AgentPinError(
+                    ErrorCode.DISCOVERY_INVALID,
+                    f"AgentCard key {tp} is not published in the discovery document for '{domain}'",
+                )
+            return
+        with self._lock:
+            trusted = tp in (self._trusted or set())
+        if not trusted:
+            raise AgentPinError(
+                ErrorCode.DISCOVERY_INVALID,
+                f"AgentCard key {tp} is not a trusted thumbprint for domain '{domain}'",
+            )
 
     def register(self, card: dict) -> None:
-        """Register an AgentCard. Verifies the extension signature before
-        storing. Re-registering an existing domain replaces the prior entry."""
+        """Register an AgentCard.
+
+        Verifies the extension signature, requires the trust anchor to accept
+        the card key for the endpoint's domain, then stores it. Re-registering
+        an existing domain replaces the prior entry.
+        """
         verify_agentpin_extension(card)
         domain = card_endpoint_host(card)
+        self._check_anchor(card, domain)
         doc = derive_discovery_from_card(card)
         with self._lock:
             self._cards[domain] = card
             self._docs[domain] = doc
+
+    def register_for_domain(self, card: dict, expected_domain: str) -> None:
+        """:meth:`register`, additionally requiring the card's endpoint host to
+        equal ``expected_domain`` (normalized)."""
+        expected = normalize_domain(expected_domain)
+        host = card_endpoint_host(card)
+        if host != expected:
+            raise AgentPinError(
+                ErrorCode.DOMAIN_MISMATCH,
+                f"AgentCard agentpin_endpoint host '{host}' does not match expected domain '{expected}'",
+            )
+        self.register(card)
 
     def __len__(self) -> int:
         with self._lock:

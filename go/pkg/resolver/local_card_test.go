@@ -5,7 +5,10 @@ import (
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/a2a"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/crypto"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/jwk"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
+	"strings"
 )
 
 func signedCard(t *testing.T) types.A2aAgentCard {
@@ -81,7 +84,7 @@ func TestDeriveDiscoveryFromCard(t *testing.T) {
 }
 
 func TestLocalAgentCardStoreRegisterThenResolve(t *testing.T) {
-	store := NewLocalAgentCardStore()
+	store := NewUnanchoredLocalAgentCardStore()
 	if err := store.Register(signedCard(t)); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +103,7 @@ func TestLocalAgentCardStoreRegisterThenResolve(t *testing.T) {
 func TestLocalAgentCardStoreRegisterPropagatesSignatureFailure(t *testing.T) {
 	card := signedCard(t)
 	card.URL = "https://attacker.example/agent" // tamper
-	store := NewLocalAgentCardStore()
+	store := NewUnanchoredLocalAgentCardStore()
 	if err := store.Register(card); err == nil {
 		t.Fatal("expected signature failure")
 	}
@@ -110,14 +113,14 @@ func TestLocalAgentCardStoreRegisterPropagatesSignatureFailure(t *testing.T) {
 }
 
 func TestLocalAgentCardStoreResolveMissing(t *testing.T) {
-	store := NewLocalAgentCardStore()
+	store := NewUnanchoredLocalAgentCardStore()
 	if _, err := store.ResolveDiscovery("missing.com"); err == nil {
 		t.Fatal("expected error for missing domain")
 	}
 }
 
 func TestLocalAgentCardStoreReRegisterReplaces(t *testing.T) {
-	store := NewLocalAgentCardStore()
+	store := NewUnanchoredLocalAgentCardStore()
 	if err := store.Register(signedCard(t)); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +133,7 @@ func TestLocalAgentCardStoreReRegisterReplaces(t *testing.T) {
 }
 
 func TestLocalAgentCardStoreRemove(t *testing.T) {
-	store := NewLocalAgentCardStore()
+	store := NewUnanchoredLocalAgentCardStore()
 	_ = store.Register(signedCard(t))
 	if !store.Remove("example.com") {
 		t.Fatal("expected remove to return true")
@@ -144,7 +147,7 @@ func TestLocalAgentCardStoreRemove(t *testing.T) {
 }
 
 func TestLocalAgentCardStoreResolveCard(t *testing.T) {
-	store := NewLocalAgentCardStore()
+	store := NewUnanchoredLocalAgentCardStore()
 	_ = store.Register(signedCard(t))
 	card, ok := store.ResolveCard("example.com")
 	if !ok || card.Name != "Tester" {
@@ -153,7 +156,7 @@ func TestLocalAgentCardStoreResolveCard(t *testing.T) {
 }
 
 func TestLocalAgentCardStoreResolveRevocationReturnsNil(t *testing.T) {
-	store := NewLocalAgentCardStore()
+	store := NewUnanchoredLocalAgentCardStore()
 	_ = store.Register(signedCard(t))
 	doc, _ := store.ResolveDiscovery("example.com")
 	rev, err := store.ResolveRevocation("example.com", doc)
@@ -177,7 +180,7 @@ func TestRegisterRejectsNonHTTPSOrIPEndpoint(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := NewLocalAgentCardStore().Register(card); err == nil {
+		if err := NewUnanchoredLocalAgentCardStore().Register(card); err == nil {
 			t.Errorf("endpoint %q accepted", bad)
 		}
 	}
@@ -185,7 +188,7 @@ func TestRegisterRejectsNonHTTPSOrIPEndpoint(t *testing.T) {
 
 // AP-3: store lookups are case-insensitive.
 func TestLocalAgentCardStoreNormalizesLookup(t *testing.T) {
-	s := NewLocalAgentCardStore()
+	s := NewUnanchoredLocalAgentCardStore()
 	if err := s.Register(signedCard(t)); err != nil {
 		t.Fatal(err)
 	}
@@ -194,5 +197,102 @@ func TestLocalAgentCardStoreNormalizesLookup(t *testing.T) {
 	}
 	if _, ok := s.ResolveCard("Example.com"); !ok {
 		t.Fatal("ResolveCard must normalize")
+	}
+}
+
+func storeTrusting(card types.A2aAgentCard) *LocalAgentCardStore {
+	return NewLocalAgentCardStoreWithThumbprints([]string{a2a.ExtensionKeyThumbprint(card.Agentpin)})
+}
+
+// AP-4 / design 9: a store with no trusted key refuses every registration.
+func TestDefaultStoreRefusesRegistration(t *testing.T) {
+	s := NewLocalAgentCardStore()
+	err := s.Register(signedCard(t))
+	if err == nil || !strings.Contains(err.Error(), "not a trusted thumbprint") {
+		t.Fatalf("expected refusal, got %v", err)
+	}
+	if !s.IsEmpty() {
+		t.Fatal("nothing should be stored")
+	}
+}
+
+// AP-4: an attacker's self-signed card claiming bank.example is refused by a
+// thumbprint-anchored store and by a resolver-anchored store whose
+// discovery document for bank.example publishes a different key.
+func TestForeignDomainClaimIsRefused(t *testing.T) {
+	kp, _ := crypto.GenerateKeyPair()
+	decl := &types.AgentDeclaration{AgentID: "urn:agentpin:example.com:tester", Name: "Tester",
+		Capabilities: []types.Capability{"read:*"}, Status: types.AgentActive}
+	evil, err := a2a.BuildAndSignAgentCard("https://attacker.example/agent", decl, kp.PrivateKeyPEM, "kid-1",
+		"https://bank.example/.well-known/agent-identity.json", a2a.BuildOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storeTrusting(signedCard(t)).Register(evil); err == nil {
+		t.Fatal("allowlist store must refuse an untrusted key")
+	}
+	bankKP, _ := crypto.GenerateKeyPair()
+	bankPub, _ := crypto.LoadPublicKey(bankKP.PublicKeyPEM)
+	bankDoc := discovery.BuildDiscoveryDocument("bank.example", types.EntityDeployer,
+		[]types.JWK{jwk.VerifyingKeyToJWK(bankPub, "bank-1")}, nil, 0, "2026-01-15T00:00:00Z")
+	b := types.TrustBundle{AgentpinBundleVersion: "0.1", Documents: []types.DiscoveryDocument{bankDoc}}
+	s := NewLocalAgentCardStoreWithResolver(NewTrustBundleResolver(&b))
+	err = s.Register(evil)
+	if err == nil || !strings.Contains(err.Error(), "not published") {
+		t.Fatalf("resolver store must refuse an unpublished key, got %v", err)
+	}
+	if !s.IsEmpty() {
+		t.Fatal("nothing should be stored")
+	}
+}
+
+// Spec §4.10.4 step 5: a resolver-anchored store accepts a published key.
+func TestResolverAnchorAcceptsPublishedKey(t *testing.T) {
+	kp, _ := crypto.GenerateKeyPair()
+	decl := &types.AgentDeclaration{AgentID: "urn:agentpin:example.com:tester", Name: "Tester",
+		Capabilities: []types.Capability{"read:*"}, Status: types.AgentActive}
+	card, _ := a2a.BuildAndSignAgentCard("https://example.com/agent", decl, kp.PrivateKeyPEM, "kid-1",
+		"https://example.com/.well-known/agent-identity.json", a2a.BuildOptions{})
+	pub, _ := crypto.LoadPublicKey(kp.PublicKeyPEM)
+	doc := discovery.BuildDiscoveryDocument("example.com", types.EntityBoth,
+		[]types.JWK{jwk.VerifyingKeyToJWK(pub, "kid-1")}, nil, 0, "2026-01-15T00:00:00Z")
+	if !CardKeyPublishedIn(&doc, &card) {
+		t.Fatal("CardKeyPublishedIn should be true")
+	}
+	b := types.TrustBundle{AgentpinBundleVersion: "0.1", Documents: []types.DiscoveryDocument{doc}}
+	s := NewLocalAgentCardStoreWithResolver(NewTrustBundleResolver(&b))
+	if err := s.Register(card); err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 1 {
+		t.Fatal("card should be stored")
+	}
+}
+
+func TestRegisterForDomainRequiresMatchingHost(t *testing.T) {
+	card := signedCard(t)
+	s := storeTrusting(card)
+	if err := s.RegisterForDomain(card, "other.com"); err == nil {
+		t.Fatal("mismatched domain must be refused")
+	}
+	if err := s.RegisterForDomain(card, "EXAMPLE.com."); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTrustThumbprintEnablesRegistration(t *testing.T) {
+	card := signedCard(t)
+	s := NewLocalAgentCardStore()
+	if err := s.Register(card); err == nil {
+		t.Fatal("empty allowlist must refuse")
+	}
+	if err := s.TrustThumbprint(a2a.ExtensionKeyThumbprint(card.Agentpin)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Register(card); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewUnanchoredLocalAgentCardStore().TrustThumbprint("x"); err == nil {
+		t.Fatal("unanchored store has no allowlist")
 	}
 }

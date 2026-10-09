@@ -72,6 +72,7 @@ from .dns import (
 from .resolver_local import (
     LocalAgentCardStore,
     card_endpoint_host,
+    card_key_published_in,
     derive_discovery_from_card,
 )
 from .resolver_a2a import (
@@ -263,6 +264,7 @@ __all__ = [
     "LocalAgentCardStore",
     "A2aAgentCardResolver",
     "card_endpoint_host",
+    "card_key_published_in",
     "derive_discovery_from_card",
     # Revocation
     "build_revocation_document",

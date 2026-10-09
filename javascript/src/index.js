@@ -168,6 +168,7 @@ export {
     LocalAgentCardStore,
     cardEndpointHost,
     deriveDiscoveryFromCard,
+    cardKeyPublishedIn,
 } from './resolverLocal.js';
 
 export {

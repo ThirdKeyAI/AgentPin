@@ -12,7 +12,8 @@
  */
 
 import { verifyAgentpinExtension } from './a2a.js';
-import { cardEndpointHost, deriveDiscoveryFromCard } from './resolverLocal.js';
+import { cardEndpointHost, deriveDiscoveryFromCard, cardKeyPublishedIn } from './resolverLocal.js';
+import { fetchDiscoveryDocument } from './discovery.js';
 import { normalizeDomain } from './domain.js';
 import { fetchJsonBounded } from './net.js';
 import { AgentPinError, ErrorCode } from './types.js';
@@ -25,9 +26,20 @@ const DEFAULT_TIMEOUT_MS = 10000;
  * exposes both the original card and the derived discovery document.
  */
 export class A2aAgentCardResolver {
-    constructor({ timeoutMs = DEFAULT_TIMEOUT_MS, fetchImpl } = {}) {
+    /**
+     * @param {object} [options]
+     * @param {number} [options.timeoutMs]
+     * @param {Function} [options.fetchImpl]
+     * @param {boolean} [options.requireDiscoveryBinding=true] - spec §4.10.4
+     *   step 5: after the card signature verifies, fetch the domain's
+     *   `.well-known/agent-identity.json` and require the card key to be
+     *   published there by thumbprint (AP-4). Disable only when another
+     *   channel establishes the card's provenance.
+     */
+    constructor({ timeoutMs = DEFAULT_TIMEOUT_MS, fetchImpl, requireDiscoveryBinding = true } = {}) {
         this.timeoutMs = timeoutMs;
         this._fetch = fetchImpl || globalThis.fetch;
+        this.requireDiscoveryBinding = requireDiscoveryBinding;
         this._lastCard = null;
         this._lastDomain = null;
     }
@@ -68,6 +80,18 @@ export class A2aAgentCardResolver {
                 ErrorCode.DOMAIN_MISMATCH,
                 `AgentCard at ${domain} declares agentpin endpoint host ${endpointHost} (mismatch)`
             );
+        }
+
+        // Spec §4.10.4 step 5 (AP-4): bind the card to the AgentPin identity
+        // by requiring its key in the authoritative discovery document.
+        if (this.requireDiscoveryBinding) {
+            const authoritative = await fetchDiscoveryDocument(domain, { fetchImpl: this._fetch, timeoutMs: this.timeoutMs });
+            if (!cardKeyPublishedIn(authoritative, card)) {
+                throw new AgentPinError(
+                    ErrorCode.DISCOVERY_INVALID,
+                    `AgentCard key for ${domain} is not published in the domain's discovery document`
+                );
+            }
         }
 
         const discovery = deriveDiscoveryFromCard(card);

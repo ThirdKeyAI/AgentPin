@@ -34,7 +34,7 @@ func TestCredentialVerifiesThroughCardDerivedDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := resolver.NewLocalAgentCardStore()
+	store := resolver.NewLocalAgentCardStoreWithThumbprints([]string{a2a.ExtensionKeyThumbprint(card.Agentpin)})
 	if err := store.Register(card); err != nil {
 		t.Fatal(err)
 	}
