@@ -122,3 +122,34 @@ describe('LocalAgentCardStore', () => {
         assert.deepEqual(doc.agents[0].constraints.allowed_domains, ['partner.com']);
     });
 });
+
+describe('credential verification through a card-derived discovery document', () => {
+    // AP-9 regression: the derived document must carry wire version "0.1";
+    // before the fix it was stamped "0.3" and the verifier rejected it.
+    it('verifies a credential signed with the card key', async () => {
+        const { issueCredential, verifyCredentialOffline, KeyPinStore, Capability } =
+            await import('../src/index.js');
+        const { privateKeyPem } = generateKeyPair();
+        const card = buildAndSignAgentCard(
+            'https://example.com/agent',
+            declaration(),
+            privateKeyPem,
+            'kid-1',
+            'https://example.com/.well-known/agent-identity.json'
+        );
+        const store = new LocalAgentCardStore();
+        store.register(card);
+        const doc = store.resolveDiscovery('example.com');
+        assert.equal(doc.agentpin_version, '0.1');
+
+        const jwt = issueCredential(
+            privateKeyPem, 'kid-1', 'example.com', 'urn:agentpin:example.com:tester',
+            null, [new Capability('read:data')], null, null, 3600
+        );
+        const result = verifyCredentialOffline(
+            jwt, doc, store.resolveRevocation('example.com', doc), new KeyPinStore(), null, undefined
+        );
+        assert.equal(result.valid, true, JSON.stringify(result));
+        assert.equal(result.agent_id, 'urn:agentpin:example.com:tester');
+    });
+});

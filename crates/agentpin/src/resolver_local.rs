@@ -195,7 +195,7 @@ pub(crate) fn derive_discovery_from_card(card: &A2aAgentCard) -> Result<Discover
     };
 
     Ok(DiscoveryDocument {
-        agentpin_version: "0.3".to_string(),
+        agentpin_version: "0.1".to_string(),
         entity: domain,
         entity_type: EntityType::Both,
         public_keys: vec![extension.public_key_jwk.clone()],
@@ -252,13 +252,66 @@ mod tests {
         }
     }
 
-    fn signed_card() -> A2aAgentCard {
+    fn signed_card_with_key() -> (A2aAgentCard, crate::crypto::KeyPair) {
         let kp = generate_key_pair().unwrap();
         let decl = declaration();
-        A2aAgentCardBuilder::from_declaration("https://example.com/agent", &decl)
+        let card = A2aAgentCardBuilder::from_declaration("https://example.com/agent", &decl)
             .agentpin_endpoint("https://example.com/.well-known/agent-identity.json")
             .sign(&kp.private_key_pem, "kid-1")
-            .unwrap()
+            .unwrap();
+        (card, kp)
+    }
+
+    fn signed_card() -> A2aAgentCard {
+        signed_card_with_key().0
+    }
+
+    /// Regression test for AP-9: card-derived discovery documents must carry
+    /// the wire protocol version ("0.1") so that the standard verifier
+    /// accepts them. Before the fix they were stamped "0.3" and every
+    /// credential resolved through the store failed with DISCOVERY_INVALID.
+    #[test]
+    fn credential_verifies_through_card_derived_discovery() {
+        use crate::credential::issue_credential;
+        use crate::crypto::load_signing_key;
+        use crate::pinning::KeyPinStore;
+        use crate::verification::{verify_credential_with_resolver, VerifierConfig};
+
+        let (card, kp) = signed_card_with_key();
+        let store = LocalAgentCardStore::new();
+        store.register(card).unwrap();
+
+        let doc = store.resolve_discovery("example.com").unwrap();
+        assert_eq!(doc.agentpin_version, "0.1");
+
+        let sk = load_signing_key(&kp.private_key_pem).unwrap();
+        let jwt = issue_credential(
+            &sk,
+            "kid-1",
+            "example.com",
+            "urn:agentpin:example.com:tester",
+            None,
+            vec![Capability::from("read:data")],
+            None,
+            None,
+            3600,
+        )
+        .unwrap();
+
+        let mut pin_store = KeyPinStore::new();
+        let result = verify_credential_with_resolver(
+            &jwt,
+            &store,
+            &mut pin_store,
+            None,
+            &VerifierConfig::default(),
+        );
+        assert!(result.valid, "expected valid, got {:?}", result);
+        assert_eq!(result.issuer.as_deref(), Some("example.com"));
+        assert_eq!(
+            result.agent_id.as_deref(),
+            Some("urn:agentpin:example.com:tester")
+        );
     }
 
     #[test]

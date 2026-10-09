@@ -172,7 +172,7 @@ func DeriveDiscoveryFromCard(card *types.A2aAgentCard) (types.DiscoveryDocument,
 	}
 
 	return types.DiscoveryDocument{
-		AgentpinVersion:    "0.3",
+		AgentpinVersion:    "0.1",
 		Entity:             domain,
 		EntityType:         types.EntityBoth,
 		PublicKeys:         []types.JWK{card.Agentpin.PublicKeyJWK},

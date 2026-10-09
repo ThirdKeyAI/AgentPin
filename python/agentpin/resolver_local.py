@@ -81,7 +81,7 @@ def derive_discovery_from_card(card: dict) -> dict:
         agent["constraints"] = constraints
 
     return {
-        "agentpin_version": "0.3",
+        "agentpin_version": "0.1",
         "entity": domain,
         "entity_type": EntityType.BOTH,
         "public_keys": [ext["public_key_jwk"]],

@@ -116,3 +116,42 @@ def test_allowed_domains_propagate_into_derived_doc():
     store.register(_signed_card())
     doc = store.resolve_discovery("example.com")
     assert doc["agents"][0]["constraints"]["allowed_domains"] == ["partner.com"]
+
+
+def test_credential_verifies_through_card_derived_discovery():
+    """AP-9 regression: the derived document must carry wire version "0.1".
+
+    Before the fix it was stamped "0.3" and every credential resolved through
+    the store failed with DISCOVERY_INVALID.
+    """
+    from agentpin import Capability, KeyPinStore, issue_credential, verify_credential_offline
+
+    private_pem, _ = generate_key_pair()
+    card = build_and_sign_agent_card(
+        "https://example.com/agent",
+        _declaration(),
+        private_pem,
+        "kid-1",
+        "https://example.com/.well-known/agent-identity.json",
+    )
+    store = LocalAgentCardStore()
+    store.register(card)
+    doc = store.resolve_discovery("example.com")
+    assert doc["agentpin_version"] == "0.1"
+
+    jwt_str = issue_credential(
+        private_pem,
+        "kid-1",
+        "example.com",
+        "urn:agentpin:example.com:tester",
+        None,
+        [Capability("read:data")],
+        None,
+        None,
+        3600,
+    )
+    result = verify_credential_offline(
+        jwt_str, doc, store.resolve_revocation("example.com", doc), KeyPinStore(), None
+    )
+    assert result.valid, result
+    assert result.agent_id == "urn:agentpin:example.com:tester"
