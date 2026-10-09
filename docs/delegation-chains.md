@@ -187,10 +187,20 @@ When a credential includes a delegation chain, the verifier walks the chain:
 ### JavaScript
 
 ```javascript
-import { verifyCredentialOffline, KeyPinStore } from 'agentpin';
+import { verifyCredentialOffline, verifyCredentialWithBundle, KeyPinStore } from 'agentpin';
 
 // The verifier receives a credential from tarnover.com's agent
-// The credential includes a delegation chain pointing back to anthropic.com
+// The credential includes a delegation chain pointing back to anthropic.com.
+// The verifier needs the Maker's discovery document too: pass a chain
+// resolver (any object with a synchronous resolveDiscovery(domain)), or use
+// a trust bundle that contains both documents.
+
+const chainResolver = {
+    resolveDiscovery(domain) {
+        if (domain === 'anthropic.com') return makerDiscovery;
+        throw new Error(`unknown attester ${domain}`);
+    },
+};
 
 const result = verifyCredentialOffline(
     credential,
@@ -198,21 +208,38 @@ const result = verifyCredentialOffline(
     null,                 // revocation
     new KeyPinStore(),
     'client-corp.com',    // expected audience
+    undefined,            // config (defaults: requireDelegationVerification = true)
+    chainResolver,
 );
 
-// result includes delegation chain validation
-if (result.valid && result.delegation_chain_valid) {
-    console.log('Agent verified with valid delegation chain');
-    console.log('Issuer:', result.issuer);           // tarnover.com
-    console.log('Agent:', result.agent_id);           // urn:agentpin:tarnover.com:scout-v2
+// With the default config, `valid` is only true when the chain verified
+if (result.valid) {
+    console.log(result.delegation_verified);           // true
+    console.log(result.delegation_chain);              // [{ domain: 'anthropic.com', role: 'maker', verified: true }]
+    console.log('Issuer:', result.issuer);             // tarnover.com
+    console.log('Agent:', result.agent_id);            // urn:agentpin:tarnover.com:scout-v2
     console.log('Capabilities:', result.capabilities); // ['read:public-api', 'write:report']
 }
+
+// Without a chain resolver the credential is rejected with DELEGATION_INVALID;
+// only `{ requireDelegationVerification: false }` accepts it, and then
+// result.delegation_verified is false and result.warnings is non-empty.
 ```
+
+The online verifiers (`verifyCredential`, `verify_credential`, `verify_credential_with_resolver`, `VerifyCredentialWithResolver`) resolve the attesters' documents themselves.
 
 ### Python
 
 ```python
 from agentpin import verify_credential_offline, KeyPinStore
+
+
+class ChainResolver:
+    def resolve_discovery(self, domain):
+        if domain == "anthropic.com":
+            return maker_discovery
+        raise RuntimeError(f"unknown attester {domain}")
+
 
 result = verify_credential_offline(
     credential_jwt=credential,
@@ -220,13 +247,16 @@ result = verify_credential_offline(
     revocation=None,
     pin_store=KeyPinStore(),
     audience="client-corp.com",
+    chain_resolver=ChainResolver(),
 )
 
-if result.valid and result.delegation_chain_valid:
-    print(f"Verified with delegation chain")
+if result.valid:  # only true when the chain verified (require_delegation_verification=True)
+    print(result.delegation_verified)   # True
     print(f"Issuer: {result.issuer}")
     print(f"Agent: {result.agent_id}")
 ```
+
+`verify_credential_with_bundle` passes the bundle itself as the chain resolver, so a bundle that contains both the Deployer's and the Maker's documents verifies the chain offline.
 
 ---
 
@@ -248,25 +278,30 @@ attestation = sign_maker_attestation(
         "capabilities": ["read:public-api", "read:codebase", "write:report"],
     },
 )
-# Returns a Base64url-encoded signature
+# Returns an attestation dict whose "attestation" is a standard-base64 DER signature
 ```
 
 ### Verifying a Maker Attestation
 
 During delegation chain verification, the verifier:
 
-1. Fetches the Maker's discovery document
-2. Finds the public key matching the delegation chain's `kid`
-3. Verifies the attestation signature over the Deployer's agent declaration
+1. Resolves the Maker's discovery document (normalized domain)
+2. Finds the public key matching the delegation chain's `kid` and checks it is a usable, unexpired signature key
+3. Verifies the attestation signature over the domain-separated attestation input (`agentpin-attestation-v1` context; attester domain, role, agent id, delegatee domain and agent id, capabilities hash, attester `kid`, optional `exp`)
+4. Checks that the credential's capabilities stay within what the Maker declares for the attested agent, and that the agent is active
+5. Bounds the chain depth by the minimum `max_delegation_depth` of every participant
 
 ```python
-from agentpin.crypto import verify_es256
+from agentpin import find_key_by_kid, jwk_to_pem, verify_attestation
 
-# Reconstruct the canonical agent declaration
-canonical = canonicalize(deployer_agent_declaration)
-
-# Verify the Maker's signature
-valid = verify_es256(maker_public_key, canonical, attestation_bytes)
+maker_key = find_key_by_kid(maker_discovery, attestation["kid"])
+verify_attestation(
+    attestation,
+    jwk_to_pem(maker_key),
+    "tarnover.com",                              # delegatee domain (the credential's iss)
+    "urn:agentpin:tarnover.com:scout-v2",        # delegatee agent id (the credential's sub)
+    credential_capabilities,                     # the credential's capabilities
+)  # raises AgentPinError(DELEGATION_INVALID) on failure
 ```
 
 ---

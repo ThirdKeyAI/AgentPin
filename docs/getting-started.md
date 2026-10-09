@@ -289,7 +289,7 @@ if (result.valid) {
     console.log('Agent:', result.agent_id);
     console.log('Issuer:', result.issuer);
     console.log('Capabilities:', result.capabilities);
-    console.log('Key pinning:', result.key_pinning); // 'first_use' | 'matched'
+    console.log('Key pinning:', result.key_pinning.status); // 'first_use' | 'pinned'
 } else {
     console.error('Verification failed:', result.error_code, result.error_message);
 }

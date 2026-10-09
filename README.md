@@ -18,7 +18,7 @@ AgentPin lets organizations publish verifiable identity for their AI agents. Iss
 - **Trust bundles** for air-gapped and enterprise environments
 - **Signed A2A AgentCards** (v0.3) — extends the [A2A](https://github.com/google-a2a/A2A) AgentCard format with an AgentPin cryptographic-identity payload. `LocalAgentCardStore` for push-registered agents, `A2aAgentCardResolver` for `.well-known/agent-card.json` fetches.
 - **DNS TXT cross-verification** (v0.3) — second-channel trust via `_agentpin.{domain}` TXT records (`v=agentpin1; kid=...; fp=sha256:<hex>`), defending against HTTPS-origin and TLS cert mis-issuance compromise.
-- **`AllowedDomains` typed wrapper** (v0.3) — empty-list-equals-unrestricted convention with intersection semantics for cross-protocol scoping with SchemaPin v1.4 `A2aVerificationContext`.
+- **`AllowedDomains` typed wrapper** (v0.3; tri-state since v0.4) — absent = unrestricted, `[]` = restricted to nothing, with pattern-aware intersection semantics for cross-protocol scoping with SchemaPin v1.4 `A2aVerificationContext`.
 - **Cross-language** — Rust, JavaScript, Python, and Go SDKs produce interoperable credentials and AgentCards. Cards signed in any SDK verify cleanly in the other three.
 
 ## Quick Start

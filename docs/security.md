@@ -25,7 +25,17 @@ Single-algorithm enforcement prevents:
 - **Downgrade attacks** — Attacker forces weaker algorithm selection
 - **Implementation complexity** — Fewer code paths means fewer bugs
 
-All three implementations (Rust, JavaScript, Python) validate `alg: "ES256"` before any other processing.
+All four implementations (Rust, Go, JavaScript, Python) validate `alg: "ES256"` and `typ: "agentpin-credential+jwt"` before any other processing, and then validate the claim shape (`MALFORMED_CREDENTIAL`) before any cryptography.
+
+### Domain-separated signatures
+
+Every object AgentPin signs other than the credential JWT itself — challenge responses, delegation attestations, A2A AgentCards, signed revocation documents and signed trust bundles — is signed over a domain-separated input:
+
+```
+<context> || 0x00 || (u32_be(len(field)) || field)*
+```
+
+with a fixed context label per object type (`agentpin-response-v1`, `agentpin-attestation-v1`, `agentpin-agentcard-v1`, `agentpin-revocation-v1`, `agentpin-bundle-v1`). The JWT keeps its RFC 7515 `header.payload` input, whose alphabet can never contain the NUL byte that terminates every context label, so a signature produced for one object type can never be replayed as another. In particular, answering a mutual-authentication challenge can never yield a credential signature: the responder also refuses any nonce that is not exactly 22 canonical base64url characters.
 
 ---
 
@@ -39,10 +49,7 @@ All three implementations (Rust, JavaScript, Python) validate `alg: "ES256"` bef
 - Use separate keys for separate environments (dev, staging, production)
 
 ```bash
-# Set restrictive permissions on private key files
-chmod 600 ./keys/*.private.pem
-
-# Verify permissions
+# keygen creates private keys with mode 0600; verify after copying them elsewhere
 ls -la ./keys/*.private.pem
 # -rw------- 1 agentpin agentpin 227 Feb 15 2026 example-2026-01.private.pem
 ```
@@ -59,7 +66,7 @@ Rotate keys regularly. Recommended schedule:
 
 **Rotation procedure:**
 
-1. Generate new key pair
+1. Generate new key pair (`agentpin keygen` creates the private key with mode `0600` and refuses to overwrite an existing key unless `--force`)
 2. Add new public key to discovery document
 3. Reduce discovery document cache TTL during transition
 4. Begin issuing credentials with new key
@@ -157,9 +164,9 @@ Trust-On-First-Use pinning protects against key substitution attacks after initi
 
 ### How It Works
 
-1. First verification for a domain: public key fingerprint (JWK thumbprint per RFC 7638) is stored
+1. First verification for a domain: public key fingerprint (JWK thumbprint per RFC 7638) is stored under the normalized domain name (lowercase, trailing dot removed, IDNA A-labels) — `EXAMPLE.COM` and `example.com` share one pin
 2. Subsequent verifications: key must match the stored fingerprint
-3. Key change detected: verification fails with `key_changed` error
+3. Key change detected: verification fails with `KEY_PIN_MISMATCH`
 
 ### Pin Store Persistence
 
@@ -187,18 +194,20 @@ with open(PIN_FILE, "w") as f:
 
 ### Handling Key Changes
 
-A `key_changed` result requires investigation:
+A `KEY_PIN_MISMATCH` failure requires investigation:
 
 ```python
-if result.key_pinning == "changed":
+if not result.valid and result.error_code == ErrorCode.KEY_PIN_MISMATCH:
     # This is a security event — do not silently accept
     log_security_event(
-        event="key_changed",
-        domain=result.issuer,
+        event="key_pin_mismatch",
+        domain=payload_issuer,
         action="verification_rejected",
     )
     # Require manual approval before accepting the new key
 ```
+
+On success `result.key_pinning` is an object: `{"status": "first_use" | "pinned", "first_seen": ...}`.
 
 Legitimate key changes (rotation) should be communicated out-of-band. Update the pin store explicitly:
 
@@ -222,7 +231,7 @@ pinStore.addKey(domain, newJwk);
 
 **Threat:** An agent claims authorization from an operator who never granted it.
 
-**Mitigation:** Delegation chains require a `maker_attestation` — a cryptographic signature from the Maker. The Deployer cannot forge this without the Maker's private key.
+**Mitigation:** Delegation chains require a Maker attestation — a cryptographic signature from the Maker over the domain-separated attestation input (attester domain and key id, role, agent id, delegatee domain and agent id, capabilities hash, optional expiry). Every verifier resolves the attester's discovery document, verifies the signature, checks that the credential's capabilities stay within what the attester declared for the agent, and bounds the chain depth. A chain that cannot be verified is rejected by default (`require_delegation_verification`); the Deployer cannot forge an attestation without the Maker's private key.
 
 ### Capability Inflation
 
@@ -238,6 +247,7 @@ pinStore.addKey(domain, newJwk);
 - HTTPS provides transport-layer integrity
 - TOFU pinning detects key changes after initial verification
 - Redirect rejection prevents redirect-based attacks
+- `revocation_endpoint` and `a2a_endpoint` must be `https://` URLs on the entity's own host; anything else makes the document invalid
 
 ### Replay Attacks
 
@@ -255,8 +265,9 @@ pinStore.addKey(domain, newJwk);
 
 **Mitigation:**
 - Revocation at credential, agent, and key levels
-- Short credential TTLs limit exposure window
+- Short credential TTLs limit exposure window; verifiers enforce both their own cap and the agent's declared `credential_ttl_max`
 - TOFU pinning detects key substitution at verifiers that already pinned the legitimate key
+- `KeyPair` zeroizes the private PEM on drop and redacts it from `Debug` output (Rust)
 
 ---
 
@@ -307,7 +318,9 @@ Verifiers MUST check revocation on every verification, regardless of discovery d
 
 - Discovery documents MUST be served over HTTPS
 - TLS certificates MUST be valid (not expired, not self-signed in production)
-- HTTP redirects MUST NOT be followed during discovery document fetching
+- HTTP redirects MUST NOT be followed during discovery, revocation or AgentCard fetching
+- Every fetch is bounded: 10 s timeout, 1 MiB body cap (both by `Content-Length` and while streaming), JSON `Content-Type` required
+- `iss` is normalized and must be a bare hostname: a value with a scheme, port, path, userinfo or IP literal is rejected before any request is sent
 
 ### No-Redirect Policy
 
@@ -343,11 +356,12 @@ location /.well-known/agent-identity.json {
 
 ## Cross-Language Interoperability
 
-All three AgentPin implementations (Rust, JavaScript, Python) produce interoperable credentials:
+All four AgentPin implementations (Rust, Go, JavaScript, Python) produce interoperable credentials:
 
-- All use DER-encoded ECDSA signatures
-- All use identical JSON field names
+- All use DER-encoded ECDSA signatures (deliberately not RFC 7515 raw `r||s`; see spec §5.1)
+- All use identical JSON field names and strict, unpadded base64url
 - A credential issued by one language can be verified by any other
+- The shared `testdata/conformance/` vectors are loaded by all four test suites and include must-reject cases
 
 Verify cross-language compatibility in your test suite:
 

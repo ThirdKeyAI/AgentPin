@@ -10,18 +10,18 @@ When a verifier receives an AgentPin credential (JWT), it performs these steps i
 
 | Step | Name | Failure Mode |
 |------|------|-------------|
-| 1 | JWT Parsing | `invalid_format` — malformed JWT structure |
-| 2 | Algorithm Check | `invalid_algorithm` — must be ES256 |
-| 3 | Temporal Validation | `expired` or `not_yet_valid` — check `exp`, `iat`, `nbf` |
-| 4 | Discovery Resolution | `discovery_failed` — cannot fetch/resolve discovery document |
-| 5 | Signature Verification | `invalid_signature` — ECDSA signature does not match |
-| 6 | Domain Binding | `domain_mismatch` — issuer domain doesn't match discovery entity |
-| 7 | Key Matching | `key_not_found` — `kid` not in discovery document's public keys |
-| 8 | Agent Status | `agent_inactive` — agent not declared or status is not `active` |
-| 9 | Revocation Checking | `revoked` — credential, agent, or key is revoked |
-| 10 | Capability Validation | `capability_mismatch` — claimed capabilities exceed declared |
-| 11 | Delegation Chain | `delegation_invalid` — chain verification failure |
-| 12 | TOFU Key Pinning | `key_changed` — key doesn't match previously pinned key |
+| 1 | JWT Parsing | `ALGORITHM_REJECTED` — malformed structure, wrong `alg` or `typ`; `MALFORMED_CREDENTIAL` — claims missing, mistyped or inconsistent |
+| 2 | Algorithm Check | `ALGORITHM_REJECTED` — must be ES256 |
+| 3 | Temporal Validation | `CREDENTIAL_EXPIRED` — `exp`, `iat`, `nbf`, max TTL and `credential_ttl_max` |
+| 4 | Discovery Resolution | `DISCOVERY_FETCH_FAILED` — cannot fetch/resolve discovery document; `DISCOVERY_INVALID` — malformed document or non-hostname `iss` |
+| 5 | Signature Verification | `SIGNATURE_INVALID` — ECDSA signature does not match |
+| 6 | Domain Binding | `DOMAIN_MISMATCH` — normalized issuer domain doesn't match discovery entity |
+| 7 | Key Matching | `KEY_NOT_FOUND` — `kid` not in discovery document, or key not usable for signatures; `KEY_EXPIRED` |
+| 8 | Agent Status | `AGENT_NOT_FOUND` / `AGENT_INACTIVE` |
+| 9 | Revocation Checking | `CREDENTIAL_REVOKED` / `AGENT_INACTIVE` / `KEY_REVOKED`; `DISCOVERY_INVALID` for a malformed or foreign revocation document |
+| 10 | Capability Validation | `CAPABILITY_EXCEEDED` — claimed capabilities exceed declared, or violate the taxonomy |
+| 11 | Delegation Chain | `DELEGATION_INVALID` / `DELEGATION_DEPTH_EXCEEDED` — chain verification failure, including a chain that cannot be verified |
+| 12 | TOFU Key Pinning | `KEY_PIN_MISMATCH` — key doesn't match previously pinned key |
 
 ---
 
@@ -41,7 +41,7 @@ The parser splits on `.`, Base64url-decodes each segment, and validates the JSON
 
 **Header fields:**
 - `alg` — Algorithm (must be `ES256`)
-- `typ` — Type (must be `JWT`)
+- `typ` — Type (must be `agentpin-credential+jwt`)
 - `kid` — Key ID (references a key in the discovery document)
 
 **Payload fields:**
@@ -55,14 +55,16 @@ The parser splits on `.`, Base64url-decodes each segment, and validates the JSON
 - `constraints` — Object with constraint fields
 - `delegation_chain` — Array of delegation attestations
 
+Claim shape is validated here: `iss`/`sub`/`jti` must be non-empty strings, `iat`/`exp` non-negative integers with `exp > iat`, `capabilities` an array of strings and `agentpin_version` `"0.1"`. Anything else fails with `MALFORMED_CREDENTIAL` before any cryptography runs. Base64url segments must be strict (no padding, canonical bits).
+
 ### Step 2: Algorithm Check
 
 AgentPin mandates ES256 (ECDSA with P-256) exclusively. Any other algorithm is immediately rejected. This prevents algorithm confusion attacks where an attacker substitutes a weaker algorithm.
 
 ```javascript
 // The verifier checks:
-if (header.alg !== 'ES256') {
-    return { valid: false, error_code: 'invalid_algorithm' };
+if (header.alg !== 'ES256' || header.typ !== 'agentpin-credential+jwt') {
+    return { valid: false, error_code: 'ALGORITHM_REJECTED' };
 }
 ```
 
@@ -84,17 +86,21 @@ if payload["exp"] < now - clock_skew:
 if payload["iat"] > now + clock_skew:
     raise VerificationError("not_yet_valid")
 
-# Check TTL doesn't exceed maximum
+# Check TTL doesn't exceed the verifier's cap ...
 ttl = payload["exp"] - payload["iat"]
 if ttl > max_ttl_secs:
-    raise VerificationError("ttl_exceeded")
+    raise VerificationError("CREDENTIAL_EXPIRED")
+
+# ... and, once the agent is found (step 8), the agent's own declared cap
+if ttl > agent.get("credential_ttl_max", 86400):
+    raise VerificationError("CREDENTIAL_EXPIRED")
 ```
 
-**Best practice:** Use short-lived credentials (hours, not days). The default maximum TTL is 86400 seconds (24 hours).
+**Best practice:** Use short-lived credentials (hours, not days). The default maximum TTL is 86400 seconds (24 hours), and the agent declaration's `credential_ttl_max` (spec §5.7) is enforced as a second, per-agent cap.
 
 ### Step 4: Discovery Resolution
 
-The verifier extracts the `iss` (issuer) claim and resolves the discovery document. Resolution can happen via:
+The verifier extracts the `iss` (issuer) claim, normalizes it (lowercase, one trailing dot removed, IDNA A-labels) and rejects anything that is not a bare hostname — a scheme, port, path, userinfo or IP literal fails with `DISCOVERY_INVALID` before any request is sent. It then resolves the discovery document. Resolution can happen via:
 
 1. **Online** — Fetch `https://{iss}/.well-known/agent-identity.json` over HTTPS
 2. **Offline** — Use a pre-provided discovery document
@@ -110,37 +116,32 @@ const response = await fetch(
 const discovery = await response.json();
 ```
 
-HTTP redirects are rejected to prevent redirect-based attacks.
+HTTP redirects are rejected to prevent redirect-based attacks; every fetch has a 10 s timeout, a 1 MiB body cap and requires a JSON content type.
 
 ### Step 5: Signature Verification
 
 The verifier resolves the public key using the `kid` from the JWT header, then verifies the ES256 signature over the `header.payload` portion of the JWT.
 
 ```python
-from agentpin.crypto import verify_es256
+from agentpin import find_key_by_kid, jwk_to_pem, verify_jwt
 
-# Find the public key matching the kid
-public_key = None
-for key in discovery["public_keys"]:
-    if key["kid"] == header["kid"]:
-        public_key = key
-        break
+# Find the public key matching the kid; it must be a usable signature key
+# (use == "sig", key_ops includes "verify" when present, exp not passed)
+jwk = find_key_by_kid(discovery, header["kid"])
+if jwk is None:
+    raise VerificationError("KEY_NOT_FOUND")
 
-if public_key is None:
-    raise VerificationError("key_not_found")
-
-# Verify the ECDSA signature
-signing_input = f"{encoded_header}.{encoded_payload}"
-is_valid = verify_es256(public_key, signing_input, signature)
+# Verify the ECDSA signature over "<header>.<payload>" (DER-encoded signature)
+verify_jwt(credential_jwt, jwk_to_pem(jwk))
 ```
 
 ### Step 6: Domain Binding
 
-The `iss` claim in the JWT must match the `entity` field in the discovery document:
+The normalized `iss` claim in the JWT must match the normalized `entity` field in the discovery document, and the document's `revocation_endpoint` / `a2a_endpoint` (when present) must be `https://` URLs on that same host:
 
 ```javascript
-if (payload.iss !== discovery.entity) {
-    return { valid: false, error_code: 'domain_mismatch' };
+if (normalizeDomain(payload.iss) !== normalizeDomain(discovery.entity)) {
+    return { valid: false, error_code: 'DOMAIN_MISMATCH' };
 }
 ```
 
@@ -160,7 +161,7 @@ for a in discovery["agents"]:
         break
 
 if agent is None or agent["status"] != "active":
-    raise VerificationError("agent_inactive")
+    raise VerificationError("AGENT_INACTIVE")
 ```
 
 ### Step 9: Revocation Checking
@@ -193,39 +194,35 @@ if (revocation.revoked_keys?.some(r => r.kid === header.kid)) {
 Capabilities in the credential must be a subset of capabilities declared for the agent in the discovery document:
 
 ```python
-declared_capabilities = set(agent["capabilities"])
-claimed_capabilities = set(payload["capabilities"])
+from agentpin import capabilities_subset
 
-if not claimed_capabilities.issubset(declared_capabilities):
-    raise VerificationError("capability_mismatch")
+if not capabilities_subset(agent["capabilities"], payload["capabilities"]):
+    raise VerificationError("CAPABILITY_EXCEEDED")
 ```
 
-Wildcard capabilities (`read:*`) in the discovery document match any specific capability (`read:data`, `read:logs`).
+Wildcard capabilities (`read:*`) in the discovery document match any specific capability (`read:data`, `read:logs`). `admin:*` is never accepted, and with `strict_capabilities` (the default) every capability must follow the §10 taxonomy. Constraints are then merged: the credential may only narrow the discovery declaration's constraints, and the result carries the effective (merged) set.
 
 ### Step 11: Delegation Chain Verification
 
 If the credential includes a delegation chain, the verifier walks the chain to confirm both software provenance (Maker) and operational authorization (Deployer):
 
-1. Fetch the Maker's discovery document
-2. Verify the Maker's attestation signature
-3. Confirm capabilities narrow (never widen) at each delegation level
-4. Check delegation depth doesn't exceed `max_delegation_depth`
+1. Resolve the attester's discovery document (through the same resolver used for the issuer, a dedicated chain resolver, a trust bundle, or pre-fetched over HTTPS)
+2. Verify the attestation signature with the attester's key (`kid`) over the domain-separated attestation input, with delegatee = the credential's `iss`/`sub` and the credential's capabilities
+3. Confirm capabilities narrow (never widen): the credential's capabilities must be within what the attester declares for the attested agent, which must be active
+4. Check delegation depth doesn't exceed the minimum `max_delegation_depth` across all participants
 
 ```javascript
-for (const link of delegationChain) {
-    const makerDiscovery = await fetchDiscovery(link.domain);
-    const makerKey = findKey(makerDiscovery, link.kid);
-
-    if (!verifySignature(makerKey, link.attestation, link.payload)) {
-        return { valid: false, error_code: 'delegation_invalid' };
-    }
-
+for (const link of payload.delegation_chain) {
+    const attesterDoc = chainResolver.resolveDiscovery(normalizeDomain(link.domain));
+    const key = findKeyByKid(attesterDoc, link.kid);
+    verifyAttestation(link, jwkToPem(key), payload.iss, payload.sub, payload.capabilities);
     // Capabilities must narrow at each level
-    if (!isSubset(link.capabilities, parentCapabilities)) {
-        return { valid: false, error_code: 'delegation_invalid' };
-    }
+    validateCredentialAgainstDiscovery(payload.capabilities, findAgentById(attesterDoc, link.agent_id).capabilities);
 }
+verifyChainDepth(payload.delegation_chain.length, [discovery.max_delegation_depth, ...attesterDepths]);
 ```
+
+A chain that cannot be verified (for example offline with no chain resolver) is rejected with `DELEGATION_INVALID`. Only with `require_delegation_verification` set to false is such a credential accepted, and then the result carries `delegation_verified: false` and a warning.
 
 ### Step 12: TOFU Key Pinning
 
@@ -246,8 +243,10 @@ elif result == PinningResult.MATCHED:
     pass
 elif result == PinningResult.CHANGED:
     # KEY CHANGED — possible attack
-    raise VerificationError("key_changed")
+    raise VerificationError("KEY_PIN_MISMATCH")
 ```
+
+Pins are keyed on the normalized issuer domain, so case variants and trailing dots share one pin set.
 
 ---
 
@@ -261,26 +260,27 @@ The verification result includes:
   "agent_id": "urn:agentpin:example.com:my-agent",
   "issuer": "example.com",
   "capabilities": ["read:data", "write:reports"],
-  "constraints": {},
-  "key_pinning": "first_use",
-  "delegation_chain_valid": true,
-  "error_code": null,
-  "error_message": null,
-  "verified_at": "2026-02-15T12:00:00Z"
+  "constraints": { "allowed_domains": ["*.client-corp.com"], "rate_limit": "100/hour" },
+  "delegation_verified": true,
+  "delegation_chain": [ { "domain": "maker.com", "role": "maker", "verified": true } ],
+  "key_pinning": { "status": "first_use", "first_seen": "2026-02-15T12:00:00Z" },
+  "warnings": []
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `valid` | boolean | Overall verification result |
+| `valid` | boolean | Overall verification result. `true` only when every present feature verified (strict result) |
 | `agent_id` | string | Verified agent identifier (URN) |
-| `issuer` | string | Verified issuer domain |
+| `issuer` | string | Verified issuer domain (normalized) |
 | `capabilities` | array | Validated capabilities |
-| `constraints` | object | Applied constraints |
-| `key_pinning` | string | `first_use`, `matched`, or `changed` |
-| `delegation_chain_valid` | boolean | Whether delegation chain verified |
+| `constraints` | object | Effective constraints: discovery defaults narrowed by the credential |
+| `delegation_verified` | boolean | Whether the delegation chain verified (absent when no chain) |
+| `delegation_chain` | array | One `{domain, role, verified}` entry per attestation |
+| `key_pinning` | object | `{"status": "first_use" \| "pinned", "first_seen": ...}` |
 | `error_code` | string | Error code if `valid` is false |
 | `error_message` | string | Human-readable error description |
+| `warnings` | array | Non-fatal notes (only non-empty with explicit opt-outs) |
 
 ---
 
@@ -292,8 +292,12 @@ Both JavaScript and Python verifiers accept a configuration object:
 
 ```javascript
 const config = {
-    clockSkewSecs: 60,     // allowed clock skew (default: 60)
-    maxTtlSecs: 86400,     // maximum credential TTL (default: 86400)
+    clockSkewSecs: 60,                   // allowed clock skew (default: 60)
+    maxTtlSecs: 86400,                   // maximum credential TTL (default: 86400)
+    strictCapabilities: true,            // enforce the capability taxonomy (default: true)
+    requireDelegationVerification: true, // reject chains that cannot be verified (default: true)
+    requireSignedRevocation: false,      // reject unsigned revocation documents (default: false)
+    revocationMaxAgeSecs: null,          // reject stale revocation documents when set
 };
 
 const result = verifyCredentialOffline(jwt, discovery, null, pinStore, audience, config);
@@ -307,6 +311,10 @@ from agentpin import VerifierConfig
 config = VerifierConfig(
     clock_skew_secs=60,
     max_ttl_secs=86400,
+    strict_capabilities=True,
+    require_delegation_verification=True,
+    require_signed_revocation=False,
+    revocation_max_age_secs=None,
 )
 
 result = verify_credential_offline(jwt, discovery, None, pin_store, audience, config)
@@ -320,16 +328,19 @@ All verification errors include an `error_code` and `error_message`:
 
 | Error Code | Meaning | Action |
 |-----------|---------|--------|
-| `invalid_format` | JWT is malformed | Check credential encoding |
-| `invalid_algorithm` | Not ES256 | Only ES256 credentials are accepted |
-| `expired` | Credential has expired | Issue a new credential |
-| `not_yet_valid` | `iat` is in the future | Check clock synchronization |
-| `discovery_failed` | Cannot resolve discovery document | Check domain and network |
-| `invalid_signature` | Signature verification failed | Credential may be tampered |
-| `domain_mismatch` | Issuer doesn't match discovery entity | Possible impersonation |
-| `key_not_found` | `kid` not in discovery document | Key may have been rotated |
-| `agent_inactive` | Agent not active in discovery | Agent may be suspended |
-| `revoked` | Credential, agent, or key is revoked | Do not trust this credential |
-| `capability_mismatch` | Capabilities exceed declared scope | Possible capability inflation |
-| `delegation_invalid` | Delegation chain verification failed | Check chain integrity |
-| `key_changed` | TOFU pin violation | Possible key substitution attack |
+| `ALGORITHM_REJECTED` | JWT structure, `alg` or `typ` is wrong | Only ES256 `agentpin-credential+jwt` credentials are accepted |
+| `MALFORMED_CREDENTIAL` | Claims missing, mistyped or inconsistent | Check the issuer's claim set |
+| `CREDENTIAL_EXPIRED` | Expired, not yet valid, or lifetime over a cap | Issue a new credential |
+| `DISCOVERY_FETCH_FAILED` | Cannot resolve discovery or revocation document | Check domain and network |
+| `DISCOVERY_INVALID` | Discovery/revocation document failed validation, or `iss` is not a hostname | Fix the published documents |
+| `SIGNATURE_INVALID` | Signature verification failed | Credential may be tampered |
+| `DOMAIN_MISMATCH` | Issuer doesn't match discovery entity | Possible impersonation |
+| `KEY_NOT_FOUND` | `kid` not in discovery document, or key not usable for signatures | Key may have been rotated |
+| `KEY_EXPIRED` | Key `exp` passed or unparsable | Rotate the key |
+| `AGENT_NOT_FOUND` / `AGENT_INACTIVE` | Agent not declared / not active | Agent may be suspended |
+| `CREDENTIAL_REVOKED` / `KEY_REVOKED` | Credential or key is revoked | Do not trust this credential |
+| `CAPABILITY_EXCEEDED` | Capabilities exceed declared scope or violate the taxonomy | Possible capability inflation |
+| `CONSTRAINT_VIOLATION` | Credential widens a discovery constraint | Narrow the credential's constraints |
+| `DELEGATION_INVALID` / `DELEGATION_DEPTH_EXCEEDED` | Delegation chain verification failed or could not be performed | Check chain integrity |
+| `AUDIENCE_MISMATCH` | `aud` does not match the verifier | Issue for the right audience |
+| `KEY_PIN_MISMATCH` | TOFU pin violation | Possible key substitution attack |
