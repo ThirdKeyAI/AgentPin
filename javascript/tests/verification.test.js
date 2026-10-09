@@ -357,3 +357,19 @@ describe('revocation document structure (AP-8)', () => {
         assert.strictEqual(r.error_code, ErrorCode.DISCOVERY_INVALID);
     });
 });
+
+describe('effective constraints (AP-15)', () => {
+    test('a credential that omits constraints inherits the discovery defaults; widening is rejected', () => {
+        const f = setup();
+        f.discovery.agents[0].constraints = { allowed_domains: ['*.client-corp.com'], rate_limit: '100/hour' };
+        const jwt = issueCredential(f.kp.privateKeyPem, 'test-2026-01', 'example.com', 'urn:agentpin:example.com:agent',
+            'verifier.com', [new Capability('read:data')], null, null, 3600);
+        const r = verifyCredentialOffline(jwt, f.discovery, null, new KeyPinStore(), 'verifier.com', f.config);
+        assert.ok(r.valid, JSON.stringify(r));
+        assert.deepStrictEqual(r.constraints.allowed_domains, ['*.client-corp.com']);
+        assert.strictEqual(r.constraints.rate_limit, '100/hour');
+        const wide = issueCredential(f.kp.privateKeyPem, 'test-2026-01', 'example.com', 'urn:agentpin:example.com:agent',
+            'verifier.com', [new Capability('read:data')], { allowed_domains: ['evil.com'] }, null, 3600);
+        assert.strictEqual(verifyCredentialOffline(wide, f.discovery, null, new KeyPinStore(), 'verifier.com', f.config).error_code, ErrorCode.CONSTRAINT_VIOLATION);
+    });
+});

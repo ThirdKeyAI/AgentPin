@@ -11,7 +11,7 @@ use crate::pinning::{check_pinning, KeyPinStore, PinningResult};
 use crate::resolver::DiscoveryResolver;
 use crate::revocation::check_revocation;
 use crate::types::capability::Capability;
-use crate::types::constraint::{constraints_subset_of, Constraints};
+use crate::types::constraint::{merge_constraints, Constraints};
 use crate::types::discovery::{AgentStatus, DiscoveryDocument};
 use crate::types::revocation::RevocationDocument;
 
@@ -337,13 +337,22 @@ pub fn verify_credential_offline(
         return VerificationResult::failure(ErrorCode::CapabilityExceeded, &e.to_string());
     }
 
-    // Step 9: Validate constraints
-    if !constraints_subset_of(&agent.constraints, &payload.constraints) {
-        return VerificationResult::failure(
-            ErrorCode::ConstraintViolation,
-            "Credential constraints are less restrictive than discovery defaults",
-        );
-    }
+    // Step 9: Validate constraints and compute the effective (merged) set the
+    // consumer must enforce: discovery defaults narrowed by the credential
+    // (AP-15).
+    let effective_constraints =
+        match merge_constraints(agent.constraints.as_ref(), payload.constraints.as_ref()) {
+            Ok(merged) => merged,
+            Err(reason) => {
+                return VerificationResult::failure(
+                    ErrorCode::ConstraintViolation,
+                    &format!(
+                        "Credential constraints are less restrictive than discovery defaults: {}",
+                        reason
+                    ),
+                )
+            }
+        };
 
     // Step 10: Validate delegation chain (if present) — signature verification
     // requires fetching each domain's discovery doc, which is only available
@@ -352,7 +361,7 @@ pub fn verify_credential_offline(
         &payload.sub,
         &issuer,
         payload.capabilities.clone(),
-        payload.constraints.clone(),
+        effective_constraints,
         KeyPinningStatus {
             status: "unknown".to_string(),
             first_seen: None,
@@ -1257,6 +1266,74 @@ mod tests {
             &lax,
         );
         assert_eq!(r.error_code, Some(ErrorCode::CredentialExpired));
+    }
+
+    /// AP-15: a credential that omits constraints inherits the discovery
+    /// declaration's constraints in the result instead of reporting none.
+    #[test]
+    fn test_omitted_constraints_inherit_discovery_defaults() {
+        let mut f = setup();
+        f.discovery.agents[0].constraints = Some(Constraints {
+            allowed_domains: Some(vec!["*.client-corp.com".to_string()]),
+            rate_limit: Some("100/hour".to_string()),
+            ..Default::default()
+        });
+        let sk = crypto::load_signing_key(&f.private_key_pem).unwrap();
+        let jwt = issue_credential(
+            &sk,
+            "test-2026-01",
+            "example.com",
+            "urn:agentpin:example.com:agent",
+            Some("verifier.com"),
+            vec![Capability::from("read:data")],
+            None,
+            None,
+            3600,
+        )
+        .unwrap();
+        let r = verify_credential_offline(
+            &jwt,
+            &f.discovery,
+            None,
+            &mut KeyPinStore::new(),
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert!(r.valid, "{:?}", r);
+        let c = r
+            .constraints
+            .expect("effective constraints must be present");
+        assert_eq!(
+            c.allowed_domains,
+            Some(vec!["*.client-corp.com".to_string()])
+        );
+        assert_eq!(c.rate_limit.as_deref(), Some("100/hour"));
+
+        // A credential that tries to widen allowed_domains is rejected.
+        let wide = issue_credential(
+            &sk,
+            "test-2026-01",
+            "example.com",
+            "urn:agentpin:example.com:agent",
+            Some("verifier.com"),
+            vec![Capability::from("read:data")],
+            Some(Constraints {
+                allowed_domains: Some(vec!["evil.com".to_string()]),
+                ..Default::default()
+            }),
+            None,
+            3600,
+        )
+        .unwrap();
+        let r = verify_credential_offline(
+            &wide,
+            &f.discovery,
+            None,
+            &mut KeyPinStore::new(),
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert_eq!(r.error_code, Some(ErrorCode::ConstraintViolation));
     }
 
     #[test]

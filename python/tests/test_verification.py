@@ -388,3 +388,25 @@ def test_check_revocation_tolerates_malformed_entries_without_raising():
     from agentpin.revocation import check_revocation
 
     check_revocation({"revoked_credentials": [None, "x", {"id": "j"}], "revoked_keys": None}, "j", "a", "k")
+
+
+def test_omitted_constraints_inherit_discovery_defaults():
+    """AP-15: the result carries the effective (merged) constraints; widening is rejected."""
+    f = setup()
+    f["discovery"]["agents"][0]["constraints"] = {"allowed_domains": ["*.client-corp.com"], "rate_limit": "100/hour"}
+    jwt_str = issue_credential(
+        f["priv"], "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+        "verifier.com", [Capability("read:data")], None, None, 3600,
+    )
+    r = verify_credential_offline(jwt_str, f["discovery"], None, KeyPinStore(), "verifier.com")
+    assert r.valid, r
+    assert r.constraints["allowed_domains"] == ["*.client-corp.com"]
+    assert r.constraints["rate_limit"] == "100/hour"
+    wide = issue_credential(
+        f["priv"], "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+        "verifier.com", [Capability("read:data")], {"allowed_domains": ["evil.com"]}, None, 3600,
+    )
+    assert (
+        verify_credential_offline(wide, f["discovery"], None, KeyPinStore(), "verifier.com").error_code
+        == ErrorCode.CONSTRAINT_VIOLATION
+    )

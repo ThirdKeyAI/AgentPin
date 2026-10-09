@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from .constraint import constraints_subset_of
+from .constraint import merge_constraints
 from .credential import validate_credential_against_discovery
 from .discovery import fetch_discovery_document, find_agent_by_id, find_key_by_kid, validate_discovery_document
 from .domain import default_revocation_endpoint, normalize_domain, validate_https_url_for_domain
@@ -191,11 +191,15 @@ def verify_credential_offline(
     except AgentPinError as e:
         return _failure(ErrorCode.CAPABILITY_EXCEEDED, str(e))
 
-    # Step 9: Validate constraints
-    if not constraints_subset_of(agent.get("constraints"), payload.get("constraints")):
+    # Step 9: Validate constraints and compute the effective (merged) set the
+    # consumer must enforce: discovery defaults narrowed by the credential
+    # (AP-15).
+    try:
+        effective_constraints = merge_constraints(agent.get("constraints"), payload.get("constraints"))
+    except ValueError as e:
         return _failure(
             ErrorCode.CONSTRAINT_VIOLATION,
-            "Credential constraints are less restrictive than discovery defaults",
+            f"Credential constraints are less restrictive than discovery defaults: {e}",
         )
 
     # Step 10: Delegation chain (offline: note only)
@@ -203,7 +207,7 @@ def verify_credential_offline(
         payload["sub"],
         issuer,
         payload.get("capabilities", []),
-        payload.get("constraints"),
+        effective_constraints,
         {"status": "unknown", "first_seen": None},
     )
 

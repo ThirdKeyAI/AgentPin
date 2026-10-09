@@ -10,6 +10,7 @@ from .capability import (
 from .constraint import (
     constraints_subset_of,
     domain_pattern_matches,
+    merge_constraints,
     parse_rate_limit,
 )
 from .credential import (
@@ -228,6 +229,7 @@ __all__ = [
     "parse_rate_limit",
     "domain_pattern_matches",
     "constraints_subset_of",
+    "merge_constraints",
     # Credential
     "issue_credential",
     "validate_credential_against_discovery",

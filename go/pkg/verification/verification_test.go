@@ -459,3 +459,21 @@ func TestRevocationDocumentWithWrongFieldNamesFailsClosed(t *testing.T) {
 		t.Fatalf("ErrorCode: %s", r.ErrorCode)
 	}
 }
+
+// AP-15: a credential that omits constraints inherits the discovery
+// declaration's constraints in the result; widening is rejected.
+func TestOmittedConstraintsInheritDiscoveryDefaults(t *testing.T) {
+	f := setup(t)
+	f.discovery.Agents[0].Constraints = &types.Constraints{AllowedDomains: []string{"*.client-corp.com"}, RateLimit: "100/hour"}
+	jwtStr, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, nil, nil, 3600)
+	r := VerifyCredentialOffline(jwtStr, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg)
+	if !r.Valid || r.Constraints == nil || len(r.Constraints.AllowedDomains) != 1 || r.Constraints.RateLimit != "100/hour" {
+		t.Fatalf("effective constraints missing: %+v", r)
+	}
+	wide, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, &types.Constraints{AllowedDomains: []string{"evil.com"}}, nil, 3600)
+	if r := VerifyCredentialOffline(wide, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg); r.ErrorCode != types.ErrConstraintViolation {
+		t.Fatalf("widening must be rejected: %+v", r)
+	}
+}

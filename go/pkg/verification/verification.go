@@ -237,9 +237,13 @@ func VerifyCredentialOffline(
 		return failure(types.ErrCapabilityExceeded, err.Error())
 	}
 
-	// Constraints subset.
-	if !types.ConstraintsSubsetOf(agent.Constraints, payload.Constraints) {
-		return failure(types.ErrConstraintViolation, "Credential constraints are less restrictive than discovery defaults")
+	// Constraints: validate and compute the effective (merged) set the
+	// consumer must enforce — discovery defaults narrowed by the credential
+	// (AP-15).
+	effectiveConstraints, err := types.MergeConstraints(agent.Constraints, payload.Constraints)
+	if err != nil {
+		return failure(types.ErrConstraintViolation,
+			fmt.Sprintf("Credential constraints are less restrictive than discovery defaults: %v", err))
 	}
 
 	// Build success result; pinning + delegation populated below.
@@ -248,7 +252,7 @@ func VerifyCredentialOffline(
 		AgentID:      payload.Sub,
 		Issuer:       issuer,
 		Capabilities: payload.Capabilities,
-		Constraints:  payload.Constraints,
+		Constraints:  effectiveConstraints,
 		Warnings:     []string{},
 	}
 

@@ -60,6 +60,7 @@ export {
     parseRateLimit,
     domainPatternMatches,
     constraintsSubsetOf,
+    mergeConstraints,
 } from './constraint.js';
 
 export {

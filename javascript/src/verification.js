@@ -12,7 +12,7 @@ import {
     verifyRevocationDocument, checkRevocationFreshness,
 } from './revocation.js';
 import { checkPinning, PinningResult } from './pinning.js';
-import { constraintsSubsetOf } from './constraint.js';
+import { mergeConstraints } from './constraint.js';
 import { normalizeDomain, validateHttpsUrlForDomain, defaultRevocationEndpoint } from './domain.js';
 import { ErrorCode, AgentPinError } from './types.js';
 
@@ -230,11 +230,16 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
         return failureResult(ErrorCode.CAPABILITY_EXCEEDED, e.message);
     }
 
-    // Step 9: Validate constraints
-    if (!constraintsSubsetOf(agent.constraints, payload.constraints)) {
+    // Step 9: Validate constraints and compute the effective (merged) set the
+    // consumer must enforce: discovery defaults narrowed by the credential
+    // (AP-15).
+    let effectiveConstraints;
+    try {
+        effectiveConstraints = mergeConstraints(agent.constraints, payload.constraints);
+    } catch (e) {
         return failureResult(
             ErrorCode.CONSTRAINT_VIOLATION,
-            'Credential constraints are less restrictive than discovery defaults'
+            `Credential constraints are less restrictive than discovery defaults: ${e.message}`
         );
     }
 
@@ -243,7 +248,7 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
         payload.sub,
         issuer,
         payload.capabilities,
-        payload.constraints,
+        effectiveConstraints,
         { status: 'unknown', first_seen: null }
     );
 
