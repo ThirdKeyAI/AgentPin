@@ -116,10 +116,13 @@ pub async fn run(args: VerifyArgs) -> anyhow::Result<()> {
     let output = serde_json::to_string_pretty(&result)?;
     println!("{}", output);
 
-    // Persist pin store if path was provided
+    // Persist pin store if path was provided: write to a sibling temp file
+    // with restrictive permissions and rename into place, so a crash can
+    // never leave a truncated store and the file is not world-readable
+    // (AP-16).
     if let Some(path) = &args.pin_store {
         let json = pin_store.to_json()?;
-        fs::write(path, json)?;
+        write_atomic(std::path::Path::new(path), json.as_bytes(), 0o600)?;
     }
 
     if !result.valid {
@@ -127,6 +130,45 @@ pub async fn run(args: VerifyArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Write `contents` to `path` atomically (temp file + rename) with `mode`.
+fn write_atomic(path: &std::path::Path, contents: &[u8], mode: u32) -> anyhow::Result<()> {
+    use std::io::Write;
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("invalid pin store path {}", path.display()))?;
+    let tmp = dir.join(format!(
+        ".{}.tmp-{}",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(mode);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+    }
+    let result = (|| -> anyhow::Result<()> {
+        let mut f = opts.open(&tmp)?;
+        f.write_all(contents)?;
+        f.sync_all()?;
+        fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// Build a sync resolver from the CLI flags.

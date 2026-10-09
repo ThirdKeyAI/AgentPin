@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/pinning"
@@ -93,10 +94,15 @@ func runVerify(args []string) error {
 	}
 	fmt.Println(string(out))
 
+	// Persist the pin store atomically (temp file + rename) with restrictive
+	// permissions; a write failure is reported, not ignored (AP-16).
 	if *pinStorePath != "" {
 		data, err := pinStore.MarshalJSON()
-		if err == nil {
-			_ = os.WriteFile(*pinStorePath, data, 0o644)
+		if err != nil {
+			return fmt.Errorf("serialize pin store: %w", err)
+		}
+		if err := writeAtomic(*pinStorePath, data, 0o600); err != nil {
+			return fmt.Errorf("persist pin store: %w", err)
 		}
 	}
 
@@ -129,4 +135,39 @@ func buildResolver(trustBundlePath, discoveryDir string) (resolver.DiscoveryReso
 		return resolvers[0], nil
 	}
 	return resolver.NewChainResolver(resolvers), nil
+}
+
+// writeAtomic writes contents to path via a sibling temp file and rename.
+func writeAtomic(path string, contents []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if _, err := tmp.Write(contents); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
 }
