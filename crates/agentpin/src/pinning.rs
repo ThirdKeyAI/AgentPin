@@ -250,15 +250,19 @@ mod tests {
         let attacker = make_test_jwk("evil", "x-evil");
         store.check_and_pin("example.com", &old);
         // Document contains only unknown keys: no continuity, nothing pinned.
-        let r = store.check_and_pin_set("example.com", &attacker, &[attacker.clone()]);
+        let r = store.check_and_pin_set("example.com", &attacker, std::slice::from_ref(&attacker));
         assert_eq!(r, PinningResult::Changed);
         assert_eq!(
             store.get_domain("example.com").unwrap().pinned_keys.len(),
             1
         );
-        assert!(
-            check_pinning_set(&mut store, "example.com", &attacker, &[attacker.clone()]).is_err()
-        );
+        assert!(check_pinning_set(
+            &mut store,
+            "example.com",
+            &attacker,
+            std::slice::from_ref(&attacker)
+        )
+        .is_err());
     }
 
     fn make_test_jwk(kid: &str, x: &str) -> Jwk {
