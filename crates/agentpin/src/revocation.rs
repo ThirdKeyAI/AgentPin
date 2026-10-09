@@ -306,8 +306,12 @@ mod tests {
           "updated_at": "2026-02-15T00:00:00Z"
         }"#;
         assert!(serde_json::from_str::<RevocationDocument>(wrong).is_err());
-        let right = wrong.replace("\"id\": \"jti-123\"", "\"jti\": \"jti-123\"")
-            .replace("\"id\": \"example-2025-01\"", "\"kid\": \"example-2025-01\"");
+        let right = wrong
+            .replace("\"id\": \"jti-123\"", "\"jti\": \"jti-123\"")
+            .replace(
+                "\"id\": \"example-2025-01\"",
+                "\"kid\": \"example-2025-01\"",
+            );
         assert!(serde_json::from_str::<RevocationDocument>(&right).is_ok());
     }
 

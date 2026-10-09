@@ -147,7 +147,8 @@ export async function fetchRevocationDocumentIfPresent(url, opts = {}) {
  * @returns {Buffer}
  */
 export function revocationSigningInput(doc) {
-    const { signature: _sig, ...rest } = doc;
+    const rest = { ...doc };
+    delete rest.signature;
     return domainSeparatedInput(CTX_REVOCATION, [Buffer.from(canonicalizeForSigning(rest), 'utf8')]);
 }
 

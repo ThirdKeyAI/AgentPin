@@ -125,7 +125,8 @@ export function verifyCredentialWithBundle(credentialJwt, bundle, pinStore, audi
  * @returns {Buffer}
  */
 export function bundleSigningInput(bundle) {
-    const { signature: _sig, ...rest } = bundle;
+    const rest = { ...bundle };
+    delete rest.signature;
     return domainSeparatedInput(CTX_BUNDLE, [Buffer.from(canonicalizeForSigning(rest), 'utf8')]);
 }
 
