@@ -60,11 +60,11 @@
     "node": ">=18.0.0",
     "npm": ">=8.0.0"
   },
-  "dependencies": {},
   "devDependencies": {
     "@eslint/js": "^9.0.0",
     "c8": "^8.0.1",
     "eslint": "^9.0.0",
+    "fast-check": "^4.10.2",
     "globals": "^16.0.0"
   },
   "exports": {

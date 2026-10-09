@@ -1,0 +1,51 @@
+[package]
+name = "agentpin-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+agentpin = { path = "../crates/agentpin" }
+
+# Not a member of the main workspace; build with `cargo +nightly fuzz`.
+[workspace]
+
+[[bin]]
+name = "jwt_decode"
+path = "fuzz_targets/jwt_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dns_txt"
+path = "fuzz_targets/dns_txt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jwk_key"
+path = "fuzz_targets/jwk_key.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "documents"
+path = "fuzz_targets/documents.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "agent_card"
+path = "fuzz_targets/agent_card.rs"
+test = false
+doc = false
+bench = false

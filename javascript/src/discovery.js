@@ -43,6 +43,9 @@ export function buildDiscoveryDocument(entity, entityType, publicKeys, agents, m
  * @throws {AgentPinError}
  */
 export function validateDiscoveryDocument(doc, expectedEntity) {
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+        throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, 'Discovery document must be a JSON object');
+    }
     if (doc.agentpin_version !== '0.1') {
         throw new AgentPinError(
             ErrorCode.DISCOVERY_INVALID,

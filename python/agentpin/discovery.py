@@ -122,6 +122,8 @@ def validate_discovery_document(doc: dict, expected_entity: str) -> None:
     Raises:
         AgentPinError: on validation failure
     """
+    if not isinstance(doc, dict):
+        raise AgentPinError(ErrorCode.DISCOVERY_INVALID, "Discovery document must be a JSON object")
     if doc.get("agentpin_version") != "0.1":
         raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Unsupported version: {doc.get('agentpin_version')}")
 
