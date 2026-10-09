@@ -15,6 +15,7 @@ from typing import Any, Callable, Optional
 
 from .a2a import verify_agentpin_extension
 from .domain import normalize_domain
+from .net import fetch_json_bounded
 from .resolver_local import card_endpoint_host, derive_discovery_from_card
 from .types import AgentPinError, ErrorCode
 
@@ -62,35 +63,17 @@ class A2aAgentCardResolver:
         domain = normalize_domain(domain)
         url = f"https://{domain}{AGENT_CARD_PATH}"
 
-        try:
-            response = self._do_fetch(url)
-        except AgentPinError:
-            raise
-        except Exception as exc:
-            raise AgentPinError(
-                ErrorCode.DISCOVERY_FETCH_FAILED,
-                f"Failed to fetch {url}: {exc}",
-            ) from exc
-
-        # Tolerate both requests.Response (with .ok / .status_code) and
-        # custom test stubs that expose either property.
-        ok = getattr(response, "ok", None)
-        status = getattr(response, "status_code", None)
-        if ok is None and status is not None:
-            ok = 200 <= status < 300
-        if not ok:
-            raise AgentPinError(
-                ErrorCode.DISCOVERY_FETCH_FAILED,
-                f"Failed to fetch {url}: HTTP {status}",
-            )
-
-        try:
-            card = response.json()
-        except Exception as exc:
-            raise AgentPinError(
-                ErrorCode.DISCOVERY_INVALID,
-                f"Failed to parse AgentCard at {url}: {exc}",
-            ) from exc
+        # No redirects (spec §4.8.5), bounded timeout and body size (AP-7,
+        # AP-13). An injected ``fetch`` callable is wrapped so the same
+        # status/redirect/size rules apply to it.
+        if self._fetch is not None:
+            card = fetch_json_bounded(url, timeout=self.timeout, http_get_impl=self._wrapped_fetch)
+        else:
+            card = fetch_json_bounded(url, timeout=self.timeout)
+        if card is None:
+            raise AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, f"Failed to fetch {url}: HTTP 404")
+        if not isinstance(card, dict):
+            raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Failed to parse AgentCard at {url}")
 
         verify_agentpin_extension(card)
 
@@ -112,14 +95,41 @@ class A2aAgentCardResolver:
         """A2A AgentCards don't carry revocation data. Always returns ``None``."""
         return None
 
-    def _do_fetch(self, url: str):
-        if self._fetch is not None:
-            return self._fetch(url)
-        import requests  # local import keeps `requests` an optional dep
+    def _wrapped_fetch(self, url: str, **_kwargs: Any) -> Any:
+        """Adapt an injected ``fetch(url)`` callable (returning a
+        requests-like response, or a stub with ``status_code``/``ok`` and
+        ``json()``) to the interface :func:`fetch_json_bounded` expects."""
+        assert self._fetch is not None
+        response = self._fetch(url)
+        return _ResponseAdapter(response)
 
-        return requests.get(
-            url,
-            headers={"Accept": "application/json"},
-            allow_redirects=False,
-            timeout=self.timeout,
-        )
+
+class _ResponseAdapter:
+    """Presents a requests-like or stub response through the minimal
+    interface used by :func:`agentpin.net.fetch_json_bounded`."""
+
+    def __init__(self, response: Any) -> None:
+        self._response = response
+        status = getattr(response, "status_code", None)
+        if status is None:
+            ok = getattr(response, "ok", False)
+            status = 200 if ok else 500
+        self.status_code = int(status)
+        headers = getattr(response, "headers", None)
+        self.headers = dict(headers) if headers else {"Content-Type": "application/json"}
+        if "Content-Type" not in self.headers and "content-type" not in self.headers:
+            self.headers["Content-Type"] = "application/json"
+
+    def iter_content(self, chunk_size: int = 8192):
+        iter_content = getattr(self._response, "iter_content", None)
+        if callable(iter_content):
+            yield from iter_content(chunk_size=chunk_size)
+            return
+        import json
+
+        yield json.dumps(self._response.json()).encode("utf-8")
+
+    def close(self) -> None:
+        close = getattr(self._response, "close", None)
+        if callable(close):
+            close()

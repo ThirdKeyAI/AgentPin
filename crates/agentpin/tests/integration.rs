@@ -106,6 +106,9 @@ fn test_maker_deployer_flow() {
         created_at: "2026-01-01T00:00:00Z".to_string(),
         documents: vec![doc.clone()],
         revocations: vec![revocation],
+        expires_at: None,
+        kid: None,
+        signature: None,
     };
     let resolver = TrustBundleResolver::new(&bundle);
     let mut pin_store = KeyPinStore::new();

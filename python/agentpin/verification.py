@@ -11,11 +11,17 @@ from typing import Optional
 from .constraint import constraints_subset_of
 from .credential import validate_credential_against_discovery
 from .discovery import fetch_discovery_document, find_agent_by_id, find_key_by_kid, validate_discovery_document
-from .domain import normalize_domain, validate_https_url_for_domain
+from .domain import default_revocation_endpoint, normalize_domain, validate_https_url_for_domain
 from .jwk import jwk_to_pem
 from .jwt import decode_jwt_unverified, verify_jwt
 from .pinning import KeyPinStore, PinningResult, check_pinning
-from .revocation import check_revocation, fetch_revocation_document
+from .revocation import (
+    check_revocation,
+    check_revocation_freshness,
+    fetch_revocation_document,
+    fetch_revocation_document_if_present,
+    verify_revocation_document,
+)
 from .types import AgentPinError, ErrorCode, VerificationResult, VerifierConfig
 
 
@@ -121,8 +127,20 @@ def verify_credential_offline(
     except Exception:
         return _failure(ErrorCode.SIGNATURE_INVALID, f"JWT signature verification failed for kid '{header['kid']}'")
 
-    # Step 6: Check revocation
+    # Step 6: Check revocation. The document must belong to this issuer and,
+    # when signed, verify under a discovery key (design issue 3).
     if revocation:
+        try:
+            verify_revocation_document(revocation, discovery)
+        except AgentPinError as e:
+            return _failure(ErrorCode.DISCOVERY_INVALID, f"Revocation document invalid: {e}")
+        if config.require_signed_revocation and revocation.get("signature") is None:
+            return _failure(ErrorCode.DISCOVERY_INVALID, "Revocation document is not signed")
+        if config.revocation_max_age_secs is not None:
+            try:
+                check_revocation_freshness(revocation, config.revocation_max_age_secs)
+            except AgentPinError as e:
+                return _failure(ErrorCode.DISCOVERY_INVALID, f"Revocation document invalid: {e}")
         try:
             check_revocation(revocation, payload["jti"], payload["sub"], header["kid"])
         except AgentPinError as e:
@@ -219,7 +237,10 @@ def verify_credential(
     except Exception as e:
         return _failure(ErrorCode.DISCOVERY_FETCH_FAILED, f"Failed to fetch discovery document: {e}")
 
-    # Fetch revocation document (https on the issuer's own host only — AP-12)
+    # Fetch revocation document (https on the issuer's own host only — AP-12).
+    # An explicitly declared endpoint fails closed on any error; when none is
+    # declared the spec §8.1 default URL is used and only a 404 there means
+    # "no revocations published" (design issue 3).
     revocation = None
     rev_endpoint = discovery.get("revocation_endpoint")
     if rev_endpoint:
@@ -229,6 +250,11 @@ def verify_credential(
             return _failure(ErrorCode.DISCOVERY_INVALID, f"Invalid revocation_endpoint: {e}")
         try:
             revocation = fetch_revocation_document(rev_endpoint)
+        except Exception:
+            return _failure(ErrorCode.DISCOVERY_FETCH_FAILED, "Revocation endpoint unreachable (fail-closed)")
+    else:
+        try:
+            revocation = fetch_revocation_document_if_present(default_revocation_endpoint(issuer))
         except Exception:
             return _failure(ErrorCode.DISCOVERY_FETCH_FAILED, "Revocation endpoint unreachable (fail-closed)")
 

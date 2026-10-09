@@ -257,3 +257,20 @@ describe('issuer normalization (AP-3, AP-10, AP-12)', () => {
         }
     });
 });
+
+describe('revocation document validation (design issue 3)', () => {
+    test('foreign, tampered, unsigned-under-strict and stale documents fail closed', async () => {
+        const { signRevocationDocument } = await import('../src/revocation.js');
+        const f = setup();
+        const run = (rev, cfg) => verifyCredentialOffline(f.jwt, f.discovery, rev, new KeyPinStore(), 'verifier.com', cfg);
+        assert.strictEqual(run({ ...f.revocation, entity: 'other.com' }, f.config).error_code, ErrorCode.DISCOVERY_INVALID);
+        const strict = { ...f.config, requireSignedRevocation: true };
+        assert.strictEqual(run(f.revocation, strict).error_code, ErrorCode.DISCOVERY_INVALID);
+        const signed = signRevocationDocument({ ...f.revocation }, f.kp.privateKeyPem, 'test-2026-01');
+        assert.ok(run(signed, strict).valid);
+        assert.strictEqual(run({ ...signed, updated_at: '2030-01-01T00:00:00Z' }, f.config).error_code, ErrorCode.DISCOVERY_INVALID);
+        const aged = { ...f.config, revocationMaxAgeSecs: 60 };
+        assert.strictEqual(run({ ...f.revocation, updated_at: new Date(Date.now() - 3600000).toISOString() }, aged).error_code, ErrorCode.DISCOVERY_INVALID);
+        assert.ok(run(f.revocation, aged).valid);
+    });
+});

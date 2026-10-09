@@ -91,42 +91,28 @@ pub fn find_agent_by_id<'a>(
 }
 
 /// Fetch a discovery document from a domain over HTTPS.
+///
+/// No redirects, 10 s timeout, 1 MiB body cap, JSON content type required
+/// (see [`crate::net`]).
 #[cfg(feature = "fetch")]
 pub async fn fetch_discovery_document(domain: &str) -> Result<DiscoveryDocument, Error> {
+    fetch_discovery_document_with(domain, &crate::net::FetchOptions::default()).await
+}
+
+/// [`fetch_discovery_document`] with explicit fetch options.
+#[cfg(feature = "fetch")]
+pub async fn fetch_discovery_document_with(
+    domain: &str,
+    opts: &crate::net::FetchOptions,
+) -> Result<DiscoveryDocument, Error> {
     let domain = normalize_domain(domain)?;
     let url = format!("https://{}/.well-known/agent-identity.json", domain);
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| Error::Discovery(e.to_string()))?;
-
-    let resp = client
-        .get(&url)
-        .send()
+    let body = crate::net::fetch_json_bounded(&url, opts)
         .await
-        .map_err(|e| Error::Discovery(format!("Failed to fetch {}: {}", url, e)))?;
-
-    if resp.status().is_redirection() {
-        return Err(Error::Discovery(format!(
-            "Redirect detected fetching {} (status {}). Redirects are not allowed.",
-            url,
-            resp.status()
-        )));
-    }
-
-    if !resp.status().is_success() {
-        return Err(Error::Discovery(format!(
-            "HTTP {} fetching {}",
-            resp.status(),
-            url
-        )));
-    }
-
-    let doc: DiscoveryDocument = resp
-        .json()
-        .await
-        .map_err(|e| Error::Discovery(format!("Invalid JSON from {}: {}", url, e)))?;
-
+        .map_err(|e| Error::Discovery(e.to_string()))?
+        .ok_or_else(|| Error::Discovery(format!("HTTP 404 fetching {}", url)))?;
+    let doc: DiscoveryDocument = serde_json::from_slice(&body)
+        .map_err(|_| Error::Discovery(format!("Invalid JSON from {}", url)))?;
     validate_discovery_document(&doc, &domain)?;
     Ok(doc)
 }

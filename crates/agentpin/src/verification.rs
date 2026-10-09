@@ -24,6 +24,13 @@ pub struct VerifierConfig {
     pub max_ttl_secs: i64,
     /// When true, capabilities are validated against the taxonomy (default: false)
     pub strict_capabilities: bool,
+    /// When true, an unsigned revocation document is rejected (default:
+    /// false). Signed documents are always verified when a signature is
+    /// present.
+    pub require_signed_revocation: bool,
+    /// When set, a revocation document whose `updated_at` is older than
+    /// this many seconds (or unparsable) is rejected (default: `None`).
+    pub revocation_max_age_secs: Option<i64>,
 }
 
 impl Default for VerifierConfig {
@@ -32,6 +39,8 @@ impl Default for VerifierConfig {
             clock_skew_secs: 60,
             max_ttl_secs: 86400,
             strict_capabilities: false,
+            require_signed_revocation: false,
+            revocation_max_age_secs: None,
         }
     }
 }
@@ -233,8 +242,29 @@ pub fn verify_credential_offline(
         );
     }
 
-    // Step 6: Check revocation
+    // Step 6: Check revocation. The document must belong to this issuer and,
+    // when signed, verify under a discovery key (design issue 3).
     if let Some(rev_doc) = revocation {
+        if let Err(e) = crate::revocation::verify_revocation_document(rev_doc, discovery) {
+            return VerificationResult::failure(
+                ErrorCode::DiscoveryInvalid,
+                &format!("Revocation document invalid: {}", e),
+            );
+        }
+        if config.require_signed_revocation && rev_doc.signature.is_none() {
+            return VerificationResult::failure(
+                ErrorCode::DiscoveryInvalid,
+                "Revocation document is not signed",
+            );
+        }
+        if let Some(max_age) = config.revocation_max_age_secs {
+            if let Err(e) = crate::revocation::check_revocation_freshness(rev_doc, max_age) {
+                return VerificationResult::failure(
+                    ErrorCode::DiscoveryInvalid,
+                    &format!("Revocation document invalid: {}", e),
+                );
+            }
+        }
         if let Err(e) = check_revocation(rev_doc, &payload.jti, &payload.sub, &header.kid) {
             let code = match &e {
                 Error::Verification { code, .. } => *code,
@@ -514,6 +544,7 @@ mod tests {
         revocation: RevocationDocument,
         pin_store: KeyPinStore,
         config: VerifierConfig,
+        private_key_pem: String,
     }
 
     fn setup() -> TestFixture {
@@ -575,6 +606,7 @@ mod tests {
             revocation,
             pin_store: KeyPinStore::new(),
             config: VerifierConfig::default(),
+            private_key_pem: kp.private_key_pem.clone(),
         }
     }
 
@@ -818,6 +850,9 @@ mod tests {
             created_at: "2026-02-10T00:00:00Z".to_string(),
             documents: vec![f.discovery.clone()],
             revocations: vec![f.revocation.clone()],
+            expires_at: None,
+            kid: None,
+            signature: None,
         };
         let resolver = crate::resolver::TrustBundleResolver::new(&bundle);
         let mut pin_store = KeyPinStore::new();
@@ -1003,6 +1038,61 @@ mod tests {
                 bad_iss
             );
         }
+    }
+
+    /// Design issue 3: a revocation document for another entity, a badly
+    /// signed one, an unsigned one under require_signed_revocation, or a
+    /// stale one under revocation_max_age_secs all fail closed.
+    #[test]
+    fn test_revocation_document_validation() {
+        let f = setup();
+        let run = |f: &TestFixture, rev: &RevocationDocument, cfg: &VerifierConfig| {
+            verify_credential_offline(
+                &f.jwt,
+                &f.discovery,
+                Some(rev),
+                &mut KeyPinStore::new(),
+                Some("verifier.com"),
+                cfg,
+            )
+        };
+        let mut foreign = f.revocation.clone();
+        foreign.entity = "other.com".to_string();
+        let r = run(&f, &foreign, &VerifierConfig::default());
+        assert_eq!(r.error_code, Some(ErrorCode::DiscoveryInvalid));
+
+        let strict = VerifierConfig {
+            require_signed_revocation: true,
+            ..Default::default()
+        };
+        let unsigned = f.revocation.clone();
+        let r = run(&f, &unsigned, &strict);
+        assert_eq!(r.error_code, Some(ErrorCode::DiscoveryInvalid));
+
+        // Signed with the discovery key: accepted under strict config.
+        let sk = crypto::load_signing_key(&f.private_key_pem).unwrap();
+        let mut signed = f.revocation.clone();
+        crate::revocation::sign_revocation_document(&mut signed, &sk, "test-2026-01").unwrap();
+        let r = run(&f, &signed, &strict);
+        assert!(r.valid, "{:?}", r);
+
+        // Tampered after signing: rejected even without strict config.
+        let mut tampered = signed.clone();
+        tampered.updated_at = "2030-01-01T00:00:00Z".to_string();
+        let r = run(&f, &tampered, &VerifierConfig::default());
+        assert_eq!(r.error_code, Some(ErrorCode::DiscoveryInvalid));
+
+        let aged = VerifierConfig {
+            revocation_max_age_secs: Some(60),
+            ..Default::default()
+        };
+        let mut stale = f.revocation.clone();
+        stale.updated_at = (Utc::now() - chrono::Duration::seconds(3600)).to_rfc3339();
+        let r = run(&f, &stale, &aged);
+        assert_eq!(r.error_code, Some(ErrorCode::DiscoveryInvalid));
+        let fresh = f.revocation.clone();
+        let r = run(&f, &fresh, &aged);
+        assert!(r.valid, "{:?}", r);
     }
 
     #[test]

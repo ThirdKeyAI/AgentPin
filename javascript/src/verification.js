@@ -7,10 +7,13 @@ import { decodeJwtUnverified, verifyJwt } from './jwt.js';
 import { jwkToPem } from './jwk.js';
 import { validateCredentialAgainstDiscovery } from './credential.js';
 import { validateDiscoveryDocument, findKeyByKid, findAgentById, fetchDiscoveryDocument } from './discovery.js';
-import { checkRevocation, fetchRevocationDocument } from './revocation.js';
+import {
+    checkRevocation, fetchRevocationDocument, fetchRevocationDocumentIfPresent,
+    verifyRevocationDocument, checkRevocationFreshness,
+} from './revocation.js';
 import { checkPinning, PinningResult } from './pinning.js';
 import { constraintsSubsetOf } from './constraint.js';
-import { normalizeDomain, validateHttpsUrlForDomain } from './domain.js';
+import { normalizeDomain, validateHttpsUrlForDomain, defaultRevocationEndpoint } from './domain.js';
 import { ErrorCode, AgentPinError } from './types.js';
 
 /**
@@ -21,6 +24,10 @@ export function defaultVerifierConfig() {
     return {
         clockSkewSecs: 60,
         maxTtlSecs: 86400,
+        /** Reject unsigned revocation documents (signed ones are always verified). */
+        requireSignedRevocation: false,
+        /** When set, reject revocation documents older than this many seconds. */
+        revocationMaxAgeSecs: null,
     };
 }
 
@@ -152,8 +159,24 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
         return failureResult(ErrorCode.SIGNATURE_INVALID, `JWT signature verification failed for kid '${header.kid}'`);
     }
 
-    // Step 6: Check revocation
+    // Step 6: Check revocation. The document must belong to this issuer and,
+    // when signed, verify under a discovery key (design issue 3).
     if (revocation) {
+        try {
+            verifyRevocationDocument(revocation, discovery);
+        } catch (e) {
+            return failureResult(ErrorCode.DISCOVERY_INVALID, `Revocation document invalid: ${e.message}`);
+        }
+        if (config.requireSignedRevocation && (revocation.signature === undefined || revocation.signature === null)) {
+            return failureResult(ErrorCode.DISCOVERY_INVALID, 'Revocation document is not signed');
+        }
+        if (config.revocationMaxAgeSecs !== null && config.revocationMaxAgeSecs !== undefined) {
+            try {
+                checkRevocationFreshness(revocation, config.revocationMaxAgeSecs);
+            } catch (e) {
+                return failureResult(ErrorCode.DISCOVERY_INVALID, `Revocation document invalid: ${e.message}`);
+            }
+        }
         try {
             checkRevocation(revocation, payload.jti, payload.sub, header.kid);
         } catch (e) {
@@ -271,12 +294,15 @@ export async function verifyCredential(credentialJwt, pinStore, audience, config
     // Fetch discovery document
     let discovery;
     try {
-        discovery = await fetchDiscoveryDocument(issuer);
+        discovery = await fetchDiscoveryDocument(issuer, config.fetch || {});
     } catch (e) {
         return failureResult(ErrorCode.DISCOVERY_FETCH_FAILED, `Failed to fetch discovery document: ${e.message}`);
     }
 
-    // Fetch revocation document (https on the issuer's own host only — AP-12)
+    // Fetch revocation document (https on the issuer's own host only — AP-12).
+    // An explicitly declared endpoint fails closed on any error; when none is
+    // declared the spec §8.1 default URL is used and only a 404 there means
+    // "no revocations published" (design issue 3).
     let revocation = null;
     if (discovery.revocation_endpoint) {
         try {
@@ -285,7 +311,16 @@ export async function verifyCredential(credentialJwt, pinStore, audience, config
             return failureResult(ErrorCode.DISCOVERY_INVALID, `Invalid revocation_endpoint: ${e.message}`);
         }
         try {
-            revocation = await fetchRevocationDocument(discovery.revocation_endpoint);
+            revocation = await fetchRevocationDocument(discovery.revocation_endpoint, config.fetch || {});
+        } catch {
+            return failureResult(
+                ErrorCode.DISCOVERY_FETCH_FAILED,
+                'Revocation endpoint unreachable (fail-closed)'
+            );
+        }
+    } else {
+        try {
+            revocation = await fetchRevocationDocumentIfPresent(defaultRevocationEndpoint(issuer), config.fetch || {});
         } catch {
             return failureResult(
                 ErrorCode.DISCOVERY_FETCH_FAILED,

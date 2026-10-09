@@ -43,6 +43,13 @@ type VerifierConfig struct {
 	// StrictCapabilities, when true, validates capabilities against the
 	// taxonomy (currently informational; reserved for future use).
 	StrictCapabilities bool
+	// RequireSignedRevocation rejects unsigned revocation documents (default
+	// false). Signed documents are always verified when a signature is
+	// present.
+	RequireSignedRevocation bool
+	// RevocationMaxAgeSecs, when > 0, rejects a revocation document whose
+	// updated_at is older than this many seconds or unparsable.
+	RevocationMaxAgeSecs int64
 }
 
 // DefaultVerifierConfig returns the default verifier configuration.
@@ -159,8 +166,20 @@ func VerifyCredentialOffline(
 		return failure(types.ErrSignatureInvalid, fmt.Sprintf("JWT signature verification failed for kid '%s'", header.Kid))
 	}
 
-	// Step 10: Revocation.
+	// Step 10: Revocation. The document must belong to this issuer and, when
+	// signed, verify under a discovery key (design issue 3).
 	if rev != nil {
+		if err := revocation.VerifyRevocationDocument(rev, disc); err != nil {
+			return failure(types.ErrDiscoveryInvalid, fmt.Sprintf("Revocation document invalid: %v", err))
+		}
+		if config.RequireSignedRevocation && rev.Signature == "" {
+			return failure(types.ErrDiscoveryInvalid, "Revocation document is not signed")
+		}
+		if config.RevocationMaxAgeSecs > 0 {
+			if err := revocation.CheckRevocationFreshness(rev, config.RevocationMaxAgeSecs); err != nil {
+				return failure(types.ErrDiscoveryInvalid, fmt.Sprintf("Revocation document invalid: %v", err))
+			}
+		}
 		if err := revocation.CheckRevocation(rev, payload.Jti, payload.Sub, header.Kid); err != nil {
 			if ve, ok := types.AsVerificationError(err); ok {
 				return failure(ve.Code, ve.Message)

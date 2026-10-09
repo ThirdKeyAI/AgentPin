@@ -330,3 +330,44 @@ func TestNonHostnameIssRejected(t *testing.T) {
 		}
 	}
 }
+
+// Design issue 3: foreign, tampered, unsigned-under-strict and stale
+// revocation documents fail closed.
+func TestRevocationDocumentValidation(t *testing.T) {
+	f := setup(t)
+	run := func(rev *types.RevocationDocument, cfg VerifierConfig) Result {
+		return VerifyCredentialOffline(f.jwt, f.discovery, rev, pinning.NewKeyPinStore(), "verifier.com", cfg)
+	}
+	foreign := *f.revocation
+	foreign.Entity = "other.com"
+	if r := run(&foreign, f.cfg); r.ErrorCode != types.ErrDiscoveryInvalid {
+		t.Fatalf("foreign entity: %+v", r)
+	}
+	strict := f.cfg
+	strict.RequireSignedRevocation = true
+	if r := run(f.revocation, strict); r.ErrorCode != types.ErrDiscoveryInvalid {
+		t.Fatalf("unsigned under strict: %+v", r)
+	}
+	signed := *f.revocation
+	if err := revocation.SignRevocationDocument(&signed, f.priv, "test-2026-01"); err != nil {
+		t.Fatal(err)
+	}
+	if r := run(&signed, strict); !r.Valid {
+		t.Fatalf("signed under strict: %+v", r)
+	}
+	tampered := signed
+	tampered.UpdatedAt = "2030-01-01T00:00:00Z"
+	if r := run(&tampered, f.cfg); r.ErrorCode != types.ErrDiscoveryInvalid {
+		t.Fatalf("tampered: %+v", r)
+	}
+	aged := f.cfg
+	aged.RevocationMaxAgeSecs = 60
+	stale := *f.revocation
+	stale.UpdatedAt = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	if r := run(&stale, aged); r.ErrorCode != types.ErrDiscoveryInvalid {
+		t.Fatalf("stale: %+v", r)
+	}
+	if r := run(f.revocation, aged); !r.Valid {
+		t.Fatalf("fresh under max age: %+v", r)
+	}
+}

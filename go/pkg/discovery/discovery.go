@@ -7,12 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"time"
 
 	"github.com/ThirdKeyAi/agentpin/go/internal/version"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/fetch"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
 )
 
@@ -102,41 +101,25 @@ func FindAgentByID(doc *types.DiscoveryDocument, agentID string) *types.AgentDec
 }
 
 // FetchDiscoveryDocument fetches `https://{domain}/.well-known/agent-identity.json`
-// and validates it. Redirects are rejected: the discovery endpoint MUST be
-// served directly from the canonical hostname.
+// and validates it. Redirects are rejected, the request is bounded by a
+// timeout and a 1 MiB body cap, and a JSON content type is required (see
+// package fetch). A nil client uses fetch.DefaultClient.
 func FetchDiscoveryDocument(client *http.Client, rawDomain string) (*types.DiscoveryDocument, error) {
 	domainName, err := domain.Normalize(rawDomain)
 	if err != nil {
 		return nil, err
 	}
-	if client == nil {
-		client = &http.Client{
-			Timeout: 10 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		}
-	}
 	url := fmt.Sprintf("https://%s/.well-known/agent-identity.json", domainName)
-	resp, err := client.Get(url)
+	body, found, err := fetch.JSONBounded(client, url, 0)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch %s: %w", url, err)
+		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		return nil, fmt.Errorf("redirect detected fetching %s (status %d). Redirects are not allowed", url, resp.StatusCode)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d fetching %s", resp.StatusCode, url)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
+	if !found {
+		return nil, fmt.Errorf("HTTP 404 fetching %s", url)
 	}
 	var doc types.DiscoveryDocument
 	if err := json.Unmarshal(body, &doc); err != nil {
-		return nil, fmt.Errorf("invalid JSON from %s: %w", url, err)
+		return nil, fmt.Errorf("invalid JSON from %s", url)
 	}
 	if err := ValidateDiscoveryDocument(&doc, domainName); err != nil {
 		return nil, err

@@ -165,6 +165,8 @@ mod tests {
             revoked_agents: vec![],
             revoked_keys: vec![],
             updated_at: "2026-01-01T00:00:00Z".to_string(),
+            kid: None,
+            signature: None,
         };
         *state.revocation.write().await = Some(rev_doc);
 

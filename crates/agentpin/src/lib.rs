@@ -3,9 +3,12 @@ pub mod domain;
 pub mod error;
 pub mod jwk;
 pub mod jwt;
+#[cfg(feature = "fetch")]
+pub mod net;
 pub mod resolver;
 pub mod types;
 
+pub mod bundle;
 pub mod credential;
 pub mod delegation;
 pub mod discovery;

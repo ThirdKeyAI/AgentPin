@@ -231,3 +231,7 @@ class VerificationResult:
 class VerifierConfig:
     clock_skew_secs: int = 60
     max_ttl_secs: int = 86400
+    #: Reject unsigned revocation documents (signed ones are always verified).
+    require_signed_revocation: bool = False
+    #: When set, reject revocation documents older than this many seconds.
+    revocation_max_age_secs: Optional[int] = None

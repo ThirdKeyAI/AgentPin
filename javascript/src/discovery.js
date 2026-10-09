@@ -4,6 +4,7 @@
 
 import { AgentPinError, ErrorCode } from './types.js';
 import { normalizeDomain, validateHttpsUrlForDomain } from './domain.js';
+import { fetchJsonBounded } from './net.js';
 
 /**
  * Build a new discovery document.
@@ -160,26 +161,20 @@ export const AllowedDomains = Object.freeze({
 
 /**
  * Fetch a discovery document from a domain over HTTPS.
+ *
+ * No redirects, 10 s timeout, 1 MiB body cap, JSON content type required
+ * (see `net.js`).
  * @param {string} domain
+ * @param {object} [opts] - Forwarded to `fetchJsonBounded` (fetchImpl, timeoutMs, maxBytes)
  * @returns {Promise<object>}
  */
-export async function fetchDiscoveryDocument(domain) {
+export async function fetchDiscoveryDocument(domain, opts = {}) {
     domain = normalizeDomain(domain);
     const url = `https://${domain}/.well-known/agent-identity.json`;
-
-    const response = await fetch(url, {
-        redirect: 'error',
-        headers: { 'Accept': 'application/json' },
-    });
-
-    if (!response.ok) {
-        throw new AgentPinError(
-            ErrorCode.DISCOVERY_FETCH_FAILED,
-            `HTTP ${response.status} fetching ${url}`
-        );
+    const doc = await fetchJsonBounded(url, opts);
+    if (doc === null) {
+        throw new AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, `HTTP 404 fetching ${url}`);
     }
-
-    const doc = await response.json();
     validateDiscoveryDocument(doc, domain);
     return doc;
 }

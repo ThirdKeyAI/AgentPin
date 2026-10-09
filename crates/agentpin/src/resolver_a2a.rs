@@ -77,25 +77,18 @@ impl AsyncDiscoveryResolver for A2aAgentCardResolver {
     async fn resolve_discovery(&self, domain: &str) -> Result<DiscoveryDocument, Error> {
         let domain = &crate::domain::normalize_domain(domain)?;
         let url = format!("https://{}{}", domain, AGENT_CARD_PATH);
-        let client = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .build()
-            .map_err(|e| Error::Discovery(format!("HTTP client init failed: {e}")))?;
-        let response = client
-            .get(&url)
-            .send()
+        // No redirects (spec §4.8.5), bounded timeout and body size (AP-7,
+        // AP-13).
+        let opts = crate::net::FetchOptions {
+            timeout: self.timeout,
+            ..Default::default()
+        };
+        let body = crate::net::fetch_json_bounded(&url, &opts)
             .await
-            .map_err(|e| Error::Discovery(format!("Failed to fetch {}: {}", url, e)))?;
-        if !response.status().is_success() {
-            return Err(Error::Discovery(format!(
-                "Failed to fetch {}: HTTP {}",
-                url,
-                response.status()
-            )));
-        }
-        let card: A2aAgentCard = response.json().await.map_err(|e| {
-            Error::Discovery(format!("Failed to parse AgentCard at {}: {}", url, e))
-        })?;
+            .map_err(|e| Error::Discovery(e.to_string()))?
+            .ok_or_else(|| Error::Discovery(format!("Failed to fetch {}: HTTP 404", url)))?;
+        let card: A2aAgentCard = serde_json::from_slice(&body)
+            .map_err(|_| Error::Discovery(format!("Failed to parse AgentCard at {}", url)))?;
 
         // Verify the extension signature before trusting any field.
         verify_agentpin_extension(&card)?;

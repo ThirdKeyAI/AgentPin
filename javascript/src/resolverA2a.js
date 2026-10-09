@@ -14,6 +14,7 @@
 import { verifyAgentpinExtension } from './a2a.js';
 import { cardEndpointHost, deriveDiscoveryFromCard } from './resolverLocal.js';
 import { normalizeDomain } from './domain.js';
+import { fetchJsonBounded } from './net.js';
 import { AgentPinError, ErrorCode } from './types.js';
 
 const AGENT_CARD_PATH = '/.well-known/agent-card.json';
@@ -48,50 +49,15 @@ export class A2aAgentCardResolver {
      * @returns {Promise<object>}
      */
     async resolveDiscovery(domain) {
-        if (!this._fetch) {
-            throw new AgentPinError(
-                ErrorCode.DISCOVERY_FETCH_FAILED,
-                'No fetch implementation available — pass `fetchImpl` or run on Node >= 18'
-            );
-        }
         domain = normalizeDomain(domain);
         const url = `https://${domain}${AGENT_CARD_PATH}`;
-        const controller = typeof AbortController === 'function' ? new AbortController() : null;
-        const timer = controller
-            ? setTimeout(() => controller.abort(), this.timeoutMs)
-            : null;
-
-        let response;
-        try {
-            response = await this._fetch(url, {
-                redirect: 'error',
-                headers: { Accept: 'application/json' },
-                signal: controller ? controller.signal : undefined,
-            });
-        } catch (err) {
-            throw new AgentPinError(
-                ErrorCode.DISCOVERY_FETCH_FAILED,
-                `Failed to fetch ${url}: ${err.message || err}`
-            );
-        } finally {
-            if (timer) clearTimeout(timer);
-        }
-
-        if (!response.ok) {
-            throw new AgentPinError(
-                ErrorCode.DISCOVERY_FETCH_FAILED,
-                `Failed to fetch ${url}: HTTP ${response.status}`
-            );
-        }
-
-        let card;
-        try {
-            card = await response.json();
-        } catch (err) {
-            throw new AgentPinError(
-                ErrorCode.DISCOVERY_INVALID,
-                `Failed to parse AgentCard at ${url}: ${err.message || err}`
-            );
+        // No redirects (spec §4.8.5), bounded timeout and body size (AP-7, AP-13).
+        const card = await fetchJsonBounded(url, {
+            fetchImpl: this._fetch,
+            timeoutMs: this.timeoutMs,
+        });
+        if (card === null) {
+            throw new AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, `Failed to fetch ${url}: HTTP 404`);
         }
 
         verifyAgentpinExtension(card);

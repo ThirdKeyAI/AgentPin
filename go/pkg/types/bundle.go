@@ -16,6 +16,13 @@ type TrustBundle struct {
 	CreatedAt             string               `json:"created_at"`
 	Documents             []DiscoveryDocument  `json:"documents"`
 	Revocations           []RevocationDocument `json:"revocations"`
+	// ExpiresAt is an optional RFC 3339 expiry (design issue 5).
+	ExpiresAt string `json:"expires_at,omitempty"`
+	// Kid identifies the key that signed this bundle (optional).
+	Kid string `json:"kid,omitempty"`
+	// Signature is a standard-base64 DER signature over the domain-separated
+	// canonical JSON of the bundle with Signature cleared (optional).
+	Signature string `json:"signature,omitempty"`
 }
 
 // FindDiscovery returns the first discovery document whose entity matches

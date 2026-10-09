@@ -130,7 +130,17 @@ from .revocation import (
     add_revoked_key,
     build_revocation_document,
     check_revocation,
+    check_revocation_freshness,
     fetch_revocation_document,
+    fetch_revocation_document_if_present,
+    revocation_signing_input,
+    sign_revocation_document,
+    verify_revocation_document,
+)
+from .net import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    DEFAULT_TIMEOUT_SECS,
+    fetch_json_bounded,
 )
 from .types import (
     DATA_CLASSIFICATION_ORDER,
@@ -150,12 +160,16 @@ from .verification import (
     verify_credential_offline,
 )
 from .bundle import (
+    bundle_signing_input,
+    check_bundle_expiry,
     create_trust_bundle,
     find_bundle_discovery,
     find_bundle_revocation,
     load_trust_bundle,
     save_trust_bundle,
+    sign_trust_bundle,
     verify_credential_with_bundle,
+    verify_trust_bundle,
 )
 
 __version__ = "0.3.0"
@@ -249,6 +263,15 @@ __all__ = [
     "add_revoked_key",
     "check_revocation",
     "fetch_revocation_document",
+    "fetch_revocation_document_if_present",
+    "revocation_signing_input",
+    "sign_revocation_document",
+    "verify_revocation_document",
+    "check_revocation_freshness",
+    # Network
+    "fetch_json_bounded",
+    "DEFAULT_TIMEOUT_SECS",
+    "DEFAULT_MAX_RESPONSE_BYTES",
     # Pinning
     "KeyPinStore",
     "PinningResult",
@@ -295,4 +318,8 @@ __all__ = [
     "load_trust_bundle",
     "save_trust_bundle",
     "verify_credential_with_bundle",
+    "bundle_signing_input",
+    "sign_trust_bundle",
+    "verify_trust_bundle",
+    "check_bundle_expiry",
 ]

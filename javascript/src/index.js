@@ -80,6 +80,11 @@ export {
     addRevokedKey,
     checkRevocation,
     fetchRevocationDocument,
+    fetchRevocationDocumentIfPresent,
+    revocationSigningInput,
+    signRevocationDocument,
+    verifyRevocationDocument,
+    checkRevocationFreshness,
 } from './revocation.js';
 
 export {
@@ -116,6 +121,10 @@ export {
     findBundleDiscovery,
     findBundleRevocation,
     verifyCredentialWithBundle,
+    bundleSigningInput,
+    signTrustBundle,
+    verifyTrustBundle,
+    checkBundleExpiry,
 } from './bundle.js';
 
 export {
@@ -160,6 +169,12 @@ export {
 export {
     A2aAgentCardResolver,
 } from './resolverA2a.js';
+
+export {
+    fetchJsonBounded,
+    DEFAULT_TIMEOUT_MS,
+    DEFAULT_MAX_RESPONSE_BYTES,
+} from './net.js';
 
 export {
     normalizeDomain,

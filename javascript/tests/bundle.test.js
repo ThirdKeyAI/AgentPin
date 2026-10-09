@@ -167,3 +167,22 @@ describe('verifyCredentialWithBundle', () => {
         assert.strictEqual(result.error_code, ErrorCode.CREDENTIAL_REVOKED);
     });
 });
+
+describe('signed trust bundles (design issue 5)', () => {
+    test('signed bundle verifies; unsigned, tampered, wrong-key and expired fail', async () => {
+        const { generateKeyPair } = await import('../src/crypto.js');
+        const { createTrustBundle, signTrustBundle, verifyTrustBundle } = await import('../src/bundle.js');
+        const kp = generateKeyPair();
+        const other = generateKeyPair();
+        const bundle = createTrustBundle('2026-02-10T00:00:00Z');
+        assert.throws(() => verifyTrustBundle(bundle, kp.publicKeyPem), /not signed/);
+        signTrustBundle(bundle, kp.privateKeyPem, 'ops-1');
+        assert.doesNotThrow(() => verifyTrustBundle(bundle, kp.publicKeyPem));
+        assert.doesNotThrow(() => verifyTrustBundle(JSON.parse(JSON.stringify(bundle)), kp.publicKeyPem));
+        assert.throws(() => verifyTrustBundle(bundle, other.publicKeyPem), /did not verify/);
+        assert.throws(() => verifyTrustBundle({ ...bundle, created_at: '2030-01-01T00:00:00Z' }, kp.publicKeyPem), /did not verify/);
+        const expired = { ...createTrustBundle('2026-02-10T00:00:00Z'), expires_at: '2020-01-01T00:00:00Z' };
+        signTrustBundle(expired, kp.privateKeyPem, 'ops-1');
+        assert.throws(() => verifyTrustBundle(expired, kp.publicKeyPem), /expired/);
+    });
+});

@@ -259,3 +259,28 @@ class TestIssuerNormalization:
         r = verify_credential_offline(jwt_str, f["discovery"], None, KeyPinStore(), None, f["config"])
         assert not r.valid
         assert r.error_code == ErrorCode.DISCOVERY_INVALID
+
+
+class TestRevocationDocumentValidation:
+    """Design issue 3: foreign, tampered, unsigned-under-strict and stale documents fail closed."""
+
+    def test_validation(self):
+        from datetime import datetime, timedelta, timezone
+
+        from agentpin.revocation import sign_revocation_document
+
+        f = setup()
+
+        def run(rev, cfg):
+            return verify_credential_offline(f["jwt"], f["discovery"], rev, KeyPinStore(), "verifier.com", cfg)
+
+        assert run(dict(f["revocation"], entity="other.com"), f["config"]).error_code == ErrorCode.DISCOVERY_INVALID
+        strict = VerifierConfig(require_signed_revocation=True)
+        assert run(f["revocation"], strict).error_code == ErrorCode.DISCOVERY_INVALID
+        signed = sign_revocation_document(dict(f["revocation"]), f["priv"], "test-2026-01")
+        assert run(signed, strict).valid
+        assert run(dict(signed, updated_at="2030-01-01T00:00:00Z"), f["config"]).error_code == ErrorCode.DISCOVERY_INVALID
+        aged = VerifierConfig(revocation_max_age_secs=60)
+        stale = dict(f["revocation"], updated_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
+        assert run(stale, aged).error_code == ErrorCode.DISCOVERY_INVALID
+        assert run(f["revocation"], aged).valid

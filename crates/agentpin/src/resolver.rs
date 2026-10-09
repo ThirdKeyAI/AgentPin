@@ -82,12 +82,18 @@ impl AsyncDiscoveryResolver for WellKnownResolver {
     ) -> Result<Option<RevocationDocument>, Error> {
         if let Some(ref endpoint) = discovery.revocation_endpoint {
             // The endpoint is attacker-publishable; never fetch anything but
-            // https on the issuer's own host (AP-12).
+            // https on the issuer's own host (AP-12). An explicitly declared
+            // endpoint fails closed on any error, including 404.
             validate_https_url_for_domain(endpoint, domain)?;
             let doc = crate::revocation::fetch_revocation_document(endpoint).await?;
             Ok(Some(doc))
         } else {
-            Ok(None)
+            // Spec §8.1: assume the default endpoint when none is declared.
+            // A 404 there means the issuer publishes no revocations; any
+            // other failure still fails closed (design issue 3).
+            let domain = crate::domain::normalize_domain(domain)?;
+            let url = crate::domain::default_revocation_endpoint(&domain);
+            crate::revocation::fetch_revocation_document_if_present(&url).await
         }
     }
 }
@@ -198,9 +204,25 @@ impl TrustBundleResolver {
         }
     }
 
-    /// Build from a JSON string representing a [`TrustBundle`].
+    /// Build from a JSON string representing a [`TrustBundle`]. The bundle
+    /// is rejected when its `expires_at` has passed; its signature, if any,
+    /// is not checked — use [`from_signed_json`](Self::from_signed_json) for
+    /// that.
     pub fn from_json(json: &str) -> Result<Self, Error> {
         let bundle: TrustBundle = serde_json::from_str(json)?;
+        crate::bundle::check_bundle_expiry(&bundle)?;
+        Ok(Self::new(&bundle))
+    }
+
+    /// Build from a signed [`TrustBundle`] JSON string, requiring a valid
+    /// signature under `verifying_key` and an unexpired `expires_at`
+    /// (design issue 5).
+    pub fn from_signed_json(
+        json: &str,
+        verifying_key: &p256::ecdsa::VerifyingKey,
+    ) -> Result<Self, Error> {
+        let bundle: TrustBundle = serde_json::from_str(json)?;
+        crate::bundle::verify_trust_bundle(&bundle, verifying_key)?;
         Ok(Self::new(&bundle))
     }
 }
@@ -313,6 +335,9 @@ mod tests {
             created_at: "2026-02-10T00:00:00Z".to_string(),
             documents: vec![make_discovery("example.com")],
             revocations: vec![],
+            expires_at: None,
+            kid: None,
+            signature: None,
         };
         let resolver = TrustBundleResolver::new(&bundle);
         let doc = resolver.resolve_discovery("example.com").unwrap();
@@ -334,11 +359,35 @@ mod tests {
             created_at: "2026-02-10T00:00:00Z".to_string(),
             documents: vec![make_discovery("example.com")],
             revocations: vec![rev],
+            expires_at: None,
+            kid: None,
+            signature: None,
         };
         let resolver = TrustBundleResolver::new(&bundle);
         let disc = resolver.resolve_discovery("example.com").unwrap();
         let rev = resolver.resolve_revocation("example.com", &disc).unwrap();
         assert!(rev.is_some());
+    }
+
+    /// Design issue 5: a signed bundle must verify and must not be expired.
+    #[test]
+    fn test_trust_bundle_resolver_from_signed_json() {
+        let kp = crate::crypto::generate_key_pair().unwrap();
+        let sk = crate::crypto::load_signing_key(&kp.private_key_pem).unwrap();
+        let vk = crate::crypto::load_verifying_key(&kp.public_key_pem).unwrap();
+        let mut bundle = TrustBundle::new("2026-02-10T00:00:00Z");
+        bundle.documents.push(make_discovery("example.com"));
+        let unsigned = serde_json::to_string(&bundle).unwrap();
+        assert!(TrustBundleResolver::from_signed_json(&unsigned, &vk).is_err());
+        crate::bundle::sign_trust_bundle(&mut bundle, &sk, "ops").unwrap();
+        let signed = serde_json::to_string(&bundle).unwrap();
+        assert!(TrustBundleResolver::from_signed_json(&signed, &vk).is_ok());
+        let mut expired = bundle.clone();
+        expired.expires_at = Some("2000-01-01T00:00:00Z".to_string());
+        crate::bundle::sign_trust_bundle(&mut expired, &sk, "ops").unwrap();
+        let expired_json = serde_json::to_string(&expired).unwrap();
+        assert!(TrustBundleResolver::from_signed_json(&expired_json, &vk).is_err());
+        assert!(TrustBundleResolver::from_json(&expired_json).is_err());
     }
 
     #[test]
@@ -348,6 +397,9 @@ mod tests {
             created_at: "2026-02-10T00:00:00Z".to_string(),
             documents: vec![make_discovery("example.com")],
             revocations: vec![],
+            expires_at: None,
+            kid: None,
+            signature: None,
         };
         let json = serde_json::to_string(&bundle).unwrap();
         let resolver = TrustBundleResolver::from_json(&json).unwrap();
@@ -433,6 +485,9 @@ mod tests {
             created_at: "2026-02-10T00:00:00Z".to_string(),
             documents: vec![make_discovery("Example.COM")],
             revocations: vec![],
+            expires_at: None,
+            kid: None,
+            signature: None,
         };
         let resolver = TrustBundleResolver::new(&bundle);
         assert!(resolver.resolve_discovery("example.com").is_ok());
@@ -478,12 +533,18 @@ mod tests {
             created_at: "2026-02-10T00:00:00Z".to_string(),
             documents: vec![make_discovery("a.com")],
             revocations: vec![],
+            expires_at: None,
+            kid: None,
+            signature: None,
         };
         let bundle_b = TrustBundle {
             agentpin_bundle_version: "0.1".to_string(),
             created_at: "2026-02-10T00:00:00Z".to_string(),
             documents: vec![make_discovery("b.com")],
             revocations: vec![],
+            expires_at: None,
+            kid: None,
+            signature: None,
         };
 
         let chain = ChainResolver::new(vec![
@@ -504,6 +565,9 @@ mod tests {
             created_at: "2026-02-10T00:00:00Z".to_string(),
             documents: vec![make_discovery("example.com")],
             revocations: vec![],
+            expires_at: None,
+            kid: None,
+            signature: None,
         };
 
         let chain = ChainResolver::new(vec![

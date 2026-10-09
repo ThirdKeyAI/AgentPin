@@ -1,8 +1,9 @@
 """Discovery document handling for AgentPin."""
 
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 from .domain import normalize_domain, validate_https_url_for_domain
+from .net import fetch_json_bounded
 from .types import AgentPinError, ErrorCode
 
 
@@ -151,23 +152,19 @@ def find_agent_by_id(doc: dict, agent_id: str) -> Optional[dict]:
     return None
 
 
-def fetch_discovery_document(domain: str) -> dict:
-    """Fetch a discovery document from a domain over HTTPS."""
-    import requests
+def fetch_discovery_document(domain: str, **fetch_opts: Any) -> dict:
+    """Fetch a discovery document from a domain over HTTPS.
 
+    No redirects, 10 s timeout, 1 MiB body cap, JSON content type required
+    (see :mod:`agentpin.net`). ``fetch_opts`` are forwarded to
+    :func:`agentpin.net.fetch_json_bounded`.
+    """
     domain = normalize_domain(domain)
     url = f"https://{domain}/.well-known/agent-identity.json"
-    resp = requests.get(url, headers={"Accept": "application/json"}, allow_redirects=False, timeout=10)
-
-    if resp.is_redirect or resp.is_permanent_redirect:
-        raise AgentPinError(
-            ErrorCode.DISCOVERY_FETCH_FAILED,
-            f"Redirect detected fetching {url} (status {resp.status_code}). Redirects are not allowed.",
-        )
-
-    if not resp.ok:
-        raise AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, f"HTTP {resp.status_code} fetching {url}")
-
-    doc = resp.json()
+    doc = fetch_json_bounded(url, **fetch_opts)
+    if doc is None:
+        raise AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, f"HTTP 404 fetching {url}")
+    if not isinstance(doc, dict):
+        raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Discovery document from {url} is not an object")
     validate_discovery_document(doc, domain)
     return doc

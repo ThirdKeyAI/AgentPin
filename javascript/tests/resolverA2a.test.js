@@ -43,14 +43,12 @@ function stubFetch(responses) {
         if (entry.networkError) {
             throw new Error(entry.networkError);
         }
-        return {
-            ok: entry.status >= 200 && entry.status < 300,
+        // A realistic Response: the hardened fetch layer checks status,
+        // content-type and body size before parsing.
+        return new Response(entry.body === undefined ? '' : JSON.stringify(entry.body), {
             status: entry.status,
-            async json() {
-                if (entry.body === undefined) throw new Error('no body');
-                return entry.body;
-            },
-        };
+            headers: { 'content-type': 'application/json' },
+        });
     };
 }
 

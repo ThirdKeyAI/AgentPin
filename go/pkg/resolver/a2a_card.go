@@ -3,13 +3,12 @@ package resolver
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/a2a"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/fetch"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
 )
 
@@ -25,8 +24,9 @@ const A2aAgentCardPath = "/.well-known/agent-card.json"
 //	-> cross-check that the embedded agentpin_endpoint host == fetched domain
 //	-> derive a DiscoveryDocument
 type A2aAgentCardResolver struct {
-	// Client is the HTTP client used for fetches. When nil, a client with a
-	// 10s timeout and no redirects is constructed on first use.
+	// Client is the HTTP client used for fetches. When nil, fetch.DefaultClient
+	// (10 s timeout, no redirects) is used; a supplied client's redirect
+	// policy is always overridden so redirects are rejected.
 	Client *http.Client
 
 	mu       sync.RWMutex
@@ -58,48 +58,23 @@ func (r *A2aAgentCardResolver) ResolveDiscovery(rawDomain string) (*types.Discov
 	if err != nil {
 		return nil, types.NewVerificationError(types.ErrDiscoveryInvalid, err.Error())
 	}
-	client := r.Client
-	if client == nil {
-		client = &http.Client{
-			Timeout: 10 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		}
-	}
 	url := fmt.Sprintf("https://%s%s", domainName, A2aAgentCardPath)
-	resp, err := client.Get(url)
+	// No redirects (spec §4.8.5), bounded timeout and body size (AP-7, AP-13).
+	body, found, err := fetch.JSONBounded(r.Client, url, 0)
 	if err != nil {
+		return nil, types.NewVerificationError(types.ErrDiscoveryFetchFailed, err.Error())
+	}
+	if !found {
 		return nil, types.NewVerificationError(
 			types.ErrDiscoveryFetchFailed,
-			fmt.Sprintf("Failed to fetch %s: %s", url, err),
-		)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		return nil, types.NewVerificationError(
-			types.ErrDiscoveryFetchFailed,
-			fmt.Sprintf("Redirect detected fetching %s (status %d). Redirects are not allowed.", url, resp.StatusCode),
-		)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, types.NewVerificationError(
-			types.ErrDiscoveryFetchFailed,
-			fmt.Sprintf("Failed to fetch %s: HTTP %d", url, resp.StatusCode),
-		)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, types.NewVerificationError(
-			types.ErrDiscoveryInvalid,
-			fmt.Sprintf("Failed to read AgentCard at %s: %s", url, err),
+			fmt.Sprintf("Failed to fetch %s: HTTP 404", url),
 		)
 	}
 	var card types.A2aAgentCard
 	if err := json.Unmarshal(body, &card); err != nil {
 		return nil, types.NewVerificationError(
 			types.ErrDiscoveryInvalid,
-			fmt.Sprintf("Failed to parse AgentCard at %s: %s", url, err),
+			fmt.Sprintf("Failed to parse AgentCard at %s", url),
 		)
 	}
 	if err := a2a.VerifyAgentpinExtension(&card); err != nil {

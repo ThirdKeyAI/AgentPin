@@ -3,6 +3,7 @@
 package resolver
 
 import (
+	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ThirdKeyAi/agentpin/go/pkg/bundle"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/revocation"
@@ -41,15 +43,23 @@ func (r *WellKnownResolver) ResolveDiscovery(domain string) (*types.DiscoveryDoc
 
 // ResolveRevocation implements DiscoveryResolver.
 func (r *WellKnownResolver) ResolveRevocation(domainName string, doc *types.DiscoveryDocument) (*types.RevocationDocument, error) {
-	if doc == nil || doc.RevocationEndpoint == "" {
-		return nil, nil
+	if doc != nil && doc.RevocationEndpoint != "" {
+		// The endpoint is attacker-publishable; never fetch anything but
+		// https on the issuer's own host (AP-12). An explicitly declared
+		// endpoint fails closed on any error, including 404.
+		if err := domain.ValidateHTTPSURLForDomain(doc.RevocationEndpoint, domainName); err != nil {
+			return nil, err
+		}
+		return revocation.FetchRevocationDocument(r.Client, doc.RevocationEndpoint)
 	}
-	// The endpoint is attacker-publishable; never fetch anything but https
-	// on the issuer's own host (AP-12).
-	if err := domain.ValidateHTTPSURLForDomain(doc.RevocationEndpoint, domainName); err != nil {
+	// Spec §8.1: assume the default endpoint when none is declared. A 404
+	// there means the issuer publishes no revocations; any other failure
+	// still fails closed (design issue 3).
+	normalized, err := domain.Normalize(domainName)
+	if err != nil {
 		return nil, err
 	}
-	return revocation.FetchRevocationDocument(r.Client, doc.RevocationEndpoint)
+	return revocation.FetchRevocationDocumentIfPresent(r.Client, domain.DefaultRevocationEndpoint(normalized))
 }
 
 // LocalFileResolver reads discovery documents from a local directory in
@@ -177,10 +187,29 @@ func bundleKey(entity string) string {
 }
 
 // TrustBundleResolverFromJSON builds a TrustBundleResolver from a JSON-encoded
-// TrustBundle.
+// TrustBundle. The bundle is rejected when its expires_at has passed; its
+// signature, if any, is not checked — use TrustBundleResolverFromSignedJSON
+// for that.
 func TrustBundleResolverFromJSON(data []byte) (*TrustBundleResolver, error) {
 	var b types.TrustBundle
 	if err := json.Unmarshal(data, &b); err != nil {
+		return nil, err
+	}
+	if err := bundle.CheckBundleExpiry(&b); err != nil {
+		return nil, err
+	}
+	return NewTrustBundleResolver(&b), nil
+}
+
+// TrustBundleResolverFromSignedJSON builds a resolver from a signed
+// TrustBundle, requiring a valid signature under pub and an unexpired
+// expires_at (design issue 5).
+func TrustBundleResolverFromSignedJSON(data []byte, pub *ecdsa.PublicKey) (*TrustBundleResolver, error) {
+	var b types.TrustBundle
+	if err := json.Unmarshal(data, &b); err != nil {
+		return nil, err
+	}
+	if err := bundle.VerifyTrustBundle(&b, pub); err != nil {
 		return nil, err
 	}
 	return NewTrustBundleResolver(&b), nil
