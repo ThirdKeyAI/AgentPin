@@ -31,6 +31,9 @@ export {
     encodeJwt,
     decodeJwtUnverified,
     verifyJwt,
+    validateClaims,
+    MalformedCredentialError,
+    CREDENTIAL_VERSION,
 } from './jwt.js';
 
 export {

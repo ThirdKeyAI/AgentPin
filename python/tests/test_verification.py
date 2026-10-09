@@ -284,3 +284,84 @@ class TestRevocationDocumentValidation:
         stale = dict(f["revocation"], updated_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
         assert run(stale, aged).error_code == ErrorCode.DISCOVERY_INVALID
         assert run(f["revocation"], aged).valid
+
+
+def _raw_credential(priv, payload_json: str) -> str:
+    import base64
+
+    from agentpin.crypto import sign_data
+
+    header = base64.urlsafe_b64encode(b'{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"test-2026-01"}').rstrip(b"=")
+    signing_input = header.decode() + "." + base64.urlsafe_b64encode(payload_json.encode()).rstrip(b"=").decode()
+    der = base64.b64decode(sign_data(priv, signing_input.encode()))
+    return signing_input + "." + base64.urlsafe_b64encode(der).rstrip(b"=").decode()
+
+
+class TestClaimValidation:
+    """AP-5 / AP-14 / AP-18 regression tests."""
+
+    @pytest.mark.parametrize(
+        "payload_tpl",
+        [
+            '{{{base},"iat":{now}}}',
+            '{{{base},"iat":{now},"exp":"never"}}',
+            '{{{base},"iat":{now},"exp":{{}}}}',
+            '{{{base},"iat":-9223372036854775808,"exp":{far}}}',
+            '{{{base},"iat":{now},"exp":{now}}}',
+            '{{{base},"iat":{now},"exp":true}}',
+            "null",
+            "[]",
+        ],
+    )
+    def test_malformed_claims_return_failure_not_exception(self, payload_tpl):
+        import time
+
+        f = setup()
+        now = int(time.time())
+        base = (
+            '"iss":"example.com","sub":"urn:agentpin:example.com:agent","jti":"j",'
+            '"agentpin_version":"0.1","capabilities":["read:data"]'
+        )
+        payload = payload_tpl.format(base=base, now=now, far=now + 315360000)
+        r = verify_credential_offline(_raw_credential(f["priv"], payload), f["discovery"], None, KeyPinStore(), None)
+        assert not r.valid
+        assert r.error_code == ErrorCode.MALFORMED_CREDENTIAL
+
+    def test_missing_kid_or_non_object_header_does_not_raise(self):
+        import base64
+
+        f = setup()
+        header = base64.urlsafe_b64encode(b'{"alg":"ES256","typ":"agentpin-credential+jwt"}').rstrip(b"=").decode()
+        payload = base64.urlsafe_b64encode(b'{"iss":"example.com"}').rstrip(b"=").decode()
+        r = verify_credential_offline(f"{header}.{payload}.sig", f["discovery"], None, KeyPinStore(), None)
+        assert not r.valid
+        assert r.error_code == ErrorCode.MALFORMED_CREDENTIAL
+        null_header = base64.urlsafe_b64encode(b"null").rstrip(b"=").decode()
+        r2 = verify_credential_offline(f"{null_header}.{payload}.sig", f["discovery"], None, KeyPinStore(), None)
+        assert not r2.valid
+
+    def test_credential_ttl_max_enforced(self):
+        f = setup()
+        f["discovery"]["agents"][0]["credential_ttl_max"] = 600
+        long = issue_credential(
+            f["priv"], "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+            "verifier.com", [Capability("read:data")], None, None, 3600,
+        )
+        r = verify_credential_offline(long, f["discovery"], None, KeyPinStore(), "verifier.com")
+        assert r.error_code == ErrorCode.CREDENTIAL_EXPIRED
+        assert "credential_ttl_max" in r.error_message
+        short = issue_credential(
+            f["priv"], "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+            "verifier.com", [Capability("read:data")], None, None, 600,
+        )
+        assert verify_credential_offline(short, f["discovery"], None, KeyPinStore(), "verifier.com").valid
+        del f["discovery"]["agents"][0]["credential_ttl_max"]
+        two_days = issue_credential(
+            f["priv"], "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+            "verifier.com", [Capability("read:data")], None, None, 172800,
+        )
+        lax = VerifierConfig(max_ttl_secs=10 * 86400)
+        assert (
+            verify_credential_offline(two_days, f["discovery"], None, KeyPinStore(), "verifier.com", lax).error_code
+            == ErrorCode.CREDENTIAL_EXPIRED
+        )

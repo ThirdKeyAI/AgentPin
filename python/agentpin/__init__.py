@@ -82,10 +82,13 @@ from .jwk import (
     pem_to_jwk,
 )
 from .jwt import (
+    CREDENTIAL_VERSION,
+    MalformedCredentialError,
     base64url_decode,
     base64url_encode,
     decode_jwt_unverified,
     encode_jwt,
+    validate_claims,
     verify_jwt,
 )
 from .mutual import (
@@ -212,6 +215,9 @@ __all__ = [
     "encode_jwt",
     "decode_jwt_unverified",
     "verify_jwt",
+    "validate_claims",
+    "MalformedCredentialError",
+    "CREDENTIAL_VERSION",
     # Capability
     "Capability",
     "capabilities_subset",

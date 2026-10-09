@@ -4,6 +4,8 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 import { generateKeyPair } from '../src/crypto.js';
 import { pemToJwk } from '../src/jwk.js';
 import { encodeJwt } from '../src/jwt.js';
@@ -272,5 +274,68 @@ describe('revocation document validation (design issue 3)', () => {
         const aged = { ...f.config, revocationMaxAgeSecs: 60 };
         assert.strictEqual(run({ ...f.revocation, updated_at: new Date(Date.now() - 3600000).toISOString() }, aged).error_code, ErrorCode.DISCOVERY_INVALID);
         assert.ok(run(f.revocation, aged).valid);
+    });
+});
+
+describe('claim validation (AP-5, AP-14, AP-18)', () => {
+    function rawCredential(kp, payload) {
+        const { createSign, createPrivateKey } = require('node:crypto');
+        const header = Buffer.from('{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"test-2026-01"}').toString('base64url');
+        const signingInput = `${header}.${Buffer.from(payload).toString('base64url')}`;
+        const sign = createSign('SHA256');
+        sign.update(signingInput);
+        const sig = sign.sign({ key: createPrivateKey(kp.privateKeyPem), dsaEncoding: 'der' });
+        return `${signingInput}.${sig.toString('base64url')}`;
+    }
+
+    test('missing, string, negative or inconsistent exp/iat fail with MALFORMED_CREDENTIAL', () => {
+        const f = setup();
+        const now = Math.floor(Date.now() / 1000);
+        const base = '"iss":"example.com","sub":"urn:agentpin:example.com:agent","jti":"j","agentpin_version":"0.1","capabilities":["read:data"]';
+        const cases = [
+            `{${base},"iat":${now}}`,
+            `{${base},"iat":${now},"exp":"never"}`,
+            `{${base},"iat":${now},"exp":{}}`,
+            `{${base},"iat":-9223372036854775808,"exp":${now + 315360000}}`,
+            `{${base},"iat":${now},"exp":${now}}`,
+            `{${base},"iat":${now},"exp":${now + 1.5}}`,
+            'null',
+            '[]',
+        ];
+        for (const payload of cases) {
+            const r = verifyCredentialOffline(rawCredential(f.kp, payload), f.discovery, null, new KeyPinStore(), null, f.config);
+            assert.strictEqual(r.valid, false, payload);
+            assert.strictEqual(r.error_code, ErrorCode.MALFORMED_CREDENTIAL, payload);
+        }
+    });
+
+    test('missing kid or non-object header does not throw', () => {
+        const f = setup();
+        const header = Buffer.from('{"alg":"ES256","typ":"agentpin-credential+jwt"}').toString('base64url');
+        const payload = Buffer.from('{"iss":"example.com"}').toString('base64url');
+        const r = verifyCredentialOffline(`${header}.${payload}.sig`, f.discovery, null, new KeyPinStore(), null, f.config);
+        assert.strictEqual(r.valid, false);
+        assert.strictEqual(r.error_code, ErrorCode.MALFORMED_CREDENTIAL);
+        const nullHeader = Buffer.from('null').toString('base64url');
+        const r2 = verifyCredentialOffline(`${nullHeader}.${payload}.sig`, f.discovery, null, new KeyPinStore(), null, f.config);
+        assert.strictEqual(r2.valid, false);
+    });
+
+    test('credential_ttl_max from the agent declaration is enforced', () => {
+        const f = setup();
+        f.discovery.agents[0].credential_ttl_max = 600;
+        const long = issueCredential(f.kp.privateKeyPem, 'test-2026-01', 'example.com', 'urn:agentpin:example.com:agent',
+            'verifier.com', [new Capability('read:data')], null, null, 3600);
+        const r = verifyCredentialOffline(long, f.discovery, null, new KeyPinStore(), 'verifier.com', f.config);
+        assert.strictEqual(r.error_code, ErrorCode.CREDENTIAL_EXPIRED);
+        assert.match(r.error_message, /credential_ttl_max/);
+        const short = issueCredential(f.kp.privateKeyPem, 'test-2026-01', 'example.com', 'urn:agentpin:example.com:agent',
+            'verifier.com', [new Capability('read:data')], null, null, 600);
+        assert.ok(verifyCredentialOffline(short, f.discovery, null, new KeyPinStore(), 'verifier.com', f.config).valid);
+        delete f.discovery.agents[0].credential_ttl_max;
+        const twoDays = issueCredential(f.kp.privateKeyPem, 'test-2026-01', 'example.com', 'urn:agentpin:example.com:agent',
+            'verifier.com', [new Capability('read:data')], null, null, 172800);
+        const lax = { ...f.config, maxTtlSecs: 10 * 86400 };
+        assert.strictEqual(verifyCredentialOffline(twoDays, f.discovery, null, new KeyPinStore(), 'verifier.com', lax).error_code, ErrorCode.CREDENTIAL_EXPIRED);
     });
 });

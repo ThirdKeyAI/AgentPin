@@ -26,6 +26,11 @@ pub enum Error {
     #[error("JWT error: {0}")]
     Jwt(String),
 
+    /// The JWT parsed but its claims are missing, mistyped or inconsistent
+    /// (AP-5, AP-14, AP-18).
+    #[error("Malformed credential: {0}")]
+    MalformedCredential(String),
+
     #[error("Verification failed: {code}: {message}")]
     Verification { code: ErrorCode, message: String },
 
@@ -106,6 +111,8 @@ pub enum ErrorCode {
     AlgorithmRejected,
     #[serde(rename = "KEY_PIN_MISMATCH")]
     KeyPinMismatch,
+    #[serde(rename = "MALFORMED_CREDENTIAL")]
+    MalformedCredential,
 }
 
 impl std::fmt::Display for ErrorCode {
@@ -129,6 +136,7 @@ impl std::fmt::Display for ErrorCode {
             ErrorCode::AudienceMismatch => "AUDIENCE_MISMATCH",
             ErrorCode::AlgorithmRejected => "ALGORITHM_REJECTED",
             ErrorCode::KeyPinMismatch => "KEY_PIN_MISMATCH",
+            ErrorCode::MalformedCredential => "MALFORMED_CREDENTIAL",
         };
         write!(f, "{}", s)
     }

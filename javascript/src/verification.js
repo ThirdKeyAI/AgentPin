@@ -3,7 +3,7 @@
  * Implements the 12-step verification flow from the spec.
  */
 
-import { decodeJwtUnverified, verifyJwt } from './jwt.js';
+import { decodeJwtUnverified, verifyJwt, MalformedCredentialError } from './jwt.js';
 import { jwkToPem } from './jwk.js';
 import { validateCredentialAgainstDiscovery } from './credential.js';
 import { validateDiscoveryDocument, findKeyByKid, findAgentById, fetchDiscoveryDocument } from './discovery.js';
@@ -70,6 +70,20 @@ function failureResult(code, message) {
 }
 
 /**
+ * Map a decode error: claim-shape problems are MALFORMED_CREDENTIAL,
+ * everything else (structure, alg, typ) is ALGORITHM_REJECTED.
+ */
+function parseFailure(e) {
+    if (e instanceof MalformedCredentialError) {
+        return failureResult(ErrorCode.MALFORMED_CREDENTIAL, e.reason);
+    }
+    return failureResult(ErrorCode.ALGORITHM_REJECTED, `JWT parse failed: ${e.message}`);
+}
+
+/** Default `credential_ttl_max` when an agent declaration omits it (spec §4.5). */
+export const DEFAULT_CREDENTIAL_TTL_MAX = 86400;
+
+/**
  * Verify a credential offline using caller-provided documents.
  * Implements the 12-step verification flow from the spec.
  * @param {string} credentialJwt
@@ -83,12 +97,13 @@ function failureResult(code, message) {
 export function verifyCredentialOffline(credentialJwt, discovery, revocation, pinStore, audience, config) {
     config = config || defaultVerifierConfig();
 
-    // Step 1: Parse JWT (validates alg == ES256 and typ == agentpin-credential+jwt)
+    // Step 1: Parse JWT (validates alg == ES256 and typ == agentpin-credential+jwt,
+    // then claim shape — AP-5 / AP-18)
     let header, payload;
     try {
         ({ header, payload } = decodeJwtUnverified(credentialJwt));
     } catch (e) {
-        return failureResult(ErrorCode.ALGORITHM_REJECTED, `JWT parse failed: ${e.message}`);
+        return parseFailure(e);
     }
 
     // Normalize the issuer domain before it is used as a lookup key anywhere
@@ -114,8 +129,12 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
         return failureResult(ErrorCode.CREDENTIAL_EXPIRED, 'Credential not yet valid (nbf)');
     }
 
-    // Check max TTL
+    // Check max TTL. Claims were validated as safe non-negative integers with
+    // exp > iat, so the difference is exact (AP-14).
     const lifetime = payload.exp - payload.iat;
+    if (!Number.isSafeInteger(lifetime) || lifetime <= 0) {
+        return failureResult(ErrorCode.MALFORMED_CREDENTIAL, 'exp must be greater than iat');
+    }
     if (lifetime > config.maxTtlSecs) {
         return failureResult(
             ErrorCode.CREDENTIAL_EXPIRED,
@@ -192,6 +211,16 @@ export function verifyCredentialOffline(credentialJwt, discovery, revocation, pi
     }
     if (agent.status !== 'active') {
         return failureResult(ErrorCode.AGENT_INACTIVE, `Agent '${payload.sub}' status is ${agent.status}`);
+    }
+
+    // Spec §5.7: exp - iat MUST NOT exceed the agent's credential_ttl_max
+    // (default 86400 when omitted) — AP-14.
+    const ttlMax = Number.isSafeInteger(agent.credential_ttl_max) ? agent.credential_ttl_max : DEFAULT_CREDENTIAL_TTL_MAX;
+    if (lifetime > ttlMax) {
+        return failureResult(
+            ErrorCode.CREDENTIAL_EXPIRED,
+            `Credential lifetime ${lifetime} exceeds agent credential_ttl_max ${ttlMax}`
+        );
     }
 
     // Step 8: Validate capabilities
@@ -281,7 +310,7 @@ export async function verifyCredential(credentialJwt, pinStore, audience, config
     try {
         ({ payload } = decodeJwtUnverified(credentialJwt));
     } catch (e) {
-        return failureResult(ErrorCode.ALGORITHM_REJECTED, `JWT parse failed: ${e.message}`);
+        return parseFailure(e);
     }
 
     let issuer;

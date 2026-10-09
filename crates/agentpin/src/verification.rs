@@ -125,6 +125,24 @@ impl VerificationResult {
     }
 }
 
+/// Map a decode error to a verification failure: claim-shape problems are
+/// MALFORMED_CREDENTIAL, everything else (structure, alg, typ) is
+/// ALGORITHM_REJECTED as before.
+fn parse_failure(e: Error) -> VerificationResult {
+    match e {
+        Error::MalformedCredential(msg) => {
+            VerificationResult::failure(ErrorCode::MalformedCredential, &msg)
+        }
+        other => VerificationResult::failure(
+            ErrorCode::AlgorithmRejected,
+            &format!("JWT parse failed: {}", other),
+        ),
+    }
+}
+
+/// Default `credential_ttl_max` when an agent declaration omits it (spec §4.5).
+pub const DEFAULT_CREDENTIAL_TTL_MAX: u64 = 86400;
+
 /// Verify a credential offline using caller-provided documents.
 /// Implements the 12-step verification flow from the spec.
 pub fn verify_credential_offline(
@@ -135,15 +153,11 @@ pub fn verify_credential_offline(
     audience: Option<&str>,
     config: &VerifierConfig,
 ) -> VerificationResult {
-    // Step 1: Parse JWT (validates alg == ES256 and typ == agentpin-credential+jwt)
+    // Step 1: Parse JWT (validates alg == ES256 and typ == agentpin-credential+jwt,
+    // then claim shape — AP-5 / AP-18)
     let (header, payload, _sig) = match jwt::decode_jwt_unverified(credential_jwt) {
         Ok(parts) => parts,
-        Err(e) => {
-            return VerificationResult::failure(
-                ErrorCode::AlgorithmRejected,
-                &format!("JWT parse failed: {}", e),
-            )
-        }
+        Err(e) => return parse_failure(e),
     };
 
     // Normalize the issuer domain before it is used as a lookup key anywhere
@@ -180,8 +194,17 @@ pub fn verify_credential_offline(
         }
     }
 
-    // Check max TTL
-    let lifetime = payload.exp - payload.iat;
+    // Check max TTL. Claims were validated non-negative with exp > iat, so
+    // the subtraction cannot wrap; use checked arithmetic anyway (AP-14).
+    let lifetime = match payload.exp.checked_sub(payload.iat) {
+        Some(l) if l > 0 => l,
+        _ => {
+            return VerificationResult::failure(
+                ErrorCode::MalformedCredential,
+                "exp must be greater than iat",
+            )
+        }
+    };
     if lifetime > config.max_ttl_secs {
         return VerificationResult::failure(
             ErrorCode::CredentialExpired,
@@ -292,6 +315,21 @@ pub fn verify_credential_offline(
         );
     }
 
+    // Spec §5.7: exp - iat MUST NOT exceed the agent's credential_ttl_max
+    // (default 86400 when omitted) — AP-14.
+    let ttl_max = agent
+        .credential_ttl_max
+        .unwrap_or(DEFAULT_CREDENTIAL_TTL_MAX);
+    if u64::try_from(lifetime).map_or(true, |l| l > ttl_max) {
+        return VerificationResult::failure(
+            ErrorCode::CredentialExpired,
+            &format!(
+                "Credential lifetime {} exceeds agent credential_ttl_max {}",
+                lifetime, ttl_max
+            ),
+        );
+    }
+
     // Step 8: Validate capabilities
     if let Err(e) =
         validate_credential_against_discovery(&payload.capabilities, &agent.capabilities)
@@ -398,12 +436,7 @@ pub fn verify_credential_with_resolver(
 ) -> VerificationResult {
     let (_header, payload, _sig) = match jwt::decode_jwt_unverified(credential_jwt) {
         Ok(parts) => parts,
-        Err(e) => {
-            return VerificationResult::failure(
-                ErrorCode::AlgorithmRejected,
-                &format!("JWT parse failed: {}", e),
-            )
-        }
+        Err(e) => return parse_failure(e),
     };
 
     let issuer = match normalize_domain(&payload.iss) {
@@ -457,12 +490,7 @@ pub async fn verify_credential_with_async_resolver(
 ) -> VerificationResult {
     let (_header, payload, _sig) = match jwt::decode_jwt_unverified(credential_jwt) {
         Ok(parts) => parts,
-        Err(e) => {
-            return VerificationResult::failure(
-                ErrorCode::AlgorithmRejected,
-                &format!("JWT parse failed: {}", e),
-            )
-        }
+        Err(e) => return parse_failure(e),
     };
 
     let issuer = match normalize_domain(&payload.iss) {
@@ -1093,6 +1121,142 @@ mod tests {
         let fresh = f.revocation.clone();
         let r = run(&f, &fresh, &aged);
         assert!(r.valid, "{:?}", r);
+    }
+
+    fn raw_credential(sk: &p256::ecdsa::SigningKey, payload_json: &str) -> String {
+        let header = jwt::base64url_encode(
+            br#"{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"test-2026-01"}"#,
+        );
+        let signing_input = format!(
+            "{}.{}",
+            header,
+            jwt::base64url_encode(payload_json.as_bytes())
+        );
+        let sig = crypto::sign_bytes(sk, signing_input.as_bytes());
+        let der = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, sig).unwrap();
+        format!("{}.{}", signing_input, jwt::base64url_encode(&der))
+    }
+
+    /// AP-5 / AP-14 / AP-18: credentials with a missing, string or negative
+    /// exp/iat, or exp <= iat, fail with MALFORMED_CREDENTIAL even when
+    /// correctly signed, and a huge-TTL credential with i64::MIN iat does
+    /// not bypass the max-TTL cap.
+    #[test]
+    fn test_malformed_claims_rejected() {
+        let f = setup();
+        let sk = crypto::load_signing_key(&f.private_key_pem).unwrap();
+        let now = Utc::now().timestamp();
+        let base = r#""iss":"example.com","sub":"urn:agentpin:example.com:agent","jti":"j","agentpin_version":"0.1","capabilities":["read:data"]"#;
+        let cases = [
+            format!("{{{},\"iat\":{}}}", base, now),
+            format!("{{{},\"iat\":{},\"exp\":\"never\"}}", base, now),
+            format!(
+                "{{{},\"iat\":-9223372036854775808,\"exp\":{}}}",
+                base,
+                now + 315360000
+            ),
+            format!("{{{},\"iat\":{},\"exp\":{}}}", base, now, now),
+        ];
+        for payload in cases {
+            let jwt = raw_credential(&sk, &payload);
+            let r = verify_credential_offline(
+                &jwt,
+                &f.discovery,
+                None,
+                &mut KeyPinStore::new(),
+                None,
+                &VerifierConfig::default(),
+            );
+            assert!(!r.valid, "{}", payload);
+            assert_eq!(
+                r.error_code,
+                Some(ErrorCode::MalformedCredential),
+                "{}",
+                payload
+            );
+        }
+    }
+
+    /// AP-14: the agent's declared credential_ttl_max is enforced
+    /// (default 86400 when omitted).
+    #[test]
+    fn test_credential_ttl_max_enforced() {
+        let mut f = setup();
+        f.discovery.agents[0].credential_ttl_max = Some(600);
+        let sk = crypto::load_signing_key(&f.private_key_pem).unwrap();
+        let long = issue_credential(
+            &sk,
+            "test-2026-01",
+            "example.com",
+            "urn:agentpin:example.com:agent",
+            Some("verifier.com"),
+            vec![Capability::from("read:data")],
+            None,
+            None,
+            3600,
+        )
+        .unwrap();
+        let r = verify_credential_offline(
+            &long,
+            &f.discovery,
+            None,
+            &mut KeyPinStore::new(),
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert_eq!(r.error_code, Some(ErrorCode::CredentialExpired));
+        assert!(r.error_message.unwrap().contains("credential_ttl_max"));
+
+        let short = issue_credential(
+            &sk,
+            "test-2026-01",
+            "example.com",
+            "urn:agentpin:example.com:agent",
+            Some("verifier.com"),
+            vec![Capability::from("read:data")],
+            None,
+            None,
+            600,
+        )
+        .unwrap();
+        let r = verify_credential_offline(
+            &short,
+            &f.discovery,
+            None,
+            &mut KeyPinStore::new(),
+            Some("verifier.com"),
+            &f.config,
+        );
+        assert!(r.valid, "{:?}", r);
+
+        // Omitted credential_ttl_max defaults to 86400: a 2-day credential fails
+        // even when the verifier's own cap is raised.
+        f.discovery.agents[0].credential_ttl_max = None;
+        let two_days = issue_credential(
+            &sk,
+            "test-2026-01",
+            "example.com",
+            "urn:agentpin:example.com:agent",
+            Some("verifier.com"),
+            vec![Capability::from("read:data")],
+            None,
+            None,
+            172800,
+        )
+        .unwrap();
+        let lax = VerifierConfig {
+            max_ttl_secs: 10 * 86400,
+            ..Default::default()
+        };
+        let r = verify_credential_offline(
+            &two_days,
+            &f.discovery,
+            None,
+            &mut KeyPinStore::new(),
+            Some("verifier.com"),
+            &lax,
+        );
+        assert_eq!(r.error_code, Some(ErrorCode::CredentialExpired));
     }
 
     #[test]

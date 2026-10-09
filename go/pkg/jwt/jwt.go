@@ -97,11 +97,6 @@ func DecodeJWTUnverified(jwt string) (*types.JWTHeader, *types.JWTPayload, strin
 	if err := json.Unmarshal(hb, &header); err != nil {
 		return nil, nil, "", fmt.Errorf("invalid JWT header: %w", err)
 	}
-	var payload types.JWTPayload
-	if err := json.Unmarshal(pb, &payload); err != nil {
-		return nil, nil, "", fmt.Errorf("invalid JWT payload: %w", err)
-	}
-
 	// SECURITY: reject any algorithm except ES256 BEFORE verifying.
 	if header.Alg != RequiredAlg {
 		return nil, nil, "", fmt.Errorf("algorithm '%s' rejected, must be '%s'", header.Alg, RequiredAlg)
@@ -110,7 +105,62 @@ func DecodeJWTUnverified(jwt string) (*types.JWTHeader, *types.JWTPayload, strin
 		return nil, nil, "", fmt.Errorf("token type '%s' rejected, must be '%s'", header.Typ, RequiredTyp)
 	}
 
+	// Payload shape: a JSON object whose claims have the right types;
+	// anything else is a malformed credential (AP-5, AP-18).
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(pb, &raw); err != nil {
+		return nil, nil, "", &MalformedCredentialError{Reason: "JWT payload is not a JSON object"}
+	}
+	var payload types.JWTPayload
+	if err := json.Unmarshal(pb, &payload); err != nil {
+		return nil, nil, "", &MalformedCredentialError{Reason: "invalid JWT payload: " + err.Error()}
+	}
+	for _, required := range []string{"iss", "sub", "iat", "exp", "jti", "agentpin_version", "capabilities"} {
+		if _, ok := raw[required]; !ok {
+			return nil, nil, "", &MalformedCredentialError{Reason: "missing claim " + required}
+		}
+	}
+	if err := ValidateClaims(&payload); err != nil {
+		return nil, nil, "", err
+	}
+
 	return &header, &payload, parts[2], nil
+}
+
+// MalformedCredentialError reports a JWT whose claims are missing, mistyped
+// or inconsistent (AP-5, AP-14, AP-18). Verifiers map it to
+// MALFORMED_CREDENTIAL.
+type MalformedCredentialError struct{ Reason string }
+
+func (e *MalformedCredentialError) Error() string { return "malformed credential: " + e.Reason }
+
+// CredentialVersion is the protocol version a credential's agentpin_version
+// claim must carry.
+const CredentialVersion = "0.1"
+
+// ValidateClaims checks claim values the decoder cannot express as types:
+// non-empty identifiers, non-negative timestamps, exp > iat, a supported
+// protocol version.
+func ValidateClaims(p *types.JWTPayload) error {
+	switch {
+	case p.Iss == "":
+		return &MalformedCredentialError{Reason: "iss is empty"}
+	case p.Sub == "":
+		return &MalformedCredentialError{Reason: "sub is empty"}
+	case p.Jti == "":
+		return &MalformedCredentialError{Reason: "jti is empty"}
+	case p.Iat < 0 || p.Exp < 0:
+		return &MalformedCredentialError{Reason: "iat and exp must be non-negative"}
+	case p.Exp <= p.Iat:
+		return &MalformedCredentialError{Reason: "exp must be greater than iat"}
+	case p.Nbf != nil && *p.Nbf < 0:
+		return &MalformedCredentialError{Reason: "nbf must be non-negative"}
+	case p.AgentpinVersion != CredentialVersion:
+		return &MalformedCredentialError{Reason: "unsupported agentpin_version '" + p.AgentpinVersion + "'"}
+	case p.Capabilities == nil:
+		return &MalformedCredentialError{Reason: "capabilities must be an array"}
+	}
+	return nil
 }
 
 // VerifyJWT verifies a JWT signature with pub. Returns the decoded header

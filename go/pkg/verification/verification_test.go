@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"encoding/base64"
+	"fmt"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/credential"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/crypto"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
@@ -14,6 +16,7 @@ import (
 	"github.com/ThirdKeyAi/agentpin/go/pkg/resolver"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/revocation"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
+	"strings"
 )
 
 type fixture struct {
@@ -369,5 +372,63 @@ func TestRevocationDocumentValidation(t *testing.T) {
 	}
 	if r := run(f.revocation, aged); !r.Valid {
 		t.Fatalf("fresh under max age: %+v", r)
+	}
+}
+
+func rawCredential(t *testing.T, priv *ecdsa.PrivateKey, payload string) string {
+	t.Helper()
+	header := jwt.Base64URLEncode([]byte(`{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"test-2026-01"}`))
+	signingInput := header + "." + jwt.Base64URLEncode([]byte(payload))
+	sigB64, err := crypto.SignBytes(priv, []byte(signingInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, _ := base64.StdEncoding.DecodeString(sigB64)
+	return signingInput + "." + jwt.Base64URLEncode(der)
+}
+
+// AP-5 / AP-14 / AP-18: correctly signed credentials with missing, string
+// or negative exp/iat, or exp <= iat, fail with MALFORMED_CREDENTIAL; an
+// int64-min iat cannot wrap past the max-TTL cap.
+func TestMalformedClaimsRejected(t *testing.T) {
+	f := setup(t)
+	now := time.Now().Unix()
+	base := `"iss":"example.com","sub":"urn:agentpin:example.com:agent","jti":"j","agentpin_version":"0.1","capabilities":["read:data"]`
+	cases := []string{
+		fmt.Sprintf(`{%s,"iat":%d}`, base, now),
+		fmt.Sprintf(`{%s,"iat":%d,"exp":"never"}`, base, now),
+		fmt.Sprintf(`{%s,"iat":-9223372036854775808,"exp":%d}`, base, now+315360000),
+		fmt.Sprintf(`{%s,"iat":%d,"exp":%d}`, base, now, now),
+	}
+	for _, payload := range cases {
+		r := VerifyCredentialOffline(rawCredential(t, f.priv, payload), f.discovery, nil, pinning.NewKeyPinStore(), "", f.cfg)
+		if r.Valid || r.ErrorCode != types.ErrMalformedCredential {
+			t.Fatalf("payload %s: %+v", payload, r)
+		}
+	}
+}
+
+// AP-14: the agent's declared credential_ttl_max is enforced (default 86400).
+func TestCredentialTTLMaxEnforced(t *testing.T) {
+	f := setup(t)
+	short := uint64(600)
+	f.discovery.Agents[0].CredentialTTLMax = &short
+	long, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, nil, nil, 3600)
+	if r := VerifyCredentialOffline(long, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg); r.ErrorCode != types.ErrCredentialExpired || !strings.Contains(r.ErrorMessage, "credential_ttl_max") {
+		t.Fatalf("expected ttl_max rejection: %+v", r)
+	}
+	ok, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, nil, nil, 600)
+	if r := VerifyCredentialOffline(ok, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg); !r.Valid {
+		t.Fatalf("600s credential should pass: %+v", r)
+	}
+	f.discovery.Agents[0].CredentialTTLMax = nil
+	twoDays, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, nil, nil, 172800)
+	lax := f.cfg
+	lax.MaxTTLSecs = 10 * 86400
+	if r := VerifyCredentialOffline(twoDays, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", lax); r.ErrorCode != types.ErrCredentialExpired {
+		t.Fatalf("default ttl_max 86400 should reject: %+v", r)
 	}
 }

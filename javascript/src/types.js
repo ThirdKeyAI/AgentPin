@@ -75,6 +75,7 @@ export const ErrorCode = Object.freeze({
     AUDIENCE_MISMATCH: 'AUDIENCE_MISMATCH',
     ALGORITHM_REJECTED: 'ALGORITHM_REJECTED',
     KEY_PIN_MISMATCH: 'KEY_PIN_MISMATCH',
+    MALFORMED_CREDENTIAL: 'MALFORMED_CREDENTIAL',
 });
 
 /** AgentPin-specific error class. */

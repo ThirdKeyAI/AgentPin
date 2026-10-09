@@ -20,6 +20,7 @@
 package verification
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -93,6 +94,21 @@ func failure(code types.ErrorCode, msg string) Result {
 	return Result{Valid: false, ErrorCode: code, ErrorMessage: msg, Warnings: []string{}}
 }
 
+// parseFailure maps a decode error: claim-shape problems are
+// MALFORMED_CREDENTIAL, everything else (structure, alg, typ) is
+// ALGORITHM_REJECTED.
+func parseFailure(err error) Result {
+	var mce *jwt.MalformedCredentialError
+	if errors.As(err, &mce) {
+		return failure(types.ErrMalformedCredential, mce.Reason)
+	}
+	return failure(types.ErrAlgorithmRejected, fmt.Sprintf("JWT parse failed: %v", err))
+}
+
+// DefaultCredentialTTLMax is the credential_ttl_max assumed when an agent
+// declaration omits it (spec §4.5).
+const DefaultCredentialTTLMax uint64 = 86400
+
 // VerifyCredentialOffline runs the full 12-step verification flow against a
 // caller-provided discovery (and optional revocation) document.
 func VerifyCredentialOffline(
@@ -103,10 +119,11 @@ func VerifyCredentialOffline(
 	audience string,
 	config VerifierConfig,
 ) Result {
-	// Steps 1-2: Parse JWT (alg/typ enforced inside DecodeJWTUnverified).
+	// Steps 1-2: Parse JWT (alg/typ enforced inside DecodeJWTUnverified, then
+	// claim shape — AP-5 / AP-18).
 	header, payload, _, err := jwt.DecodeJWTUnverified(credentialJWT)
 	if err != nil {
-		return failure(types.ErrAlgorithmRejected, fmt.Sprintf("JWT parse failed: %v", err))
+		return parseFailure(err)
 	}
 
 	// Normalize the issuer domain before it is used as a lookup key anywhere
@@ -131,7 +148,12 @@ func VerifyCredentialOffline(
 			return failure(types.ErrCredentialExpired, "Credential not yet valid (nbf)")
 		}
 	}
+	// Claims were validated non-negative with exp > iat, so this cannot wrap
+	// (AP-14).
 	lifetime := payload.Exp - payload.Iat
+	if lifetime <= 0 {
+		return failure(types.ErrMalformedCredential, "exp must be greater than iat")
+	}
 	if lifetime > config.MaxTTLSecs {
 		return failure(
 			types.ErrCredentialExpired,
@@ -195,6 +217,19 @@ func VerifyCredentialOffline(
 	}
 	if agent.Status != types.AgentActive {
 		return failure(types.ErrAgentInactive, fmt.Sprintf("Agent '%s' status is %s", payload.Sub, agent.Status))
+	}
+
+	// Spec §5.7: exp - iat MUST NOT exceed the agent's credential_ttl_max
+	// (default 86400 when omitted) — AP-14.
+	ttlMax := DefaultCredentialTTLMax
+	if agent.CredentialTTLMax != nil {
+		ttlMax = *agent.CredentialTTLMax
+	}
+	if uint64(lifetime) > ttlMax {
+		return failure(
+			types.ErrCredentialExpired,
+			fmt.Sprintf("Credential lifetime %d exceeds agent credential_ttl_max %d", lifetime, ttlMax),
+		)
 	}
 
 	// Step 11: Capability subset.
@@ -277,7 +312,7 @@ func VerifyCredentialWithResolver(
 ) Result {
 	_, payload, _, err := jwt.DecodeJWTUnverified(credentialJWT)
 	if err != nil {
-		return failure(types.ErrAlgorithmRejected, fmt.Sprintf("JWT parse failed: %v", err))
+		return parseFailure(err)
 	}
 
 	issuer, err := domain.Normalize(payload.Iss)

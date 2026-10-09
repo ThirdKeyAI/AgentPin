@@ -13,7 +13,7 @@ from .credential import validate_credential_against_discovery
 from .discovery import fetch_discovery_document, find_agent_by_id, find_key_by_kid, validate_discovery_document
 from .domain import default_revocation_endpoint, normalize_domain, validate_https_url_for_domain
 from .jwk import jwk_to_pem
-from .jwt import decode_jwt_unverified, verify_jwt
+from .jwt import MalformedCredentialError, decode_jwt_unverified, verify_jwt
 from .pinning import KeyPinStore, PinningResult, check_pinning
 from .revocation import (
     check_revocation,
@@ -46,6 +46,22 @@ def _failure(code: str, message: str) -> VerificationResult:
     return VerificationResult(valid=False, error_code=code, error_message=message)
 
 
+def _parse_failure(exc: Exception) -> VerificationResult:
+    """Claim-shape problems are MALFORMED_CREDENTIAL; everything else
+    (structure, alg, typ) is ALGORITHM_REJECTED."""
+    if isinstance(exc, MalformedCredentialError):
+        return _failure(ErrorCode.MALFORMED_CREDENTIAL, exc.reason)
+    return _failure(ErrorCode.ALGORITHM_REJECTED, f"JWT parse failed: {exc}")
+
+
+DEFAULT_CREDENTIAL_TTL_MAX = 86400
+"""Default ``credential_ttl_max`` when an agent declaration omits it (spec §4.5)."""
+
+
+def _is_nonneg_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def verify_credential_offline(
     credential_jwt: str,
     discovery: dict,
@@ -61,11 +77,11 @@ def verify_credential_offline(
     if config is None:
         config = VerifierConfig()
 
-    # Step 1: Parse JWT
+    # Step 1: Parse JWT (alg/typ, then claim shape — AP-5 / AP-18)
     try:
         header, payload, _sig = decode_jwt_unverified(credential_jwt)
     except Exception as e:
-        return _failure(ErrorCode.ALGORITHM_REJECTED, f"JWT parse failed: {e}")
+        return _parse_failure(e)
 
     # Normalize the issuer domain before it is used as a lookup key anywhere
     # (pin store, entity comparison, resolver paths/URLs) — AP-3.
@@ -78,15 +94,18 @@ def verify_credential_offline(
     now = math.floor(time.time())
     skew = config.clock_skew_secs
 
-    if payload.get("iat", 0) > now + skew:
+    if payload["iat"] > now + skew:
         return _failure(ErrorCode.CREDENTIAL_EXPIRED, "Credential issued in the future")
-    if payload.get("exp", 0) <= now - skew:
+    if payload["exp"] <= now - skew:
         return _failure(ErrorCode.CREDENTIAL_EXPIRED, "Credential has expired")
     nbf = payload.get("nbf")
     if nbf is not None and nbf > now + skew:
         return _failure(ErrorCode.CREDENTIAL_EXPIRED, "Credential not yet valid (nbf)")
 
-    lifetime = payload.get("exp", 0) - payload.get("iat", 0)
+    # Claims were validated as non-negative integers with exp > iat (AP-14).
+    lifetime = payload["exp"] - payload["iat"]
+    if lifetime <= 0:
+        return _failure(ErrorCode.MALFORMED_CREDENTIAL, "exp must be greater than iat")
     if lifetime > config.max_ttl_secs:
         return _failure(
             ErrorCode.CREDENTIAL_EXPIRED,
@@ -152,6 +171,17 @@ def verify_credential_offline(
         return _failure(ErrorCode.AGENT_NOT_FOUND, f"Agent '{payload['sub']}' not found in discovery document")
     if agent.get("status") != "active":
         return _failure(ErrorCode.AGENT_INACTIVE, f"Agent '{payload['sub']}' status is {agent.get('status')}")
+
+    # Spec §5.7: exp - iat MUST NOT exceed the agent's credential_ttl_max
+    # (default 86400 when omitted) — AP-14.
+    ttl_max = agent.get("credential_ttl_max")
+    if not _is_nonneg_int(ttl_max):
+        ttl_max = DEFAULT_CREDENTIAL_TTL_MAX
+    if lifetime > ttl_max:
+        return _failure(
+            ErrorCode.CREDENTIAL_EXPIRED,
+            f"Credential lifetime {lifetime} exceeds agent credential_ttl_max {ttl_max}",
+        )
 
     # Step 8: Validate capabilities
     try:
@@ -224,7 +254,7 @@ def verify_credential(
     try:
         _header, payload, _sig = decode_jwt_unverified(credential_jwt)
     except Exception as e:
-        return _failure(ErrorCode.ALGORITHM_REJECTED, f"JWT parse failed: {e}")
+        return _parse_failure(e)
 
     try:
         issuer = normalize_domain(payload.get("iss"))
