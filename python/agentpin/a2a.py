@@ -6,9 +6,12 @@ extension carries the AgentPin endpoint URL, the entity's public key in JWK
 form, and a detached ECDSA P-256 signature over the canonical bytes of the
 rest of the AgentCard.
 
-Canonicalisation: the signing input is the AgentCard with its ``agentpin``
-field omitted, JSON-serialised with sorted keys and compact separators —
-matches the Rust ``serde_json::to_value`` + ``BTreeMap`` trick.
+Canonicalization: the signing input is the AgentCard with its ``agentpin``
+field replaced by ``{"agentpin_endpoint", "public_key_jwk"}`` (signature
+cleared), JSON-serialized with sorted keys and compact separators and wrapped
+in the ``agentpin-agentcard-v1`` signing context. The endpoint and key are
+therefore covered by the signature (AP-4) and card signatures are disjoint
+from every other AgentPin signature (AP-1).
 """
 
 import json
@@ -17,7 +20,7 @@ from typing import Any, Dict, List, Optional, Union
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 
-from .crypto import sign_data, verify_signature
+from .crypto import CTX_AGENTCARD, domain_separated_input, sign_data, verify_signature
 from .discovery import AllowedDomains
 from .jwk import jwk_thumbprint, jwk_to_pem, pem_to_jwk
 from .types import AgentPinError, ErrorCode
@@ -99,11 +102,6 @@ def sign_agent_card(
             "sign_agent_card requires agentpin_endpoint",
         )
 
-    # Sign over the canonical bytes with the extension cleared.
-    card_for_signing = {k: v for k, v in unsigned_card.items() if k != "agentpin"}
-    canonical = canonicalize_for_signing(card_for_signing)
-    signature = sign_data(private_key_pem, canonical.encode("utf-8"))
-
     # Derive the public-key JWK from the private key.
     private_key = serialization.load_pem_private_key(
         private_key_pem.encode("utf-8"), password=None
@@ -114,6 +112,12 @@ def sign_agent_card(
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("utf-8")
     public_jwk = pem_to_jwk(public_pem, kid)
+
+    # Sign over the domain-separated canonical bytes with the endpoint and
+    # JWK included.
+    signature = sign_data(
+        private_key_pem, _agent_card_signing_input_for(unsigned_card, agentpin_endpoint, public_jwk)
+    )
 
     signed = dict(unsigned_card)
     signed["agentpin"] = {
@@ -167,10 +171,9 @@ def verify_agentpin_extension(card: dict) -> None:
             ErrorCode.DISCOVERY_INVALID, "AgentCard has no agentpin extension"
         )
 
-    without_ext = {k: v for k, v in card.items() if k != "agentpin"}
-    canonical = canonicalize_for_signing(without_ext)
+    input_bytes = agent_card_signing_input(card)
     public_pem = jwk_to_pem(ext["public_key_jwk"])
-    ok = verify_signature(public_pem, canonical.encode("utf-8"), ext["signature"])
+    ok = verify_signature(public_pem, input_bytes, str(ext.get("signature", "")))
     if not ok:
         raise AgentPinError(
             ErrorCode.DISCOVERY_INVALID,
@@ -184,8 +187,29 @@ def extension_key_thumbprint(extension: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Canonicalisation
+# Canonicalization
 # ---------------------------------------------------------------------------
+
+
+def agent_card_signing_input(card: dict) -> bytes:
+    """The domain-separated bytes ``card["agentpin"]["signature"]`` must verify against.
+
+    Uses the endpoint and JWK from the card's own extension.
+    """
+    ext = card.get("agentpin") if card else None
+    if not ext:
+        raise AgentPinError(ErrorCode.DISCOVERY_INVALID, "AgentCard has no agentpin extension")
+    return _agent_card_signing_input_for(card, ext.get("agentpin_endpoint"), ext.get("public_key_jwk"))
+
+
+def _agent_card_signing_input_for(card: dict, agentpin_endpoint: object, public_key_jwk: object) -> bytes:
+    for_signing = {k: v for k, v in card.items() if k != "agentpin"}
+    for_signing["agentpin"] = {
+        "agentpin_endpoint": agentpin_endpoint,
+        "public_key_jwk": public_key_jwk,
+    }
+    canonical = canonicalize_for_signing(for_signing)
+    return domain_separated_input(CTX_AGENTCARD, [canonical.encode("utf-8")])
 
 
 def canonicalize_for_signing(value: Any) -> str:

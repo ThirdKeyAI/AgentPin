@@ -17,12 +17,20 @@ from .credential import (
     validate_credential_against_discovery,
 )
 from .crypto import (
+    CTX_AGENTCARD,
+    CTX_ATTESTATION,
+    CTX_BUNDLE,
+    CTX_RESPONSE,
+    CTX_REVOCATION,
+    domain_separated_input,
     generate_key_id,
     generate_key_pair,
     sha256_hash,
     sha256_hex,
     sign_data,
+    sign_with_context,
     verify_signature,
+    verify_with_context,
 )
 from .delegation import (
     canonical_attestation_input,
@@ -39,6 +47,7 @@ from .discovery import (
     validate_discovery_document,
 )
 from .a2a import (
+    agent_card_signing_input,
     build_and_sign_agent_card,
     build_unsigned_agent_card,
     canonicalize_for_signing,
@@ -74,8 +83,11 @@ from .jwt import (
     verify_jwt,
 )
 from .mutual import (
+    NONCE_EXPIRY_SECS,
     create_challenge,
     create_response,
+    response_signing_input,
+    validate_nonce,
     verify_response,
     verify_response_with_nonce_store,
 )
@@ -159,6 +171,14 @@ __all__ = [
     "generate_key_pair",
     "sign_data",
     "verify_signature",
+    "domain_separated_input",
+    "sign_with_context",
+    "verify_with_context",
+    "CTX_RESPONSE",
+    "CTX_ATTESTATION",
+    "CTX_AGENTCARD",
+    "CTX_REVOCATION",
+    "CTX_BUNDLE",
     "generate_key_id",
     "sha256_hash",
     "sha256_hex",
@@ -193,6 +213,7 @@ __all__ = [
     "fetch_discovery_document",
     "AllowedDomains",
     # A2A AgentCard (v0.3.0)
+    "agent_card_signing_input",
     "build_and_sign_agent_card",
     "build_unsigned_agent_card",
     "canonicalize_for_signing",
@@ -231,6 +252,9 @@ __all__ = [
     "create_response",
     "verify_response",
     "verify_response_with_nonce_store",
+    "validate_nonce",
+    "response_signing_input",
+    "NONCE_EXPIRY_SECS",
     # Nonce
     "NonceStore",
     "InMemoryNonceStore",

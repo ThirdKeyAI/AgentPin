@@ -177,7 +177,7 @@ fn test_mutual_verification_with_nonce_store() {
 
     let store = InMemoryNonceStore::new();
     let challenge = create_challenge(None);
-    let response = create_response(&challenge, &sk, "test-key");
+    let response = create_response(&challenge, &sk, "test-key").unwrap();
 
     // First verification should succeed
     let valid = verify_response_with_nonce_store(&response, &challenge, &vk, Some(&store)).unwrap();

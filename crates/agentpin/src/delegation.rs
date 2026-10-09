@@ -1,12 +1,39 @@
+//! Delegation attestations (spec §5.6 / §6.4).
+//!
+//! An attestation is an ECDSA signature over the domain-separated structure
+//!
+//! ```text
+//! "agentpin-attestation-v1" 0x00
+//!     len(domain) domain  len(role) role  len(agent_id) agent_id
+//!     len(delegatee_domain) delegatee_domain
+//!     len(delegatee_agent_id) delegatee_agent_id
+//!     len(capabilities_hash) capabilities_hash
+//!     len(kid) kid  len(exp) exp
+//! ```
+//!
+//! `kid` binds the attestation to the attesting key so it cannot be replayed
+//! across a key rotation; `exp` (decimal Unix seconds, empty when absent)
+//! bounds its lifetime. The context label keeps attestation signatures
+//! disjoint from credential, challenge-response and AgentCard signatures.
+
+use chrono::Utc;
 use p256::ecdsa::{SigningKey, VerifyingKey};
 
-use crate::crypto;
+use crate::crypto::{self, CTX_ATTESTATION};
 use crate::error::{Error, ErrorCode};
 use crate::types::capability::{capabilities_hash, Capability};
 use crate::types::credential::{DelegationAttestation, DelegationRole};
 
-/// Create the canonical attestation input string.
-/// Format: `{domain}|{role}|{agent_id}|{delegatee_domain}|{delegatee_agent_id}|{capabilities_hash}`
+/// Wire string for a delegation role.
+pub fn role_str(role: &DelegationRole) -> &'static str {
+    match role {
+        DelegationRole::Maker => "maker",
+        DelegationRole::Deployer => "deployer",
+    }
+}
+
+/// Create the canonical (domain-separated) attestation signing input.
+#[allow(clippy::too_many_arguments)]
 pub fn canonical_attestation_input(
     domain: &str,
     role: &DelegationRole,
@@ -14,19 +41,28 @@ pub fn canonical_attestation_input(
     delegatee_domain: &str,
     delegatee_agent_id: &str,
     capabilities: &[Capability],
-) -> String {
-    let role_str = match role {
-        DelegationRole::Maker => "maker",
-        DelegationRole::Deployer => "deployer",
-    };
+    kid: &str,
+    exp: Option<i64>,
+) -> Vec<u8> {
     let cap_hash = capabilities_hash(capabilities);
-    format!(
-        "{}|{}|{}|{}|{}|{}",
-        domain, role_str, agent_id, delegatee_domain, delegatee_agent_id, cap_hash
+    let exp_str = exp.map(|e| e.to_string()).unwrap_or_default();
+    crypto::domain_separated_input(
+        CTX_ATTESTATION,
+        &[
+            domain.as_bytes(),
+            role_str(role).as_bytes(),
+            agent_id.as_bytes(),
+            delegatee_domain.as_bytes(),
+            delegatee_agent_id.as_bytes(),
+            cap_hash.as_bytes(),
+            kid.as_bytes(),
+            exp_str.as_bytes(),
+        ],
     )
 }
 
-/// Create a delegation attestation signed by the attesting entity.
+/// Create a delegation attestation signed by the attesting entity, without
+/// an expiry.
 #[allow(clippy::too_many_arguments)]
 pub fn create_attestation(
     signing_key: &SigningKey,
@@ -38,6 +74,32 @@ pub fn create_attestation(
     delegatee_agent_id: &str,
     capabilities: &[Capability],
 ) -> Result<DelegationAttestation, Error> {
+    create_attestation_with_expiry(
+        signing_key,
+        kid,
+        domain,
+        role,
+        agent_id,
+        delegatee_domain,
+        delegatee_agent_id,
+        capabilities,
+        None,
+    )
+}
+
+/// Create a delegation attestation with an optional expiry (Unix seconds).
+#[allow(clippy::too_many_arguments)]
+pub fn create_attestation_with_expiry(
+    signing_key: &SigningKey,
+    kid: &str,
+    domain: &str,
+    role: DelegationRole,
+    agent_id: &str,
+    delegatee_domain: &str,
+    delegatee_agent_id: &str,
+    capabilities: &[Capability],
+    exp: Option<i64>,
+) -> Result<DelegationAttestation, Error> {
     let input = canonical_attestation_input(
         domain,
         &role,
@@ -45,8 +107,10 @@ pub fn create_attestation(
         delegatee_domain,
         delegatee_agent_id,
         capabilities,
+        kid,
+        exp,
     );
-    let signature = crypto::sign_bytes(signing_key, input.as_bytes());
+    let signature = crypto::sign_bytes(signing_key, &input);
 
     Ok(DelegationAttestation {
         domain: domain.to_string(),
@@ -54,10 +118,12 @@ pub fn create_attestation(
         agent_id: agent_id.to_string(),
         kid: kid.to_string(),
         attestation: signature,
+        exp,
     })
 }
 
-/// Verify a single delegation attestation signature.
+/// Verify a single delegation attestation signature (and its expiry, when
+/// present).
 pub fn verify_attestation(
     attestation: &DelegationAttestation,
     verifying_key: &VerifyingKey,
@@ -65,6 +131,18 @@ pub fn verify_attestation(
     delegatee_agent_id: &str,
     capabilities: &[Capability],
 ) -> Result<(), Error> {
+    if let Some(exp) = attestation.exp {
+        if exp < Utc::now().timestamp() {
+            return Err(Error::Verification {
+                code: ErrorCode::DelegationInvalid,
+                message: format!(
+                    "Delegation attestation from {} has expired",
+                    attestation.domain
+                ),
+            });
+        }
+    }
+
     let input = canonical_attestation_input(
         &attestation.domain,
         &attestation.role,
@@ -72,9 +150,11 @@ pub fn verify_attestation(
         delegatee_domain,
         delegatee_agent_id,
         capabilities,
+        &attestation.kid,
+        attestation.exp,
     );
 
-    let valid = crypto::verify_bytes(verifying_key, input.as_bytes(), &attestation.attestation)?;
+    let valid = crypto::verify_bytes(verifying_key, &input, &attestation.attestation)?;
     if !valid {
         return Err(Error::Verification {
             code: ErrorCode::DelegationInvalid,
@@ -107,12 +187,17 @@ mod tests {
     use super::*;
     use crate::crypto;
 
+    fn keys() -> (SigningKey, VerifyingKey) {
+        let kp = crypto::generate_key_pair().unwrap();
+        (
+            crypto::load_signing_key(&kp.private_key_pem).unwrap(),
+            crypto::load_verifying_key(&kp.public_key_pem).unwrap(),
+        )
+    }
+
     #[test]
     fn test_create_and_verify_attestation() {
-        let kp = crypto::generate_key_pair().unwrap();
-        let sk = crypto::load_signing_key(&kp.private_key_pem).unwrap();
-        let vk = crypto::load_verifying_key(&kp.public_key_pem).unwrap();
-
+        let (sk, vk) = keys();
         let caps = vec![
             Capability::from("read:data"),
             Capability::from("write:report"),
@@ -132,8 +217,8 @@ mod tests {
 
         assert_eq!(att.domain, "maker.com");
         assert_eq!(att.role, DelegationRole::Maker);
+        assert_eq!(att.exp, None);
 
-        // Verify should succeed
         assert!(verify_attestation(
             &att,
             &vk,
@@ -146,13 +231,9 @@ mod tests {
 
     #[test]
     fn test_verify_attestation_wrong_key() {
-        let kp1 = crypto::generate_key_pair().unwrap();
-        let kp2 = crypto::generate_key_pair().unwrap();
-        let sk1 = crypto::load_signing_key(&kp1.private_key_pem).unwrap();
-        let vk2 = crypto::load_verifying_key(&kp2.public_key_pem).unwrap();
-
+        let (sk1, _) = keys();
+        let (_, vk2) = keys();
         let caps = vec![Capability::from("read:data")];
-
         let att = create_attestation(
             &sk1,
             "kid",
@@ -164,19 +245,14 @@ mod tests {
             &caps,
         )
         .unwrap();
-
         assert!(verify_attestation(&att, &vk2, "delegatee", "delegatee-agent", &caps).is_err());
     }
 
     #[test]
     fn test_verify_attestation_wrong_capabilities() {
-        let kp = crypto::generate_key_pair().unwrap();
-        let sk = crypto::load_signing_key(&kp.private_key_pem).unwrap();
-        let vk = crypto::load_verifying_key(&kp.public_key_pem).unwrap();
-
+        let (sk, vk) = keys();
         let caps = vec![Capability::from("read:data")];
         let wrong_caps = vec![Capability::from("write:data")];
-
         let att = create_attestation(
             &sk,
             "kid",
@@ -188,10 +264,98 @@ mod tests {
             &caps,
         )
         .unwrap();
-
-        // Wrong capabilities should fail
         assert!(
             verify_attestation(&att, &vk, "delegatee", "delegatee-agent", &wrong_caps).is_err()
+        );
+    }
+
+    /// Design issue 7: the attestation is bound to the attesting `kid`, so
+    /// re-labelling it under a different key id breaks the signature.
+    #[test]
+    fn test_attestation_bound_to_kid() {
+        let (sk, vk) = keys();
+        let caps = vec![Capability::from("read:data")];
+        let mut att = create_attestation(
+            &sk,
+            "kid-1",
+            "maker.com",
+            DelegationRole::Maker,
+            "agent",
+            "deployer.com",
+            "delegatee-agent",
+            &caps,
+        )
+        .unwrap();
+        att.kid = "kid-2".to_string();
+        assert!(verify_attestation(&att, &vk, "deployer.com", "delegatee-agent", &caps).is_err());
+    }
+
+    /// Design issue 7: expired attestations are rejected; the expiry is
+    /// covered by the signature.
+    #[test]
+    fn test_attestation_expiry() {
+        let (sk, vk) = keys();
+        let caps = vec![Capability::from("read:data")];
+        let now = Utc::now().timestamp();
+        let fresh = create_attestation_with_expiry(
+            &sk,
+            "kid",
+            "maker.com",
+            DelegationRole::Maker,
+            "agent",
+            "deployer.com",
+            "delegatee-agent",
+            &caps,
+            Some(now + 3600),
+        )
+        .unwrap();
+        assert!(verify_attestation(&fresh, &vk, "deployer.com", "delegatee-agent", &caps).is_ok());
+
+        let expired = create_attestation_with_expiry(
+            &sk,
+            "kid",
+            "maker.com",
+            DelegationRole::Maker,
+            "agent",
+            "deployer.com",
+            "delegatee-agent",
+            &caps,
+            Some(now - 10),
+        )
+        .unwrap();
+        assert!(
+            verify_attestation(&expired, &vk, "deployer.com", "delegatee-agent", &caps).is_err()
+        );
+
+        // Stripping the expiry from a signed attestation breaks the signature.
+        let mut stripped = fresh.clone();
+        stripped.exp = None;
+        assert!(
+            verify_attestation(&stripped, &vk, "deployer.com", "delegatee-agent", &caps).is_err()
+        );
+    }
+
+    /// AP-1: an attestation signature is not a raw signature over the legacy
+    /// `|`-joined string, and a legacy-format signature does not verify.
+    #[test]
+    fn test_attestation_is_domain_separated() {
+        let (sk, vk) = keys();
+        let caps = vec![Capability::from("read:data")];
+        let legacy = format!(
+            "maker.com|maker|agent|deployer.com|delegatee-agent|{}",
+            capabilities_hash(&caps)
+        );
+        let legacy_sig = crypto::sign_bytes(&sk, legacy.as_bytes());
+        let legacy_att = DelegationAttestation {
+            domain: "maker.com".to_string(),
+            role: DelegationRole::Maker,
+            agent_id: "agent".to_string(),
+            kid: "kid".to_string(),
+            attestation: legacy_sig,
+            exp: None,
+        };
+        assert!(
+            verify_attestation(&legacy_att, &vk, "deployer.com", "delegatee-agent", &caps).is_err()
         );
     }
 
@@ -200,5 +364,6 @@ mod tests {
         assert!(verify_chain_depth(1, &[2, 3]).is_ok());
         assert!(verify_chain_depth(2, &[2, 3]).is_ok());
         assert!(verify_chain_depth(3, &[2, 3]).is_err());
+        assert!(verify_chain_depth(1, &[]).is_err());
     }
 }

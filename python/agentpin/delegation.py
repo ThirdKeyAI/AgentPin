@@ -1,9 +1,21 @@
-"""Delegation attestation creation and verification for AgentPin."""
+"""Delegation attestation creation and verification for AgentPin (spec §5.6 / §6.4).
 
-from typing import List
+An attestation is a signature over the domain-separated structure::
+
+    "agentpin-attestation-v1" 0x00 len(domain) domain len(role) role
+        len(agent_id) agent_id len(delegatee_domain) delegatee_domain
+        len(delegatee_agent_id) delegatee_agent_id
+        len(capabilities_hash) capabilities_hash len(kid) kid len(exp) exp
+
+``kid`` binds the attestation to the attesting key; ``exp`` (decimal Unix
+seconds, empty when absent) bounds its lifetime.
+"""
+
+import time
+from typing import List, Optional
 
 from .capability import Capability, capabilities_hash
-from .crypto import sign_data, verify_signature
+from .crypto import CTX_ATTESTATION, domain_separated_input, sign_data, verify_signature
 from .types import AgentPinError, ErrorCode
 
 
@@ -14,13 +26,25 @@ def canonical_attestation_input(
     delegatee_domain: str,
     delegatee_agent_id: str,
     capabilities: List[Capability],
-) -> str:
-    """Create the canonical attestation input string.
-
-    Format: {domain}|{role}|{agent_id}|{delegatee_domain}|{delegatee_agent_id}|{capabilities_hash}
-    """
+    kid: str,
+    exp: Optional[int] = None,
+) -> bytes:
+    """Create the domain-separated attestation signing input."""
     cap_hash = capabilities_hash(capabilities)
-    return f"{domain}|{role}|{agent_id}|{delegatee_domain}|{delegatee_agent_id}|{cap_hash}"
+    exp_str = "" if exp is None else str(int(exp))
+    return domain_separated_input(
+        CTX_ATTESTATION,
+        [
+            str(domain),
+            str(role),
+            str(agent_id),
+            str(delegatee_domain),
+            str(delegatee_agent_id),
+            cap_hash,
+            str(kid),
+            exp_str,
+        ],
+    )
 
 
 def create_attestation(
@@ -32,18 +56,28 @@ def create_attestation(
     delegatee_domain: str,
     delegatee_agent_id: str,
     capabilities: List[Capability],
+    exp: Optional[int] = None,
 ) -> dict:
-    """Create a delegation attestation signed by the attesting entity."""
-    input_str = canonical_attestation_input(domain, role, agent_id, delegatee_domain, delegatee_agent_id, capabilities)
-    signature = sign_data(private_key_pem, input_str.encode("utf-8"))
+    """Create a delegation attestation signed by the attesting entity.
 
-    return {
+    ``exp`` is an optional attestation expiry (Unix seconds), covered by the
+    signature.
+    """
+    input_bytes = canonical_attestation_input(
+        domain, role, agent_id, delegatee_domain, delegatee_agent_id, capabilities, kid, exp
+    )
+    signature = sign_data(private_key_pem, input_bytes)
+
+    att = {
         "domain": domain,
         "role": role,
         "agent_id": agent_id,
         "kid": kid,
         "attestation": signature,
     }
+    if exp is not None:
+        att["exp"] = int(exp)
+    return att
 
 
 def verify_attestation(
@@ -53,30 +87,41 @@ def verify_attestation(
     delegatee_agent_id: str,
     capabilities: List[Capability],
 ) -> None:
-    """Verify a single delegation attestation signature.
+    """Verify a single delegation attestation signature (and expiry, when present).
 
     Raises:
-        AgentPinError: if signature verification fails.
+        AgentPinError: if signature verification fails or the attestation expired.
     """
-    input_str = canonical_attestation_input(
-        attestation["domain"],
-        attestation["role"],
-        attestation["agent_id"],
+    exp = attestation.get("exp")
+    if exp is not None:
+        if not isinstance(exp, int) or isinstance(exp, bool) or exp < int(time.time()):
+            raise AgentPinError(
+                ErrorCode.DELEGATION_INVALID,
+                f"Delegation attestation from {attestation.get('domain')} has expired",
+            )
+    input_bytes = canonical_attestation_input(
+        str(attestation.get("domain", "")),
+        str(attestation.get("role", "")),
+        str(attestation.get("agent_id", "")),
         delegatee_domain,
         delegatee_agent_id,
         capabilities,
+        str(attestation.get("kid", "")),
+        exp,
     )
 
-    valid = verify_signature(public_key_pem, input_str.encode("utf-8"), attestation["attestation"])
+    valid = verify_signature(public_key_pem, input_bytes, str(attestation.get("attestation", "")))
     if not valid:
         raise AgentPinError(
             ErrorCode.DELEGATION_INVALID,
-            f"Delegation attestation from {attestation['domain']} failed signature verification",
+            f"Delegation attestation from {attestation.get('domain')} failed signature verification",
         )
 
 
 def verify_chain_depth(chain_len: int, max_depths: List[int]) -> None:
     """Verify the depth of a delegation chain does not exceed the minimum max_delegation_depth.
+
+    An empty depth list means depth 0 (no delegation permitted).
 
     Raises:
         AgentPinError: if chain depth exceeds limits.

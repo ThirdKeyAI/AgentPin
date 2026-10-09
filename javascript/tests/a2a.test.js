@@ -169,3 +169,48 @@ describe('canonicalizeForSigning', () => {
         assert.equal(out, '[{"a":2,"b":1}]');
     });
 });
+
+describe('AgentCard signature coverage (AP-1, AP-4)', () => {
+    it('fails when agentpin_endpoint is rewritten after signing', async () => {
+        const { generateKeyPair, buildAndSignAgentCard, verifyAgentpinExtension, AgentStatus } = await import('../src/index.js');
+        const { privateKeyPem } = generateKeyPair();
+        const card = buildAndSignAgentCard(
+            'https://example.com/agent',
+            { agent_id: 'urn:agentpin:example.com:t', name: 'T', capabilities: ['read:*'], status: AgentStatus.ACTIVE },
+            privateKeyPem, 'kid-1', 'https://example.com/.well-known/agent-identity.json'
+        );
+        card.agentpin.agentpin_endpoint = 'https://bank.example/.well-known/agent-identity.json';
+        assert.throws(() => verifyAgentpinExtension(card), /did not verify/);
+    });
+
+    it('fails when the extension JWK kid is rewritten', async () => {
+        const { generateKeyPair, buildAndSignAgentCard, verifyAgentpinExtension, AgentStatus } = await import('../src/index.js');
+        const { privateKeyPem } = generateKeyPair();
+        const card = buildAndSignAgentCard(
+            'https://example.com/agent',
+            { agent_id: 'urn:agentpin:example.com:t', name: 'T', capabilities: ['read:*'], status: AgentStatus.ACTIVE },
+            privateKeyPem, 'kid-1', 'https://example.com/.well-known/agent-identity.json'
+        );
+        card.agentpin.public_key_jwk.kid = 'kid-2';
+        assert.throws(() => verifyAgentpinExtension(card), /did not verify/);
+    });
+
+    it('is domain separated and rejects the legacy extension-cleared format', async () => {
+        const { generateKeyPair, buildAndSignAgentCard, verifyAgentpinExtension, agentCardSigningInput,
+            canonicalizeForSigning, signData, verifySignature, CTX_AGENTCARD, AgentStatus } = await import('../src/index.js');
+        const kp = generateKeyPair();
+        const card = buildAndSignAgentCard(
+            'https://example.com/agent',
+            { agent_id: 'urn:agentpin:example.com:t', name: 'T', capabilities: ['read:*'], status: AgentStatus.ACTIVE },
+            kp.privateKeyPem, 'kid-1', 'https://example.com/.well-known/agent-identity.json'
+        );
+        const input = agentCardSigningInput(card);
+        assert.ok(input.subarray(0, CTX_AGENTCARD.length + 1).equals(Buffer.from(`${CTX_AGENTCARD}\0`)));
+        const canonical = input.subarray(CTX_AGENTCARD.length + 1 + 4);
+        assert.strictEqual(verifySignature(kp.publicKeyPem, canonical, card.agentpin.signature), false);
+
+        const legacy = canonicalizeForSigning({ ...card, agentpin: undefined });
+        const forged = { ...card, agentpin: { ...card.agentpin, signature: signData(kp.privateKeyPem, Buffer.from(legacy)) } };
+        assert.throws(() => verifyAgentpinExtension(forged), /did not verify/);
+    });
+});

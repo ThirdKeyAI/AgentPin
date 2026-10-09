@@ -18,8 +18,77 @@ export function generateKeyPair() {
     return { privateKeyPem: privateKey, publicKeyPem: publicKey };
 }
 
+// ---------------------------------------------------------------------------
+// Domain-separated signing (protocol v0.4)
+// ---------------------------------------------------------------------------
+//
+// Every object AgentPin signs other than the credential JWT goes through
+// domainSeparatedInput, which prefixes a fixed context label and
+// length-prefixes each field. The JWT keeps the RFC 7515 "header.payload"
+// signing input, whose alphabet (base64url plus '.') never contains the NUL
+// byte that terminates every context label, so no signature produced for one
+// object type can be replayed as another.
+
+/** Context label for challenge responses. */
+export const CTX_RESPONSE = 'agentpin-response-v1';
+/** Context label for delegation attestations. */
+export const CTX_ATTESTATION = 'agentpin-attestation-v1';
+/** Context label for A2A AgentCard signatures. */
+export const CTX_AGENTCARD = 'agentpin-agentcard-v1';
+/** Context label for signed revocation documents. */
+export const CTX_REVOCATION = 'agentpin-revocation-v1';
+/** Context label for signed trust bundles. */
+export const CTX_BUNDLE = 'agentpin-bundle-v1';
+
+/**
+ * Build the domain-separated signing input for `context` over `fields`:
+ * `context || 0x00 || (u32_be(len(field)) || field)*`. Byte-identical to the
+ * Rust, Go and Python SDKs.
+ * @param {string} context
+ * @param {Array<Buffer|Uint8Array|string>} fields
+ * @returns {Buffer}
+ */
+export function domainSeparatedInput(context, fields) {
+    const parts = [Buffer.from(context, 'utf8'), Buffer.from([0])];
+    for (const field of fields) {
+        const buf = Buffer.isBuffer(field) ? field : Buffer.from(field);
+        const len = Buffer.alloc(4);
+        len.writeUInt32BE(buf.length, 0);
+        parts.push(len, buf);
+    }
+    return Buffer.concat(parts);
+}
+
+/**
+ * Sign `fields` under `context` with a PEM private key. Returns the
+ * standard-base64 DER signature.
+ * @param {string} privateKeyPem
+ * @param {string} context
+ * @param {Array<Buffer|Uint8Array|string>} fields
+ * @returns {string}
+ */
+export function signWithContext(privateKeyPem, context, fields) {
+    return signData(privateKeyPem, domainSeparatedInput(context, fields));
+}
+
+/**
+ * Verify a signature produced by `signWithContext`.
+ * @param {string} publicKeyPem
+ * @param {string} context
+ * @param {Array<Buffer|Uint8Array|string>} fields
+ * @param {string} signatureB64
+ * @returns {boolean}
+ */
+export function verifyWithContext(publicKeyPem, context, fields, signatureB64) {
+    return verifySignature(publicKeyPem, domainSeparatedInput(context, fields), signatureB64);
+}
+
 /**
  * Sign data with a PEM-encoded private key. Returns base64-encoded DER signature.
+ *
+ * This is a low-level primitive. Protocol objects MUST be signed through
+ * `signWithContext` (or the JWT encoder) so signatures over different object
+ * types can never be confused; never pass caller-supplied bytes here.
  * @param {string} privateKeyPem
  * @param {Buffer|Uint8Array} data
  * @returns {string} Base64-encoded DER signature

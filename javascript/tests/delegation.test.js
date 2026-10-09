@@ -83,3 +83,40 @@ describe('verifyChainDepth', () => {
         assert.throws(() => verifyChainDepth(3, [2, 3]), /exceeds/i);
     });
 });
+
+describe('attestation binding (design 7, AP-1)', () => {
+    test('attestation is bound to the attesting kid', () => {
+        const kp = generateKeyPair();
+        const caps = [new Capability('read:data')];
+        const att = createAttestation(kp.privateKeyPem, 'kid-1', 'maker.com', DelegationRole.MAKER, 'a', 'deployer.com', 'da', caps);
+        att.kid = 'kid-2';
+        assert.throws(() => verifyAttestation(att, kp.publicKeyPem, 'deployer.com', 'da', caps), /failed/i);
+    });
+
+    test('expired attestations are rejected and exp is signed', () => {
+        const kp = generateKeyPair();
+        const caps = [new Capability('read:data')];
+        const now = Math.floor(Date.now() / 1000);
+        const fresh = createAttestation(kp.privateKeyPem, 'k', 'maker.com', DelegationRole.MAKER, 'a', 'deployer.com', 'da', caps, now + 3600);
+        assert.doesNotThrow(() => verifyAttestation(fresh, kp.publicKeyPem, 'deployer.com', 'da', caps));
+        const expired = createAttestation(kp.privateKeyPem, 'k', 'maker.com', DelegationRole.MAKER, 'a', 'deployer.com', 'da', caps, now - 10);
+        assert.throws(() => verifyAttestation(expired, kp.publicKeyPem, 'deployer.com', 'da', caps), /expired/i);
+        const stripped = { ...fresh };
+        delete stripped.exp;
+        assert.throws(() => verifyAttestation(stripped, kp.publicKeyPem, 'deployer.com', 'da', caps), /failed/i);
+    });
+
+    test('legacy pipe-joined attestation format is rejected', async () => {
+        const { signData } = await import('../src/crypto.js');
+        const { capabilitiesHash } = await import('../src/capability.js');
+        const kp = generateKeyPair();
+        const caps = [new Capability('read:data')];
+        const legacy = `maker.com|maker|a|deployer.com|da|${capabilitiesHash(caps)}`;
+        const att = { domain: 'maker.com', role: 'maker', agent_id: 'a', kid: 'k', attestation: signData(kp.privateKeyPem, Buffer.from(legacy)) };
+        assert.throws(() => verifyAttestation(att, kp.publicKeyPem, 'deployer.com', 'da', caps), /failed/i);
+    });
+
+    test('verifyChainDepth with empty depth list means depth 0', () => {
+        assert.throws(() => verifyChainDepth(1, []), /exceeds/i);
+    });
+});

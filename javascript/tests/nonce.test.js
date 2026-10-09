@@ -58,7 +58,7 @@ describe('verifyResponseWithNonceStore', () => {
         // Second use (replay) throws
         assert.throws(
             () => verifyResponseWithNonceStore(response, challenge, kp.publicKeyPem, store),
-            /replay attack/
+            /already been used/
         );
     });
 

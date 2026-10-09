@@ -132,3 +132,56 @@ def test_canonicalize_sorts_keys_and_drops_none():
 def test_canonicalize_recurses_into_arrays():
     out = canonicalize_for_signing([{"b": 1, "a": 2}])
     assert out == '[{"a":2,"b":1}]'
+
+
+def test_verify_fails_when_agentpin_endpoint_rewritten():
+    """AP-4: the signature covers agentpin_endpoint."""
+    private_pem, _ = generate_key_pair()
+    card = build_and_sign_agent_card(
+        "https://example.com/agent",
+        _declaration(["read:customers"]),
+        private_pem,
+        "kid-1",
+        "https://example.com/.well-known/agent-identity.json",
+    )
+    card["agentpin"]["agentpin_endpoint"] = "https://bank.example/.well-known/agent-identity.json"
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(card)
+
+
+def test_verify_fails_when_extension_jwk_kid_rewritten():
+    private_pem, _ = generate_key_pair()
+    card = build_and_sign_agent_card(
+        "https://example.com/agent",
+        _declaration(["read:customers"]),
+        private_pem,
+        "kid-1",
+        "https://example.com/.well-known/agent-identity.json",
+    )
+    card["agentpin"]["public_key_jwk"]["kid"] = "kid-2"
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(card)
+
+
+def test_card_signature_is_domain_separated():
+    """AP-1: not a raw signature over the canonical JSON; legacy format rejected."""
+    from agentpin import CTX_AGENTCARD, agent_card_signing_input, sign_data, verify_signature
+
+    private_pem, public_pem = generate_key_pair()
+    card = build_and_sign_agent_card(
+        "https://example.com/agent",
+        _declaration(["read:customers"]),
+        private_pem,
+        "kid-1",
+        "https://example.com/.well-known/agent-identity.json",
+    )
+    input_bytes = agent_card_signing_input(card)
+    assert input_bytes.startswith(CTX_AGENTCARD.encode() + b"\x00")
+    canonical = input_bytes[len(CTX_AGENTCARD) + 1 + 4 :]
+    assert not verify_signature(public_pem, canonical, card["agentpin"]["signature"])
+
+    legacy = canonicalize_for_signing({k: v for k, v in card.items() if k != "agentpin"})
+    forged = dict(card)
+    forged["agentpin"] = dict(card["agentpin"], signature=sign_data(private_pem, legacy.encode()))
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(forged)

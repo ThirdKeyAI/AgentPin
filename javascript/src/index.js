@@ -9,6 +9,14 @@ export {
     generateKeyId,
     sha256Hash,
     sha256Hex,
+    domainSeparatedInput,
+    signWithContext,
+    verifyWithContext,
+    CTX_RESPONSE,
+    CTX_ATTESTATION,
+    CTX_AGENTCARD,
+    CTX_REVOCATION,
+    CTX_BUNDLE,
 } from './crypto.js';
 
 export {
@@ -92,6 +100,9 @@ export {
     createResponse,
     verifyResponse,
     verifyResponseWithNonceStore,
+    validateNonce,
+    responseSigningInput,
+    NONCE_EXPIRY_SECS,
 } from './mutual.js';
 
 export {
@@ -137,6 +148,7 @@ export {
     verifyAgentpinExtension,
     extensionKeyThumbprint,
     canonicalizeForSigning,
+    agentCardSigningInput,
 } from './a2a.js';
 
 export {

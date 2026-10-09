@@ -100,11 +100,11 @@ pub struct A2aAgentSkill {
 
 /// AgentPin extension carried inside an A2A AgentCard's `agentpin` field.
 ///
-/// The signature is a detached ECDSA P-256 signature over the canonical bytes
-/// of the rest of the AgentCard (everything *except* this `AgentpinExtension`
-/// itself — the canonical input is computed by serialising the card with the
-/// extension field cleared). Verifiers reconstruct that canonical input and
-/// check the signature against `public_key_jwk`.
+/// The signature is a detached ECDSA P-256 signature over the
+/// domain-separated canonical bytes of the AgentCard with this extension's
+/// `agentpin_endpoint` and `public_key_jwk` included and `signature` cleared
+/// (see [`crate::a2a`]). Verifiers reconstruct that input and check the
+/// signature against `public_key_jwk`.
 ///
 /// Use [`crate::a2a::A2aAgentCardBuilder`] to construct + sign one and
 /// [`crate::a2a::verify_agentpin_extension`] to verify one.
@@ -114,7 +114,8 @@ pub struct AgentpinExtension {
     pub agentpin_endpoint: String,
     /// Public key (JWK form) used to sign the AgentCard.
     pub public_key_jwk: Jwk,
-    /// Detached ECDSA P-256 signature, base64url-encoded.
+    /// Detached ECDSA P-256 DER signature, standard-base64-encoded (spec
+    /// §4.10.2).
     pub signature: String,
 }
 
