@@ -69,7 +69,7 @@ def derive_discovery_from_card(card: dict) -> dict:
     domain = card_endpoint_host(card)
 
     capabilities = [s["id"] for s in card.get("skills", [])]
-    allowed_domains = (card.get("capabilities") or {}).get("allowed_domains", [])
+    allowed_domains = (card.get("capabilities") or {}).get("allowed_domains")
     constraints = (
         None
         if AllowedDomains.is_unrestricted(allowed_domains)

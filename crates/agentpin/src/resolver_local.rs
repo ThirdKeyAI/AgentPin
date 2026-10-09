@@ -181,7 +181,7 @@ pub(crate) fn derive_discovery_from_card(card: &A2aAgentCard) -> Result<Discover
         None
     } else {
         Some(crate::types::constraint::Constraints {
-            allowed_domains: Some(card.capabilities.allowed_domains.0.clone()),
+            allowed_domains: Some(card.capabilities.allowed_domains.as_slice().to_vec()),
             ..Default::default()
         })
     };

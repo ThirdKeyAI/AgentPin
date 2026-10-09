@@ -81,7 +81,7 @@ export function deriveDiscoveryFromCard(card) {
     const domain = cardEndpointHost(card);
 
     const capabilities = (card.skills || []).map((s) => s.id);
-    const allowedDomains = (card.capabilities && card.capabilities.allowed_domains) || [];
+    const allowedDomains = card.capabilities ? card.capabilities.allowed_domains : undefined;
     const constraints = AllowedDomains.isUnrestricted(allowedDomains)
         ? null
         : { allowed_domains: [...allowedDomains] };

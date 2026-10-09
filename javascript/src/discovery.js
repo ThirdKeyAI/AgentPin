@@ -5,6 +5,7 @@
 import { AgentPinError, ErrorCode } from './types.js';
 import { normalizeDomain, validateHttpsUrlForDomain } from './domain.js';
 import { fetchJsonBounded } from './net.js';
+import { domainPatternMatches } from './constraint.js';
 
 /**
  * Build a new discovery document.
@@ -114,45 +115,54 @@ export function findAgentById(doc, agentId) {
 
 /**
  * Helpers for working with the `allowed_domains` constraint as a typed
- * allow-list (v0.3.0). Convention: an empty list means *unrestricted* (all
- * domains trusted); a non-empty list restricts the agent to exactly those
- * domains. Mirrors `AllowedDomains` in the Rust SDK.
+ * allow-list (v0.3.0, made a proper tri-state in v0.4 — AP-6).
+ *
+ * Three states: `null`/`undefined` is *unrestricted* (the field is absent on
+ * the wire); an array, including an empty one, is *restricted* to the listed
+ * literals and `*.` patterns (spec §5.5). "No restriction" and "restricted to
+ * nothing" are therefore distinct: the intersection of two disjoint
+ * allow-lists is `[]`, which allows nothing and is never re-interpreted as
+ * unrestricted. Mirrors `AllowedDomains` in the Rust SDK.
  */
 export const AllowedDomains = Object.freeze({
-    /** Construct an empty (unrestricted) list. */
+    /** The unrestricted allow-list (`null`). */
     unrestricted() {
-        return [];
+        return null;
     },
-    /** Construct from any iterable of strings. */
+    /** Construct a restricted list from any iterable of strings; empty allows nothing. */
     fromDomains(iter) {
         return Array.from(iter, (d) => String(d));
     },
-    /** `true` when the list is empty (no restriction). */
+    /** `true` when the list places no restriction (`null`/`undefined`). */
     isUnrestricted(list) {
-        return !list || list.length === 0;
+        return list === null || list === undefined;
     },
-    /** `true` when `domain` is allowed under this list. Empty list = all allowed. */
+    /** `true` when `domain` is allowed: unrestricted allows all, entries use §5.5 patterns, `[]` allows nothing. */
     allows(list, domain) {
-        return this.isUnrestricted(list) || list.some((d) => d === domain);
+        if (this.isUnrestricted(list)) return true;
+        return list.some((pattern) => domainPatternMatches(pattern, domain));
     },
     /**
-     * Intersection of two allow-lists. `unrestricted ∩ X = X`. The intersection
-     * of two non-empty lists may itself be empty (which then means
-     * unrestricted under our convention) — callers that care about the
-     * difference between "intentionally restricted to nothing" and
-     * "unrestricted" should not use this helper.
+     * Intersection of two allow-lists. `unrestricted ∩ X = X`; otherwise the
+     * entries of either list that are allowed by the other (so
+     * `*.corp.com ∩ api.corp.com = api.corp.com`). Disjoint lists yield `[]`,
+     * which allows nothing.
      */
     intersect(a, b) {
-        if (this.isUnrestricted(a)) return [...(b || [])];
+        if (this.isUnrestricted(a)) return this.isUnrestricted(b) ? null : [...b];
         if (this.isUnrestricted(b)) return [...a];
-        return a.filter((d) => b.includes(d));
+        const out = [];
+        for (const d of a) if (this.allows(b, d) && !out.includes(d)) out.push(d);
+        for (const d of b) if (this.allows(a, d) && !out.includes(d)) out.push(d);
+        return out;
     },
     /**
      * Pull the typed list out of a `Constraints` object. Returns
-     * `unrestricted()` when the constraints have no `allowed_domains`.
+     * `unrestricted()` when the constraints have no `allowed_domains` and a
+     * copy of the list (including an empty one) when present.
      */
     fromConstraints(constraints) {
-        if (!constraints || !constraints.allowed_domains) {
+        if (!constraints || constraints.allowed_domains === undefined || constraints.allowed_domains === null) {
             return this.unrestricted();
         }
         return [...constraints.allowed_domains];

@@ -185,3 +185,18 @@ def test_card_signature_is_domain_separated():
     forged["agentpin"] = dict(card["agentpin"], signature=sign_data(private_pem, legacy.encode()))
     with pytest.raises(Exception, match="did not verify"):
         verify_agentpin_extension(forged)
+
+
+def test_allowed_domains_empty_list_round_trips_as_restricted():
+    """AP-6: allowed_domains: [] on a card is restricted to nothing, not unrestricted."""
+    from agentpin import AllowedDomains, derive_discovery_from_card
+
+    decl = dict(_declaration(["read:*"]), constraints={"allowed_domains": []})
+    card = build_unsigned_agent_card("https://example.com/agent", decl)
+    assert card["capabilities"]["allowed_domains"] == []
+    assert not AllowedDomains.is_unrestricted(json.loads(json.dumps(card))["capabilities"]["allowed_domains"])
+    private_pem, _ = generate_key_pair()
+    signed = build_and_sign_agent_card(
+        "https://example.com/agent", decl, private_pem, "k", "https://example.com/.well-known/agent-identity.json"
+    )
+    assert derive_discovery_from_card(signed)["agents"][0]["constraints"] == {"allowed_domains": []}

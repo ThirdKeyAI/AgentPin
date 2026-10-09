@@ -1,5 +1,7 @@
 package types
 
+import "encoding/json"
+
 // A2A AgentCard extension types (v0.3.0).
 //
 // AgentPin extends the Google A2A AgentCard format with cryptographic
@@ -33,10 +35,22 @@ type A2aAgentCard struct {
 type A2aAgentCapabilities struct {
 	Streaming         bool `json:"streaming"`
 	PushNotifications bool `json:"pushNotifications"`
-	// AllowedDomains is omitted (rather than emitted as `null` or `[]`) when
-	// the agent is unrestricted, matching the Rust SDK's serde behaviour and
-	// the "empty list = unrestricted" convention.
+	// AllowedDomains is omitted when nil (unrestricted) and emitted whenever
+	// non-nil, including as `[]` (restricted to nothing) — AP-6.
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
+}
+
+// MarshalJSON emits allowed_domains whenever it is non-nil, including when
+// empty, so "restricted to nothing" survives a round trip.
+func (c A2aAgentCapabilities) MarshalJSON() ([]byte, error) {
+	out := map[string]interface{}{
+		"streaming":         c.Streaming,
+		"pushNotifications": c.PushNotifications,
+	}
+	if c.AllowedDomains != nil {
+		out["allowed_domains"] = c.AllowedDomains
+	}
+	return json.Marshal(out)
 }
 
 // A2aAgentSkill mirrors the A2A "AgentSkill" shape. AgentPin's Capability

@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/crypto"
@@ -184,4 +185,26 @@ func equalSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// AP-6: allowed_domains: [] on a card round-trips as restricted to nothing.
+func TestAllowedDomainsEmptyListRoundTrips(t *testing.T) {
+	caps := types.A2aAgentCapabilities{AllowedDomains: []string{}}
+	data, err := json.Marshal(caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"allowed_domains":[]`) {
+		t.Fatalf("got %s", data)
+	}
+	var back types.A2aAgentCapabilities
+	_ = json.Unmarshal(data, &back)
+	if types.AllowedDomainsHelper.IsUnrestricted(back.AllowedDomains) {
+		t.Fatal("round trip lost restricted-to-nothing")
+	}
+	unsigned := BuildUnsignedAgentCard("https://example.com/agent",
+		declaration([]string{"read:*"}, []string{}), BuildOptions{})
+	if types.AllowedDomainsHelper.IsUnrestricted(unsigned.Capabilities.AllowedDomains) {
+		t.Fatal("builder must preserve restricted-to-nothing")
+	}
 }

@@ -72,7 +72,7 @@ pub struct A2aAgentCapabilities {
     pub push_notifications: bool,
     /// AgentPin v0.3.0 extension: domains this agent is permitted to interact
     /// with. Populated from `Constraints.allowed_domains`.
-    /// Empty list = no restriction (all domains trusted).
+    /// Absent = no restriction; `[]` = restricted to nothing (AP-6).
     #[serde(default, skip_serializing_if = "AllowedDomains::is_unrestricted")]
     pub allowed_domains: AllowedDomains,
 }
@@ -168,6 +168,21 @@ mod tests {
             json.contains("\"allowed_domains\":[\"a.com\",\"b.com\"]"),
             "got: {json}"
         );
+    }
+
+    /// AP-6: `allowed_domains: []` on a card round-trips as restricted to
+    /// nothing rather than being dropped as unrestricted.
+    #[test]
+    fn allowed_domains_empty_list_round_trips() {
+        let caps = A2aAgentCapabilities {
+            allowed_domains: AllowedDomains::Restricted(vec![]),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&caps).unwrap();
+        assert!(json.contains("\"allowed_domains\":[]"), "got: {json}");
+        let back: A2aAgentCapabilities = serde_json::from_str(&json).unwrap();
+        assert!(!back.allowed_domains.is_unrestricted());
+        assert!(!back.allowed_domains.allows("anything.com"));
     }
 
     #[test]

@@ -214,3 +214,17 @@ describe('AgentCard signature coverage (AP-1, AP-4)', () => {
         assert.throws(() => verifyAgentpinExtension(forged), /did not verify/);
     });
 });
+
+describe('allowed_domains tri-state on cards (AP-6)', () => {
+    it('round-trips an empty list as restricted to nothing', async () => {
+        const { buildUnsignedAgentCard, AllowedDomains, deriveDiscoveryFromCard, generateKeyPair, buildAndSignAgentCard, AgentStatus } = await import('../src/index.js');
+        const decl = { agent_id: 'urn:agentpin:example.com:t', name: 'T', capabilities: ['read:*'], constraints: { allowed_domains: [] }, status: AgentStatus.ACTIVE };
+        const card = buildUnsignedAgentCard('https://example.com/agent', decl);
+        assert.deepStrictEqual(card.capabilities.allowed_domains, []);
+        assert.ok(!AllowedDomains.isUnrestricted(JSON.parse(JSON.stringify(card)).capabilities.allowed_domains));
+        const { privateKeyPem } = generateKeyPair();
+        const signed = buildAndSignAgentCard('https://example.com/agent', decl, privateKeyPem, 'k', 'https://example.com/.well-known/agent-identity.json');
+        const doc = deriveDiscoveryFromCard(signed);
+        assert.deepStrictEqual(doc.agents[0].constraints, { allowed_domains: [] });
+    });
+});

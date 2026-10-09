@@ -161,7 +161,7 @@ func DeriveDiscoveryFromCard(card *types.A2aAgentCard) (types.DiscoveryDocument,
 	var constraints *types.Constraints
 	if !types.AllowedDomainsHelper.IsUnrestricted(card.Capabilities.AllowedDomains) {
 		constraints = &types.Constraints{
-			AllowedDomains: append([]string{}, card.Capabilities.AllowedDomains...),
+			AllowedDomains: types.AllowedDomainsHelper.FromDomains(card.Capabilities.AllowedDomains),
 		}
 	}
 

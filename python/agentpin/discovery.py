@@ -2,6 +2,7 @@
 
 from typing import Any, Iterable, List, Optional
 
+from .constraint import domain_pattern_matches
 from .domain import normalize_domain, validate_https_url_for_domain
 from .net import fetch_json_bounded
 from .types import AgentPinError, ErrorCode
@@ -44,49 +45,68 @@ def build_discovery_document(
 class AllowedDomains:
     """Helpers for the ``allowed_domains`` constraint as a typed allow-list.
 
-    Convention: an empty list means *unrestricted* (all domains trusted); a
-    non-empty list restricts the agent to exactly those domains. Mirrors the
+    v0.3.0, made a proper tri-state in v0.4 (AP-6). Three states: ``None`` is
+    *unrestricted* (the field is absent on the wire); a list, including an
+    empty one, is *restricted* to the listed literals and ``*.`` patterns
+    (spec §5.5). "No restriction" and "restricted to nothing" are therefore
+    distinct: the intersection of two disjoint allow-lists is ``[]``, which
+    allows nothing and is never re-interpreted as unrestricted. Mirrors the
     ``AllowedDomains`` type in the Rust SDK.
 
-    All methods are static — instances are plain ``list[str]``.
+    All methods are static — instances are plain ``list[str]`` or ``None``.
     """
 
     @staticmethod
-    def unrestricted() -> List[str]:
-        """Construct an empty (unrestricted) list."""
-        return []
+    def unrestricted() -> None:
+        """The unrestricted allow-list (``None``)."""
+        return None
 
     @staticmethod
     def from_domains(iter_: Iterable[str]) -> List[str]:
-        """Construct from any iterable of strings."""
+        """Construct a restricted list from any iterable; empty allows nothing."""
         return [str(d) for d in iter_]
 
     @staticmethod
     def is_unrestricted(list_: Optional[List[str]]) -> bool:
-        """``True`` when the list is empty (no restriction)."""
-        return not list_
+        """``True`` when the list places no restriction (``None``)."""
+        return list_ is None
 
     @staticmethod
     def allows(list_: Optional[List[str]], domain: str) -> bool:
-        """``True`` when ``domain`` is allowed under this list."""
-        return AllowedDomains.is_unrestricted(list_) or domain in list_
+        """``True`` when ``domain`` is allowed: unrestricted allows all, entries use
+        §5.5 patterns, ``[]`` allows nothing."""
+        if list_ is None:
+            return True
+        return any(domain_pattern_matches(p, domain) for p in list_)
 
     @staticmethod
-    def intersect(a: Optional[List[str]], b: Optional[List[str]]) -> List[str]:
-        """Intersection of two allow-lists. ``unrestricted ∩ X = X``."""
-        if AllowedDomains.is_unrestricted(a):
-            return list(b or [])
-        if AllowedDomains.is_unrestricted(b):
-            return list(a or [])
-        b_set = set(b or [])
-        return [d for d in a if d in b_set]
+    def intersect(a: Optional[List[str]], b: Optional[List[str]]) -> Optional[List[str]]:
+        """Intersection of two allow-lists.
+
+        ``unrestricted ∩ X = X``; otherwise the entries of either list that are
+        allowed by the other (so ``*.corp.com ∩ api.corp.com = api.corp.com``).
+        Disjoint lists yield ``[]``, which allows nothing.
+        """
+        if a is None:
+            return None if b is None else list(b)
+        if b is None:
+            return list(a)
+        out: List[str] = []
+        for d in a:
+            if AllowedDomains.allows(b, d) and d not in out:
+                out.append(d)
+        for d in b:
+            if AllowedDomains.allows(a, d) and d not in out:
+                out.append(d)
+        return out
 
     @staticmethod
-    def from_constraints(constraints: Optional[dict]) -> List[str]:
+    def from_constraints(constraints: Optional[dict]) -> Optional[List[str]]:
         """Pull the typed list from a constraints dict.
 
         Returns ``unrestricted()`` when constraints are ``None`` or have no
-        ``allowed_domains`` field.
+        ``allowed_domains`` field, and a copy of the list (including an empty
+        one) when present.
         """
         if not constraints:
             return AllowedDomains.unrestricted()
