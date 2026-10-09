@@ -70,6 +70,7 @@ pub struct A2aAgentCardBuilder<'a> {
     skill_overrides: Vec<A2aAgentSkill>,
     streaming: bool,
     push_notifications: bool,
+    extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl<'a> A2aAgentCardBuilder<'a> {
@@ -86,7 +87,16 @@ impl<'a> A2aAgentCardBuilder<'a> {
             skill_overrides: Vec::new(),
             streaming: false,
             push_notifications: false,
+            extra: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Attach an upstream A2A field (e.g. `provider`, `documentationUrl`)
+    /// that AgentPin does not model. It is preserved verbatim and covered by
+    /// the signature (AP-17).
+    pub fn extra_field(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        self.extra.insert(key.into(), value);
+        self
     }
 
     /// Set the AgentPin discovery endpoint URL written into the extension.
@@ -148,6 +158,7 @@ impl<'a> A2aAgentCardBuilder<'a> {
             },
             skills,
             agentpin: None,
+            extra: self.extra.clone(),
         }
     }
 
@@ -475,6 +486,43 @@ mod tests {
         let mut forged = card.clone();
         forged.agentpin.as_mut().unwrap().signature = legacy_sig;
         assert!(verify_agentpin_extension(&forged).is_err());
+    }
+
+    /// AP-17: upstream fields are part of the signed bytes — a card signed
+    /// with them verifies after a JSON round trip, and adding, removing or
+    /// changing one afterwards breaks the signature.
+    #[test]
+    fn unknown_fields_are_covered_by_signature() {
+        let decl = declaration_with_caps(vec!["read:customers"], None);
+        let kp = keypair();
+        let card = A2aAgentCardBuilder::from_declaration("https://example.com/agent", &decl)
+            .agentpin_endpoint("https://example.com/.well-known/agent-identity.json")
+            .extra_field("provider", serde_json::json!({"organization": "Example"}))
+            .extra_field(
+                "documentationUrl",
+                serde_json::json!("https://example.com/docs"),
+            )
+            .sign(&kp.private_key_pem, "kid-1")
+            .unwrap();
+        let json = serde_json::to_string(&card).unwrap();
+        assert!(json.contains("documentationUrl"));
+        let parsed: A2aAgentCard = serde_json::from_str(&json).unwrap();
+        verify_agentpin_extension(&parsed).unwrap();
+
+        let mut changed = parsed.clone();
+        changed.extra.insert(
+            "documentationUrl".to_string(),
+            serde_json::json!("https://evil.example/docs"),
+        );
+        assert!(verify_agentpin_extension(&changed).is_err());
+        let mut added = parsed.clone();
+        added
+            .extra
+            .insert("securitySchemes".to_string(), serde_json::json!({"x": 1}));
+        assert!(verify_agentpin_extension(&added).is_err());
+        let mut removed = parsed.clone();
+        removed.extra.remove("provider");
+        assert!(verify_agentpin_extension(&removed).is_err());
     }
 
     #[test]

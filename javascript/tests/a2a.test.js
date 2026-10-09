@@ -228,3 +228,25 @@ describe('allowed_domains tri-state on cards (AP-6)', () => {
         assert.deepStrictEqual(doc.agents[0].constraints, { allowed_domains: [] });
     });
 });
+
+
+describe('unknown upstream fields (AP-17)', () => {
+    it('are preserved and covered by the signature', async () => {
+        const { generateKeyPair, buildUnsignedAgentCard, signAgentCard, verifyAgentpinExtension, AgentStatus } = await import('../src/index.js');
+        const { privateKeyPem } = generateKeyPair();
+        const unsigned = {
+            ...buildUnsignedAgentCard('https://example.com/agent', { agent_id: 'urn:agentpin:example.com:t', name: 'T', capabilities: ['read:*'], status: AgentStatus.ACTIVE }),
+            provider: { organization: 'Example' },
+            documentationUrl: 'https://example.com/docs',
+        };
+        const card = signAgentCard(unsigned, privateKeyPem, 'kid-1', 'https://example.com/.well-known/agent-identity.json');
+        const parsed = JSON.parse(JSON.stringify(card));
+        assert.equal(parsed.documentationUrl, 'https://example.com/docs');
+        assert.doesNotThrow(() => verifyAgentpinExtension(parsed));
+        assert.throws(() => verifyAgentpinExtension({ ...parsed, documentationUrl: 'https://evil.example/docs' }), /did not verify/);
+        assert.throws(() => verifyAgentpinExtension({ ...parsed, securitySchemes: { x: 1 } }), /did not verify/);
+        const removed = { ...parsed };
+        delete removed.provider;
+        assert.throws(() => verifyAgentpinExtension(removed), /did not verify/);
+    });
+});

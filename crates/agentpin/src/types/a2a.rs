@@ -32,8 +32,11 @@ use super::discovery::AllowedDomains;
 
 /// Minimal A2A `AgentCard` representation.
 ///
-/// Only the fields AgentPin needs to populate or read are exposed. Additional
-/// upstream fields can be carried verbatim via the catch-all `extensions` map.
+/// Only the fields AgentPin needs to populate or read are modeled. Every
+/// other upstream field (`provider`, `securitySchemes`, `documentationUrl`,
+/// ...) is carried verbatim in [`extra`](Self::extra) and included in the
+/// signed canonical bytes, as spec §4.10.1 requires (AP-17) — so a field a
+/// third party appends after signing breaks the signature.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct A2aAgentCard {
     /// Human-readable agent name (matches AgentPin `AgentDeclaration.name`).
@@ -55,6 +58,14 @@ pub struct A2aAgentCard {
     /// resolvable via the AgentPin protocol.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agentpin: Option<AgentpinExtension>,
+    /// Upstream A2A fields not modeled above, preserved verbatim and covered
+    /// by the AgentCard signature.
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// Minimal A2A `AgentCapabilities` representation.
@@ -183,6 +194,20 @@ mod tests {
         let back: A2aAgentCapabilities = serde_json::from_str(&json).unwrap();
         assert!(!back.allowed_domains.is_unrestricted());
         assert!(!back.allowed_domains.allows("anything.com"));
+    }
+
+    /// AP-17: unknown upstream fields round-trip verbatim.
+    #[test]
+    fn unknown_fields_round_trip() {
+        let json = r#"{"name":"T","url":"https://example.com/agent","capabilities":{"streaming":false,"pushNotifications":false},"skills":[],"provider":{"organization":"Example"},"documentationUrl":"https://example.com/docs"}"#;
+        let card: A2aAgentCard = serde_json::from_str(json).unwrap();
+        assert_eq!(card.extra.len(), 2);
+        assert_eq!(
+            card.extra["documentationUrl"],
+            serde_json::json!("https://example.com/docs")
+        );
+        let back: serde_json::Value = serde_json::to_value(&card).unwrap();
+        assert_eq!(back["provider"]["organization"], "Example");
     }
 
     #[test]

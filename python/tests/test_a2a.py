@@ -200,3 +200,25 @@ def test_allowed_domains_empty_list_round_trips_as_restricted():
         "https://example.com/agent", decl, private_pem, "k", "https://example.com/.well-known/agent-identity.json"
     )
     assert derive_discovery_from_card(signed)["agents"][0]["constraints"] == {"allowed_domains": []}
+
+
+
+def test_unknown_fields_are_covered_by_signature():
+    """AP-17: upstream fields are preserved and signed."""
+    private_pem, _ = generate_key_pair()
+    unsigned = dict(
+        build_unsigned_agent_card("https://example.com/agent", _declaration(["read:*"])),
+        provider={"organization": "Example"},
+        documentationUrl="https://example.com/docs",
+    )
+    card = sign_agent_card(unsigned, private_pem, "kid-1", "https://example.com/.well-known/agent-identity.json")
+    parsed = json.loads(json.dumps(card))
+    assert parsed["documentationUrl"] == "https://example.com/docs"
+    verify_agentpin_extension(parsed)
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(dict(parsed, documentationUrl="https://evil.example/docs"))
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(dict(parsed, securitySchemes={"x": 1}))
+    removed = {k: v for k, v in parsed.items() if k != "provider"}
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(removed)

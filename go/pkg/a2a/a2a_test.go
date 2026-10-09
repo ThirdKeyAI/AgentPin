@@ -208,3 +208,47 @@ func TestAllowedDomainsEmptyListRoundTrips(t *testing.T) {
 		t.Fatal("builder must preserve restricted-to-nothing")
 	}
 }
+
+// AP-17: upstream fields round-trip verbatim and are covered by the
+// signature — adding, changing or removing one after signing breaks it.
+func TestUnknownFieldsAreCoveredBySignature(t *testing.T) {
+	kp, _ := crypto.GenerateKeyPair()
+	unsigned := BuildUnsignedAgentCard("https://example.com/agent", declaration([]string{"read:customers"}, nil), BuildOptions{})
+	unsigned.Extra = map[string]json.RawMessage{
+		"provider":         json.RawMessage(`{"organization":"Example"}`),
+		"documentationUrl": json.RawMessage(`"https://example.com/docs"`),
+	}
+	card, err := SignAgentCard(unsigned, kp.PrivateKeyPEM, "kid-1", "https://example.com/.well-known/agent-identity.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(card)
+	if !strings.Contains(string(data), "documentationUrl") {
+		t.Fatalf("extra fields dropped: %s", data)
+	}
+	var parsed types.A2aAgentCard
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Extra) != 2 {
+		t.Fatalf("extra fields not preserved: %+v", parsed.Extra)
+	}
+	if err := VerifyAgentpinExtension(&parsed); err != nil {
+		t.Fatalf("verify with extras: %v", err)
+	}
+	changed := parsed
+	changed.Extra = map[string]json.RawMessage{"provider": parsed.Extra["provider"], "documentationUrl": json.RawMessage(`"https://evil.example/docs"`)}
+	if err := VerifyAgentpinExtension(&changed); err == nil {
+		t.Fatal("changed extra field must break the signature")
+	}
+	added := parsed
+	added.Extra = map[string]json.RawMessage{"provider": parsed.Extra["provider"], "documentationUrl": parsed.Extra["documentationUrl"], "securitySchemes": json.RawMessage(`{"x":1}`)}
+	if err := VerifyAgentpinExtension(&added); err == nil {
+		t.Fatal("added extra field must break the signature")
+	}
+	removed := parsed
+	removed.Extra = map[string]json.RawMessage{"provider": parsed.Extra["provider"]}
+	if err := VerifyAgentpinExtension(&removed); err == nil {
+		t.Fatal("removed extra field must break the signature")
+	}
+}
