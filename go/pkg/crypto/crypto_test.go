@@ -73,3 +73,30 @@ func TestSHA256Hex(t *testing.T) {
 		t.Fatalf("SHA256Hex(test) = %q, want %q", got, want)
 	}
 }
+
+func TestDomainSeparatedInputLayout(t *testing.T) {
+	got := DomainSeparatedInput("agentpin-response-v1", []byte("abc"), []byte(""), []byte("xyz"))
+	want := append([]byte("agentpin-response-v1\x00"), 0, 0, 0, 3, 'a', 'b', 'c', 0, 0, 0, 0, 0, 0, 0, 3, 'x', 'y', 'z')
+	if string(got) != string(want) {
+		t.Fatalf("layout mismatch:\n got %x\nwant %x", got, want)
+	}
+}
+
+func TestContextSignatureDoesNotVerifyUnderOtherContext(t *testing.T) {
+	kp, _ := GenerateKeyPair()
+	priv, _ := LoadPrivateKey(kp.PrivateKeyPEM)
+	pub, _ := LoadPublicKey(kp.PublicKeyPEM)
+	sig, err := SignWithContext(priv, CtxResponse, []byte("nonce"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := VerifyWithContext(pub, CtxResponse, sig, []byte("nonce")); !ok {
+		t.Fatal("same context should verify")
+	}
+	if ok, _ := VerifyWithContext(pub, CtxAttestation, sig, []byte("nonce")); ok {
+		t.Fatal("other context must not verify")
+	}
+	if ok, _ := VerifyBytes(pub, []byte("nonce"), sig); ok {
+		t.Fatal("bare bytes must not verify")
+	}
+}

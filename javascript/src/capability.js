@@ -103,9 +103,13 @@ export function capabilitiesSubset(declared, requested) {
  * @returns {string} Hex-encoded SHA-256 hash
  */
 export function capabilitiesHash(capabilities) {
-    const sorted = capabilities.map(c => c.value).sort();
-    const json = JSON.stringify(sorted);
-    return sha256Hex(json);
+    // Accept Capability instances, `{ value }` objects and plain strings so
+    // the same hash is produced for a credential's `capabilities` claim
+    // (strings) and for the Capability list an attestation was created with.
+    const sorted = capabilities
+        .map((c) => (typeof c === 'string' ? c : (c && typeof c.value === 'string' ? c.value : String(c))))
+        .sort();
+    return sha256Hex(JSON.stringify(sorted));
 }
 
 /** Core actions defined by the AgentPin taxonomy. */

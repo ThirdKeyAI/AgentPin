@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Build router with security headers
-    let security = middleware::security_headers();
+    let security = middleware::security_headers(config.hsts);
     let mut app = Router::new()
         .route(
             "/.well-known/agent-identity.json",

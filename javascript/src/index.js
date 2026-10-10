@@ -9,6 +9,14 @@ export {
     generateKeyId,
     sha256Hash,
     sha256Hex,
+    domainSeparatedInput,
+    signWithContext,
+    verifyWithContext,
+    CTX_RESPONSE,
+    CTX_ATTESTATION,
+    CTX_AGENTCARD,
+    CTX_REVOCATION,
+    CTX_BUNDLE,
 } from './crypto.js';
 
 export {
@@ -23,6 +31,9 @@ export {
     encodeJwt,
     decodeJwtUnverified,
     verifyJwt,
+    validateClaims,
+    MalformedCredentialError,
+    CREDENTIAL_VERSION,
 } from './jwt.js';
 
 export {
@@ -49,6 +60,7 @@ export {
     parseRateLimit,
     domainPatternMatches,
     constraintsSubsetOf,
+    mergeConstraints,
 } from './constraint.js';
 
 export {
@@ -72,12 +84,18 @@ export {
     addRevokedKey,
     checkRevocation,
     fetchRevocationDocument,
+    fetchRevocationDocumentIfPresent,
+    revocationSigningInput,
+    signRevocationDocument,
+    verifyRevocationDocument,
+    checkRevocationFreshness,
 } from './revocation.js';
 
 export {
     KeyPinStore,
     PinningResult,
     checkPinning,
+    checkPinningSet,
 } from './pinning.js';
 
 export {
@@ -92,12 +110,17 @@ export {
     createResponse,
     verifyResponse,
     verifyResponseWithNonceStore,
+    validateNonce,
+    responseSigningInput,
+    NONCE_EXPIRY_SECS,
 } from './mutual.js';
 
 export {
     defaultVerifierConfig,
     verifyCredentialOffline,
     verifyCredential,
+    checkKeyUsable,
+    DEFAULT_CREDENTIAL_TTL_MAX,
 } from './verification.js';
 
 export {
@@ -105,6 +128,10 @@ export {
     findBundleDiscovery,
     findBundleRevocation,
     verifyCredentialWithBundle,
+    bundleSigningInput,
+    signTrustBundle,
+    verifyTrustBundle,
+    checkBundleExpiry,
 } from './bundle.js';
 
 export {
@@ -137,17 +164,32 @@ export {
     verifyAgentpinExtension,
     extensionKeyThumbprint,
     canonicalizeForSigning,
+    agentCardSigningInput,
 } from './a2a.js';
 
 export {
     LocalAgentCardStore,
     cardEndpointHost,
     deriveDiscoveryFromCard,
+    cardKeyPublishedIn,
 } from './resolverLocal.js';
 
 export {
     A2aAgentCardResolver,
 } from './resolverA2a.js';
+
+export {
+    fetchJsonBounded,
+    DEFAULT_TIMEOUT_MS,
+    DEFAULT_MAX_RESPONSE_BYTES,
+} from './net.js';
+
+export {
+    normalizeDomain,
+    httpsUrlHost,
+    validateHttpsUrlForDomain,
+    defaultRevocationEndpoint,
+} from './domain.js';
 
 export {
     parseTxtRecord,

@@ -2,9 +2,11 @@
 // cryptographic-identity extension (v0.3.0).
 //
 // Wire-compatible with the Rust, JavaScript, and Python ports: cards signed
-// in any language verify cleanly in the others. Signing input is the
-// canonical bytes of the AgentCard with the `agentpin` field cleared
-// (sorted-key JSON, compact separators, no whitespace).
+// in any language verify cleanly in the others. The signing input is the
+// domain-separated canonical bytes of the AgentCard with the `agentpin`
+// field replaced by {"agentpin_endpoint", "public_key_jwk"} (signature
+// cleared), so the endpoint and key are covered by the signature; see
+// AgentCardSigningInput.
 package a2a
 
 import (
@@ -75,24 +77,22 @@ func SignAgentCard(unsigned types.A2aAgentCard, privateKeyPEM, kid, agentpinEndp
 		return types.A2aAgentCard{}, err
 	}
 
-	// Build the canonical signing input from the unsigned card.
-	signing := unsigned
-	signing.Agentpin = nil
-	canonical, err := canonicalizeCard(signing)
-	if err != nil {
-		return types.A2aAgentCard{}, err
-	}
-
-	signature, err := crypto.SignBytes(priv, canonical)
-	if err != nil {
-		return types.A2aAgentCard{}, err
-	}
-
 	pubPEM, err := crypto.MarshalPublicKeyPEM(&priv.PublicKey)
 	if err != nil {
 		return types.A2aAgentCard{}, err
 	}
 	publicJWK, err := jwk.PEMToJWK(pubPEM, kid)
+	if err != nil {
+		return types.A2aAgentCard{}, err
+	}
+
+	// Build the domain-separated signing input with the endpoint and JWK
+	// included.
+	input, err := agentCardSigningInputFor(unsigned, agentpinEndpoint, publicJWK)
+	if err != nil {
+		return types.A2aAgentCard{}, err
+	}
+	signature, err := crypto.SignBytes(priv, input)
 	if err != nil {
 		return types.A2aAgentCard{}, err
 	}
@@ -133,17 +133,15 @@ func VerifyAgentpinExtension(card *types.A2aAgentCard) error {
 			"AgentCard has no agentpin extension",
 		)
 	}
-	withoutExt := *card
-	withoutExt.Agentpin = nil
-	canonical, err := canonicalizeCard(withoutExt)
+	input, err := AgentCardSigningInput(card)
 	if err != nil {
 		return err
 	}
-	pubPEM, err := jwk.JWKToPEM(&card.Agentpin.PublicKeyJWK)
+	pub, err := jwk.JWKToVerifyingKey(&card.Agentpin.PublicKeyJWK)
 	if err != nil {
 		return err
 	}
-	ok, err := crypto.VerifySignature(pubPEM, canonical, card.Agentpin.Signature)
+	ok, err := crypto.VerifyBytes(pub, input, card.Agentpin.Signature)
 	if err != nil {
 		return err
 	}
@@ -170,10 +168,47 @@ func CanonicalizeForSigning(value interface{}) ([]byte, error) {
 	return canonicalize(value)
 }
 
-// canonicalizeCard re-serialises an AgentCard with sorted object keys so the
-// signature input is byte-identical with the Rust, JS, and Python SDKs.
-func canonicalizeCard(card types.A2aAgentCard) ([]byte, error) {
-	return canonicalize(card)
+// AgentCardSigningInput returns the domain-separated bytes that
+// card.Agentpin.Signature must verify against, using the endpoint and JWK
+// from the card's own extension. Exposed so cross-language conformance
+// tests can compare the exact bytes.
+func AgentCardSigningInput(card *types.A2aAgentCard) ([]byte, error) {
+	if card == nil || card.Agentpin == nil {
+		return nil, types.NewVerificationError(types.ErrDiscoveryInvalid, "AgentCard has no agentpin extension")
+	}
+	return agentCardSigningInputFor(*card, card.Agentpin.AgentpinEndpoint, card.Agentpin.PublicKeyJWK)
+}
+
+// agentCardSigningInputFor canonicalizes card with its agentpin field set to
+// {"agentpin_endpoint": endpoint, "public_key_jwk": jwk} and wraps the
+// result in the agentcard signing context.
+func agentCardSigningInputFor(card types.A2aAgentCard, endpoint string, pubJWK types.JWK) ([]byte, error) {
+	card.Agentpin = nil
+	raw, err := json.Marshal(card)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+	var generic map[string]interface{}
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		return nil, fmt.Errorf("unmarshal for canonicalization: %w", err)
+	}
+	jwkRaw, err := json.Marshal(pubJWK)
+	if err != nil {
+		return nil, fmt.Errorf("marshal jwk: %w", err)
+	}
+	var jwkGeneric interface{}
+	if err := json.Unmarshal(jwkRaw, &jwkGeneric); err != nil {
+		return nil, fmt.Errorf("unmarshal jwk: %w", err)
+	}
+	generic["agentpin"] = map[string]interface{}{
+		"agentpin_endpoint": endpoint,
+		"public_key_jwk":    jwkGeneric,
+	}
+	canonical, err := canonicalize(generic)
+	if err != nil {
+		return nil, err
+	}
+	return crypto.DomainSeparatedInput(crypto.CtxAgentCard, canonical), nil
 }
 
 // canonicalize re-marshals the value through map[string]interface{}, which

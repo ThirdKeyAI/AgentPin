@@ -1,24 +1,33 @@
-//! A2A AgentCard signing and verification (v0.3.0).
+//! A2A AgentCard signing and verification (v0.3.0, hardened in v0.4).
 //!
 //! This module turns an AgentPin [`AgentDeclaration`] into a signed A2A
 //! [`A2aAgentCard`] via [`A2aAgentCardBuilder`], and verifies a received
 //! AgentCard's [`AgentpinExtension`] payload via [`verify_agentpin_extension`].
 //!
-//! ## Signature canonicalisation
+//! ## Signature canonicalization
 //!
 //! The detached ECDSA P-256 signature inside an [`AgentpinExtension`] covers
-//! the **canonical bytes of the AgentCard with the extension cleared**:
+//! the **domain-separated canonical bytes of the AgentCard including the
+//! extension's `agentpin_endpoint` and `public_key_jwk`** (but not the
+//! `signature` field itself):
 //!
 //! 1. Take the AgentCard you intend to publish.
-//! 2. Replace its `agentpin` field with `None`.
-//! 3. Serialise it via `serde_json::to_vec` with sorted-key canonical form.
-//! 4. Sign those bytes with ECDSA P-256.
+//! 2. Replace its `agentpin` field with
+//!    `{"agentpin_endpoint": ..., "public_key_jwk": ...}` (no `signature`).
+//! 3. Serialize it as sorted-key, compact JSON (unknown fields included
+//!    verbatim).
+//! 4. Prefix the context label `agentpin-agentcard-v1` and a length prefix
+//!    (see [`crate::crypto::domain_separated_input`]).
+//! 5. Sign those bytes with ECDSA P-256.
 //!
-//! The verifier reproduces step 1–3 from the received card and checks the
-//! signature against the JWK in the extension. This means the signature
-//! covers everything except the extension itself — including `name`, `url`,
-//! `capabilities`, `skills`, and `agentpin_endpoint` → if any field is
-//! tampered with, the signature breaks.
+//! The verifier reproduces steps 1-4 from the received card and checks the
+//! signature against the JWK in the extension. The signature therefore
+//! covers every field of the card: `name`, `url`, `capabilities`, `skills`,
+//! any upstream A2A fields, **and** the extension's `agentpin_endpoint` and
+//! `public_key_jwk`. Rewriting the endpoint to point at another domain
+//! breaks the signature (AP-4), and the context label keeps card signatures
+//! disjoint from credential, attestation and challenge-response signatures
+//! (AP-1).
 
 use p256::pkcs8::{DecodePrivateKey, EncodePublicKey};
 use serde::Serialize;
@@ -61,6 +70,7 @@ pub struct A2aAgentCardBuilder<'a> {
     skill_overrides: Vec<A2aAgentSkill>,
     streaming: bool,
     push_notifications: bool,
+    extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl<'a> A2aAgentCardBuilder<'a> {
@@ -77,7 +87,16 @@ impl<'a> A2aAgentCardBuilder<'a> {
             skill_overrides: Vec::new(),
             streaming: false,
             push_notifications: false,
+            extra: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Attach an upstream A2A field (e.g. `provider`, `documentationUrl`)
+    /// that AgentPin does not model. It is preserved verbatim and covered by
+    /// the signature (AP-17).
+    pub fn extra_field(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        self.extra.insert(key.into(), value);
+        self
     }
 
     /// Set the AgentPin discovery endpoint URL written into the extension.
@@ -136,9 +155,11 @@ impl<'a> A2aAgentCardBuilder<'a> {
                 streaming: self.streaming,
                 push_notifications: self.push_notifications,
                 allowed_domains,
+                extra: Default::default(),
             },
             skills,
             agentpin: None,
+            extra: self.extra.clone(),
         }
     }
 
@@ -153,13 +174,15 @@ impl<'a> A2aAgentCardBuilder<'a> {
             )
         })?;
 
-        // Build the unsigned card; sign over its canonical bytes.
-        let mut card = self.build_unsigned();
-        let canonical = canonicalize_for_signing(&card)?;
-        let signature_b64 = crypto::sign_data(private_key_pem, &canonical)?;
-
         let public_key_pem = derive_public_pem(private_key_pem)?;
         let public_key_jwk = pem_to_jwk(&public_key_pem, kid)?;
+
+        // Build the unsigned card; sign over its domain-separated canonical
+        // bytes with the endpoint and JWK included.
+        let mut card = self.build_unsigned();
+        let input = agent_card_signing_input_for(&card, &endpoint, &public_key_jwk)?;
+        let signing_key = crypto::load_signing_key(private_key_pem)?;
+        let signature_b64 = crypto::sign_bytes(&signing_key, &input);
 
         card.agentpin = Some(AgentpinExtension {
             agentpin_endpoint: endpoint,
@@ -187,14 +210,12 @@ pub fn verify_agentpin_extension(card: &A2aAgentCard) -> Result<(), Error> {
         .as_ref()
         .ok_or_else(|| Error::Discovery("AgentCard has no agentpin extension".to_string()))?;
 
-    // Reconstruct the canonical signing input: card with extension cleared.
-    let mut without_ext = card.clone();
-    without_ext.agentpin = None;
-    let canonical = canonicalize_for_signing(&without_ext)?;
+    // Reconstruct the canonical signing input: card with the extension's
+    // endpoint and JWK included and its signature cleared.
+    let input = agent_card_signing_input(card)?;
 
-    // Convert JWK -> PEM for the existing crypto helper, then verify.
-    let public_key_pem = crate::jwk::jwk_to_pem(&extension.public_key_jwk)?;
-    let valid = crypto::verify_signature(&public_key_pem, &canonical, &extension.signature)?;
+    let verifying_key = crate::jwk::jwk_to_verifying_key(&extension.public_key_jwk)?;
+    let valid = crypto::verify_bytes(&verifying_key, &input, &extension.signature)?;
     if !valid {
         return Err(Error::Discovery(
             "A2A AgentCard signature did not verify against extension JWK".to_string(),
@@ -214,17 +235,56 @@ pub fn extension_key_thumbprint(ext: &AgentpinExtension) -> String {
 // Canonicalisation
 // ---------------------------------------------------------------------------
 
-/// Produce the canonical signing input for an [`A2aAgentCard`].
+/// Produce the full signing input for a signed [`A2aAgentCard`], using the
+/// `agentpin_endpoint` and `public_key_jwk` from its own extension.
 ///
-/// JSON-encoded with sorted keys via `serde_json::to_vec` — `serde_json` does
-/// not sort by default, so we go through a `BTreeMap` intermediate produced
-/// by re-serialising the card. The same trick is used by SchemaPin for its
-/// schema canonicalisation.
-fn canonicalize_for_signing(card: &A2aAgentCard) -> Result<Vec<u8>, Error> {
-    // Serialise to a Value, then re-serialise with sorted keys. Cheap and
-    // avoids implementing a hand-rolled canonical form.
-    let value: serde_json::Value = serde_json::to_value(card)?;
-    let canonical = sorted_canonical(&value);
+/// Returns the domain-separated bytes that `agentpin.signature` must verify
+/// against. Exposed so cross-language conformance tests can compare the
+/// exact bytes.
+pub fn agent_card_signing_input(card: &A2aAgentCard) -> Result<Vec<u8>, Error> {
+    let extension = card
+        .agentpin
+        .as_ref()
+        .ok_or_else(|| Error::Discovery("AgentCard has no agentpin extension".to_string()))?;
+    agent_card_signing_input_for(
+        card,
+        &extension.agentpin_endpoint,
+        &extension.public_key_jwk,
+    )
+}
+
+/// Produce the signing input for `card` as if it carried an extension with
+/// the given endpoint and JWK (and no signature).
+fn agent_card_signing_input_for(
+    card: &A2aAgentCard,
+    agentpin_endpoint: &str,
+    public_key_jwk: &crate::jwk::Jwk,
+) -> Result<Vec<u8>, Error> {
+    let mut value: serde_json::Value = serde_json::to_value(card)?;
+    let ext = serde_json::json!({
+        "agentpin_endpoint": agentpin_endpoint,
+        "public_key_jwk": serde_json::to_value(public_key_jwk)?,
+    });
+    match value.as_object_mut() {
+        Some(map) => {
+            map.insert("agentpin".to_string(), ext);
+        }
+        None => {
+            return Err(Error::Discovery(
+                "AgentCard did not serialize to a JSON object".to_string(),
+            ))
+        }
+    }
+    let canonical = canonicalize_json(&value)?;
+    Ok(crypto::domain_separated_input(
+        crypto::CTX_AGENTCARD,
+        &[&canonical],
+    ))
+}
+
+/// Canonical JSON bytes: sorted keys at every depth, compact separators.
+pub fn canonicalize_json(value: &serde_json::Value) -> Result<Vec<u8>, Error> {
+    let canonical = sorted_canonical(value);
     serde_json::to_vec(&canonical).map_err(Error::from)
 }
 
@@ -367,6 +427,103 @@ mod tests {
         card.url = "https://attacker.example/agent".to_string();
         let err = verify_agentpin_extension(&card).unwrap_err();
         assert!(matches!(err, Error::Discovery(_)));
+    }
+
+    /// AP-4: the signature covers `agentpin_endpoint`, so re-pointing a
+    /// legitimately signed card at another domain's discovery endpoint
+    /// breaks verification.
+    #[test]
+    fn verify_fails_when_agentpin_endpoint_rewritten() {
+        let decl = declaration_with_caps(vec!["read:customers"], None);
+        let kp = keypair();
+        let mut card = A2aAgentCardBuilder::from_declaration("https://example.com/agent", &decl)
+            .agentpin_endpoint("https://example.com/.well-known/agent-identity.json")
+            .sign(&kp.private_key_pem, "kid-1")
+            .unwrap();
+        card.agentpin.as_mut().unwrap().agentpin_endpoint =
+            "https://bank.example/.well-known/agent-identity.json".to_string();
+        assert!(matches!(
+            verify_agentpin_extension(&card),
+            Err(Error::Discovery(_))
+        ));
+    }
+
+    /// AP-4: the signature covers the extension JWK metadata (kid etc.).
+    #[test]
+    fn verify_fails_when_extension_jwk_kid_rewritten() {
+        let decl = declaration_with_caps(vec!["read:customers"], None);
+        let kp = keypair();
+        let mut card = A2aAgentCardBuilder::from_declaration("https://example.com/agent", &decl)
+            .agentpin_endpoint("https://example.com/.well-known/agent-identity.json")
+            .sign(&kp.private_key_pem, "kid-1")
+            .unwrap();
+        card.agentpin.as_mut().unwrap().public_key_jwk.kid = "kid-2".to_string();
+        assert!(verify_agentpin_extension(&card).is_err());
+    }
+
+    /// AP-1: the card signature is domain separated — it is not a raw
+    /// signature over the canonical JSON, and a raw signature over the
+    /// legacy (extension-cleared) canonical bytes does not verify.
+    #[test]
+    fn card_signature_is_domain_separated() {
+        let decl = declaration_with_caps(vec!["read:customers"], None);
+        let kp = keypair();
+        let card = A2aAgentCardBuilder::from_declaration("https://example.com/agent", &decl)
+            .agentpin_endpoint("https://example.com/.well-known/agent-identity.json")
+            .sign(&kp.private_key_pem, "kid-1")
+            .unwrap();
+        let input = agent_card_signing_input(&card).unwrap();
+        assert!(input.starts_with(b"agentpin-agentcard-v1\0"));
+        let sig = &card.agentpin.as_ref().unwrap().signature;
+        // The raw canonical JSON (without the context prefix) is not what was signed.
+        let canonical = &input[crypto::CTX_AGENTCARD.len() + 1 + 4..];
+        assert!(!crypto::verify_signature(&kp.public_key_pem, canonical, sig).unwrap());
+
+        // Legacy format: signature over the card with the extension cleared.
+        let mut legacy_card = card.clone();
+        legacy_card.agentpin = None;
+        let legacy_bytes = canonicalize_json(&serde_json::to_value(&legacy_card).unwrap()).unwrap();
+        let legacy_sig = crypto::sign_data(&kp.private_key_pem, &legacy_bytes).unwrap();
+        let mut forged = card.clone();
+        forged.agentpin.as_mut().unwrap().signature = legacy_sig;
+        assert!(verify_agentpin_extension(&forged).is_err());
+    }
+
+    /// AP-17: upstream fields are part of the signed bytes — a card signed
+    /// with them verifies after a JSON round trip, and adding, removing or
+    /// changing one afterwards breaks the signature.
+    #[test]
+    fn unknown_fields_are_covered_by_signature() {
+        let decl = declaration_with_caps(vec!["read:customers"], None);
+        let kp = keypair();
+        let card = A2aAgentCardBuilder::from_declaration("https://example.com/agent", &decl)
+            .agentpin_endpoint("https://example.com/.well-known/agent-identity.json")
+            .extra_field("provider", serde_json::json!({"organization": "Example"}))
+            .extra_field(
+                "documentationUrl",
+                serde_json::json!("https://example.com/docs"),
+            )
+            .sign(&kp.private_key_pem, "kid-1")
+            .unwrap();
+        let json = serde_json::to_string(&card).unwrap();
+        assert!(json.contains("documentationUrl"));
+        let parsed: A2aAgentCard = serde_json::from_str(&json).unwrap();
+        verify_agentpin_extension(&parsed).unwrap();
+
+        let mut changed = parsed.clone();
+        changed.extra.insert(
+            "documentationUrl".to_string(),
+            serde_json::json!("https://evil.example/docs"),
+        );
+        assert!(verify_agentpin_extension(&changed).is_err());
+        let mut added = parsed.clone();
+        added
+            .extra
+            .insert("securitySchemes".to_string(), serde_json::json!({"x": 1}));
+        assert!(verify_agentpin_extension(&added).is_err());
+        let mut removed = parsed.clone();
+        removed.extra.remove("provider");
+        assert!(verify_agentpin_extension(&removed).is_err());
     }
 
     #[test]

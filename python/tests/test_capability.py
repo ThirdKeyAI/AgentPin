@@ -3,7 +3,6 @@
 import pytest
 
 from agentpin.capability import (
-    CORE_ACTIONS,
     Capability,
     capabilities_hash,
     capabilities_subset,
@@ -91,3 +90,15 @@ class TestValidateCapability:
     def test_validate_missing_colon(self):
         with pytest.raises(ValueError, match="missing ':'"):
             validate_capability(Capability("readcodebase"))
+
+
+def test_reverse_domain_requires_two_nonempty_segments():
+    """AP-21: match the other SDKs — a lone dot is not a reverse-domain prefix."""
+    import pytest
+
+    from agentpin.capability import Capability, validate_capability
+
+    validate_capability(Capability("com.example.scan:target"))
+    for bad in ("scan.:target", ".scan:target", "a..b:x", "scan:target"):
+        with pytest.raises(ValueError):
+            validate_capability(Capability(bad))

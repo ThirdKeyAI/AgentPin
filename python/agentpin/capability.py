@@ -84,9 +84,14 @@ def capabilities_subset(declared: List[Capability], requested: List[Capability])
     return all(any(decl.matches(req) for decl in declared) for req in requested)
 
 
-def capabilities_hash(capabilities: List[Capability]) -> str:
-    """Hash capabilities for delegation attestation: SHA-256 of sorted JSON array."""
-    sorted_caps = sorted(c.value for c in capabilities)
+def capabilities_hash(capabilities: List) -> str:
+    """Hash capabilities for delegation attestation: SHA-256 of sorted JSON array.
+
+    Accepts ``Capability`` instances and plain strings so the same hash is
+    produced for a credential's ``capabilities`` claim (strings) and for the
+    ``Capability`` list an attestation was created with.
+    """
+    sorted_caps = sorted(c.value if isinstance(c, Capability) else str(c) for c in capabilities)
     json_str = json.dumps(sorted_caps, separators=(",", ":"))
     return sha256_hex(json_str.encode("utf-8"))
 
@@ -95,8 +100,13 @@ CORE_ACTIONS = ["read", "write", "execute", "admin", "delegate"]
 
 
 def _is_reverse_domain(s: str) -> bool:
-    """Check if string looks like a reverse domain prefix (contains a dot)."""
-    return "." in s
+    """Check if string looks like a reverse domain prefix.
+
+    Requires at least two dot-separated, non-empty segments (matching the
+    Rust, Go and JavaScript SDKs).
+    """
+    parts = s.split(".")
+    return len(parts) >= 2 and all(parts)
 
 
 def validate_capability(cap: Capability) -> None:

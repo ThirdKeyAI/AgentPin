@@ -4,70 +4,118 @@ use super::capability::Capability;
 use super::constraint::Constraints;
 use crate::jwk::Jwk;
 
-/// List of domains an agent is permitted to interact with (v0.3.0).
+/// List of domains an agent is permitted to interact with (v0.3.0, made a
+/// proper tri-state in v0.4 — AP-6).
 ///
 /// Extracted from [`Constraints::allowed_domains`] for use by cross-protocol
 /// A2A verification — most notably SchemaPin v1.4's `A2aVerificationContext`,
 /// which scopes tool verification to the intersection of caller and provider
 /// domains.
 ///
-/// Convention: an empty list means *no restriction* (all domains trusted).
-/// A non-empty list means the agent is restricted to exactly those domains.
+/// Wire form: an absent `allowed_domains` field is [`Unrestricted`]; a
+/// present list (including the empty list) is [`Restricted`]. "No
+/// restriction" and "restricted to nothing" are therefore distinct, so the
+/// intersection of two disjoint allow-lists is `Restricted([])` — which
+/// allows nothing — and can never be re-interpreted as unrestricted.
+///
+/// [`Unrestricted`]: AllowedDomains::Unrestricted
+/// [`Restricted`]: AllowedDomains::Restricted
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct AllowedDomains(pub Vec<String>);
+#[serde(from = "Option<Vec<String>>", into = "Option<Vec<String>>")]
+pub enum AllowedDomains {
+    /// No restriction: every domain is allowed.
+    #[default]
+    Unrestricted,
+    /// Only domains matching one of the listed literals or `*.` patterns
+    /// (spec §5.5) are allowed. An empty list allows nothing.
+    Restricted(Vec<String>),
+}
+
+impl From<Option<Vec<String>>> for AllowedDomains {
+    fn from(value: Option<Vec<String>>) -> Self {
+        match value {
+            None => AllowedDomains::Unrestricted,
+            Some(list) => AllowedDomains::Restricted(list),
+        }
+    }
+}
+
+impl From<AllowedDomains> for Option<Vec<String>> {
+    fn from(value: AllowedDomains) -> Self {
+        match value {
+            AllowedDomains::Unrestricted => None,
+            AllowedDomains::Restricted(list) => Some(list),
+        }
+    }
+}
 
 impl AllowedDomains {
-    /// Construct an empty list (no restriction — all domains trusted).
+    /// No restriction — all domains trusted.
     pub fn unrestricted() -> Self {
-        Self(Vec::new())
+        Self::Unrestricted
     }
 
-    /// Construct from any iterable of strings.
+    /// Construct a restricted list from any iterable of strings. An empty
+    /// iterable yields `Restricted([])`, which allows nothing.
     pub fn from_domains<I, S>(iter: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        Self(iter.into_iter().map(Into::into).collect())
+        Self::Restricted(iter.into_iter().map(Into::into).collect())
     }
 
-    /// `true` when the list is empty (no restriction).
+    /// `true` when there is no restriction.
     pub fn is_unrestricted(&self) -> bool {
-        self.0.is_empty()
+        matches!(self, Self::Unrestricted)
     }
 
-    /// `true` when `domain` is allowed under this list.
-    /// An empty list trusts all domains.
+    /// `true` when `domain` is allowed under this list. Patterns use the
+    /// §5.5 `*.` wildcard rules; `Restricted([])` allows nothing.
     pub fn allows(&self, domain: &str) -> bool {
-        self.is_unrestricted() || self.0.iter().any(|d| d == domain)
+        match self {
+            Self::Unrestricted => true,
+            Self::Restricted(list) => list
+                .iter()
+                .any(|pattern| super::constraint::domain_pattern_matches(pattern, domain)),
+        }
     }
 
     /// Intersection of two allow-lists.
     ///
-    /// Following the convention that empty = unrestricted:
-    /// - `unrestricted ∩ X = X`
-    /// - `X ∩ unrestricted = X`
-    /// - `[a,b] ∩ [b,c] = [b]`
+    /// - `Unrestricted ∩ X = X`
+    /// - `X ∩ Unrestricted = X`
+    /// - `Restricted(a) ∩ Restricted(b)` = the entries of either list that
+    ///   are allowed by the other (so `*.corp.com ∩ api.corp.com` =
+    ///   `api.corp.com`); when the lists are disjoint the result is
+    ///   `Restricted([])`, which allows nothing.
     pub fn intersect(&self, other: &Self) -> Self {
-        if self.is_unrestricted() {
-            return other.clone();
+        match (self, other) {
+            (Self::Unrestricted, x) | (x, Self::Unrestricted) => x.clone(),
+            (Self::Restricted(a), Self::Restricted(b)) => {
+                let mut out: Vec<String> = Vec::new();
+                for d in a.iter().filter(|d| other.allows(d)) {
+                    if !out.contains(d) {
+                        out.push(d.clone());
+                    }
+                }
+                for d in b.iter().filter(|d| self.allows(d)) {
+                    if !out.contains(d) {
+                        out.push(d.clone());
+                    }
+                }
+                Self::Restricted(out)
+            }
         }
-        if other.is_unrestricted() {
-            return self.clone();
-        }
-        let inter: Vec<String> = self
-            .0
-            .iter()
-            .filter(|d| other.0.contains(d))
-            .cloned()
-            .collect();
-        Self(inter)
     }
 
-    /// Borrow the inner vector.
+    /// Borrow the restricted list; empty for `Unrestricted`. Use
+    /// [`is_unrestricted`](Self::is_unrestricted) to tell the two apart.
     pub fn as_slice(&self) -> &[String] {
-        &self.0
+        match self {
+            Self::Unrestricted => &[],
+            Self::Restricted(list) => list,
+        }
     }
 }
 
@@ -76,20 +124,19 @@ where
     S: Into<String>,
 {
     fn from_iter<I: IntoIterator<Item = S>>(iter: I) -> Self {
-        Self(iter.into_iter().map(Into::into).collect())
+        Self::from_domains(iter)
     }
 }
 
 impl Constraints {
     /// Extract [`AllowedDomains`] from the constraints' `allowed_domains` field.
     ///
-    /// Returns [`AllowedDomains::unrestricted`] when the field is absent — the
-    /// "no allow-list specified" case is treated as "no restriction" so the
-    /// intersection helper composes correctly with cross-protocol callers.
+    /// Returns [`AllowedDomains::Unrestricted`] when the field is absent and
+    /// `Restricted(list)` (including the empty list) when it is present.
     pub fn allowed_domains_typed(&self) -> AllowedDomains {
         match &self.allowed_domains {
-            Some(list) => AllowedDomains(list.clone()),
-            None => AllowedDomains::unrestricted(),
+            Some(list) => AllowedDomains::Restricted(list.clone()),
+            None => AllowedDomains::Unrestricted,
         }
     }
 }
@@ -266,22 +313,69 @@ mod tests {
         );
     }
 
+    /// AP-6: disjoint allow-lists intersect to "restricted to nothing", which
+    /// allows nothing and is never re-interpreted as unrestricted.
     #[test]
-    fn allowed_domains_intersect_no_overlap_yields_empty() {
+    fn allowed_domains_intersect_no_overlap_allows_nothing() {
         let lhs = AllowedDomains::from_domains(["a.com"]);
         let rhs = AllowedDomains::from_domains(["b.com"]);
         let inter = lhs.intersect(&rhs);
-        // empty == unrestricted under our convention; documented in the type
-        assert!(inter.is_unrestricted());
+        assert!(!inter.is_unrestricted());
+        assert_eq!(inter, AllowedDomains::Restricted(vec![]));
+        assert!(!inter.allows("a.com"));
+        assert!(!inter.allows("anything.com"));
+        assert!(!AllowedDomains::from_domains(Vec::<String>::new()).allows("x.com"));
     }
 
+    /// AP-6: `allows` and `intersect` use the §5.5 pattern rules.
     #[test]
-    fn allowed_domains_serializes_transparently() {
+    fn allowed_domains_pattern_matching() {
+        let wild = AllowedDomains::from_domains(["*.corp.com"]);
+        assert!(wild.allows("api.corp.com"));
+        assert!(!wild.allows("corp.com"));
+        assert!(!wild.allows("evil-corp.com"));
+        let literal = AllowedDomains::from_domains(["api.corp.com"]);
+        assert_eq!(
+            wild.intersect(&literal),
+            AllowedDomains::from_domains(["api.corp.com"])
+        );
+        assert_eq!(
+            literal.intersect(&wild),
+            AllowedDomains::from_domains(["api.corp.com"])
+        );
+    }
+
+    /// AP-6: wire form — absent is unrestricted, `[]` is restricted to nothing.
+    #[test]
+    fn allowed_domains_wire_form() {
         let ad = AllowedDomains::from_domains(["a.com", "b.com"]);
         let json = serde_json::to_string(&ad).unwrap();
         assert_eq!(json, "[\"a.com\",\"b.com\"]");
         let back: AllowedDomains = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.as_slice(), ad.as_slice());
+        assert_eq!(back, ad);
+
+        let empty: AllowedDomains = serde_json::from_str("[]").unwrap();
+        assert_eq!(empty, AllowedDomains::Restricted(vec![]));
+        assert_eq!(serde_json::to_string(&empty).unwrap(), "[]");
+
+        let none: AllowedDomains = serde_json::from_str("null").unwrap();
+        assert!(none.is_unrestricted());
+        assert_eq!(
+            serde_json::to_string(&AllowedDomains::Unrestricted).unwrap(),
+            "null"
+        );
+
+        // Constraints: Some([]) is restricted to nothing, None is unrestricted.
+        let restricted_to_nothing = Constraints {
+            allowed_domains: Some(vec![]),
+            ..Default::default()
+        };
+        assert!(!restricted_to_nothing
+            .allowed_domains_typed()
+            .is_unrestricted());
+        assert!(Constraints::default()
+            .allowed_domains_typed()
+            .is_unrestricted());
     }
 
     #[test]

@@ -75,3 +75,72 @@ func TestDifferentDomainsIndependent(t *testing.T) {
 		t.Fatalf("cross-domain: got %v", r)
 	}
 }
+
+// AP-3: pins are keyed on the normalized domain.
+func TestPinKeyNormalized(t *testing.T) {
+	s := NewKeyPinStore()
+	j1 := &types.JWK{Kid: "k1", Kty: "EC", Crv: "P-256", X: "x1", Y: "y"}
+	j2 := &types.JWK{Kid: "k2", Kty: "EC", Crv: "P-256", X: "x2", Y: "y"}
+	if s.CheckAndPin("example.com", j1) != ResultFirstUse {
+		t.Fatal("first use")
+	}
+	if s.CheckAndPin("EXAMPLE.COM", j1) != ResultMatched {
+		t.Fatal("case variant must match the existing pin")
+	}
+	if s.CheckAndPin("Example.Com.", j2) != ResultChanged {
+		t.Fatal("other key under a case variant must be detected")
+	}
+	if s.GetDomain("EXAMPLE.COM") == nil {
+		t.Fatal("GetDomain must normalize")
+	}
+	json := `[{"domain":"EXAMPLE.COM","pinned_keys":[{"kid":"k","public_key_hash":"h1","first_seen":"t","last_seen":"t","trust_level":"tofu"}]},
+	          {"domain":"example.com","pinned_keys":[{"kid":"k2","public_key_hash":"h2","first_seen":"t","last_seen":"t","trust_level":"tofu"}]}]`
+	loaded := NewKeyPinStore()
+	if err := loaded.LoadFromJSON([]byte(json)); err != nil {
+		t.Fatal(err)
+	}
+	if pd := loaded.GetDomain("example.com"); pd == nil || len(pd.PinnedKeys) != 2 {
+		t.Fatalf("mixed-case entries must merge on load: %+v", pd)
+	}
+}
+
+func TestFirstUsePinsWholeKeySet(t *testing.T) {
+	s := NewKeyPinStore()
+	k1, k2 := makeJWK("k1", "x1"), makeJWK("k2", "x2")
+	if r := s.CheckAndPinSet("example.com", k1, []types.JWK{*k1, *k2}); r != ResultFirstUse {
+		t.Fatalf("got %v", r)
+	}
+	if n := len(s.GetDomain("example.com").PinnedKeys); n != 2 {
+		t.Fatalf("pinned %d keys, want 2", n)
+	}
+	if r := s.CheckAndPin("example.com", k2); r != ResultMatched {
+		t.Fatalf("second published key: got %v", r)
+	}
+}
+
+func TestRotationContinuityPinsNewKey(t *testing.T) {
+	s := NewKeyPinStore()
+	old, newKey := makeJWK("old", "x-old"), makeJWK("new", "x-new")
+	s.CheckAndPin("example.com", old)
+	if r := s.CheckAndPinSet("example.com", newKey, []types.JWK{*old, *newKey}); r != ResultRotated {
+		t.Fatalf("got %v, want rotated", r)
+	}
+	if r := s.CheckAndPin("example.com", newKey); r != ResultMatched {
+		t.Fatalf("rotated key not pinned: %v", r)
+	}
+}
+
+func TestRotationWithoutContinuityIsMismatch(t *testing.T) {
+	s := NewKeyPinStore()
+	old, evil := makeJWK("old", "x-old"), makeJWK("evil", "x-evil")
+	s.CheckAndPin("example.com", old)
+	if r := s.CheckAndPinSet("example.com", evil, []types.JWK{*evil}); r != ResultChanged {
+		t.Fatalf("got %v, want changed", r)
+	}
+	if n := len(s.GetDomain("example.com").PinnedKeys); n != 1 {
+		t.Fatalf("attacker key was pinned (%d keys)", n)
+	}
+	if _, err := CheckPinningSet(s, "example.com", evil, []types.JWK{*evil}); err == nil {
+		t.Fatal("expected pin mismatch error")
+	}
+}

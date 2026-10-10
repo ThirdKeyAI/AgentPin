@@ -50,8 +50,8 @@ fn make_test_setup() -> (String, String, String, String, DiscoveryDocument) {
         updated_at: "2026-01-01T00:00:00Z".to_string(),
     };
     (
-        kp.private_key_pem,
-        kp.public_key_pem,
+        kp.private_key_pem.clone(),
+        kp.public_key_pem.clone(),
         kid,
         "urn:agentpin:example.com:test-agent".to_string(),
         doc,
@@ -106,6 +106,9 @@ fn test_maker_deployer_flow() {
         created_at: "2026-01-01T00:00:00Z".to_string(),
         documents: vec![doc.clone()],
         revocations: vec![revocation],
+        expires_at: None,
+        kid: None,
+        signature: None,
     };
     let resolver = TrustBundleResolver::new(&bundle);
     let mut pin_store = KeyPinStore::new();
@@ -177,7 +180,7 @@ fn test_mutual_verification_with_nonce_store() {
 
     let store = InMemoryNonceStore::new();
     let challenge = create_challenge(None);
-    let response = create_response(&challenge, &sk, "test-key");
+    let response = create_response(&challenge, &sk, "test-key").unwrap();
 
     // First verification should succeed
     let valid = verify_response_with_nonce_store(&response, &challenge, &vk, Some(&store)).unwrap();

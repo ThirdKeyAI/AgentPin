@@ -8,6 +8,8 @@ This guide walks you through installing AgentPin, generating keys, issuing your 
 
 ### Rust
 
+Requires Rust 1.89 or later.
+
 Add `agentpin` to your `Cargo.toml`:
 
 ```toml
@@ -39,7 +41,7 @@ npm install agentpin
 
 ### Python
 
-Requires Python >= 3.8.
+Requires Python >= 3.10.
 
 ```bash
 pip install agentpin
@@ -289,7 +291,7 @@ if (result.valid) {
     console.log('Agent:', result.agent_id);
     console.log('Issuer:', result.issuer);
     console.log('Capabilities:', result.capabilities);
-    console.log('Key pinning:', result.key_pinning); // 'first_use' | 'matched'
+    console.log('Key pinning:', result.key_pinning.status); // 'first_use' | 'pinned'
 } else {
     console.error('Verification failed:', result.error_code, result.error_message);
 }

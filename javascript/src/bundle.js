@@ -8,7 +8,18 @@
 
 import { verifyCredentialOffline, defaultVerifierConfig } from './verification.js';
 import { decodeJwtUnverified } from './jwt.js';
-import { ErrorCode } from './types.js';
+import { normalizeDomain } from './domain.js';
+import { AgentPinError, ErrorCode } from './types.js';
+import { signData, verifySignature, domainSeparatedInput, CTX_BUNDLE } from './crypto.js';
+import { canonicalizeForSigning } from './a2a.js';
+
+function bundleKey(entity) {
+    try {
+        return normalizeDomain(entity);
+    } catch {
+        return String(entity);
+    }
+}
 
 /**
  * Create a new empty trust bundle.
@@ -31,7 +42,8 @@ export function createTrustBundle(createdAt) {
  * @returns {object|null}
  */
 export function findBundleDiscovery(bundle, domain) {
-    return bundle.documents.find(d => d.entity === domain) || null;
+    const key = bundleKey(domain);
+    return bundle.documents.find(d => bundleKey(d.entity) === key) || null;
 }
 
 /**
@@ -41,7 +53,8 @@ export function findBundleDiscovery(bundle, domain) {
  * @returns {object|null}
  */
 export function findBundleRevocation(bundle, domain) {
-    return (bundle.revocations || []).find(r => r.entity === domain) || null;
+    const key = bundleKey(domain);
+    return (bundle.revocations || []).find(r => bundleKey(r.entity) === key) || null;
 }
 
 /**
@@ -98,5 +111,72 @@ export function verifyCredentialWithBundle(credentialJwt, bundle, pinStore, audi
     }
 
     const revocation = findBundleRevocation(bundle, payload.iss);
-    return verifyCredentialOffline(credentialJwt, discovery, revocation, pinStore, audience, config);
+    const chainResolver = {
+        resolveDiscovery(domain) {
+            const doc = findBundleDiscovery(bundle, domain);
+            if (!doc) throw new AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, `Domain '${domain}' not found in trust bundle`);
+            return doc;
+        },
+    };
+    return verifyCredentialOffline(credentialJwt, discovery, revocation, pinStore, audience, config, chainResolver);
+}
+
+// ---------------------------------------------------------------------------
+// Signed trust bundles (design issue 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Signing input: the `agentpin-bundle-v1` context over the canonical JSON of
+ * the bundle with `signature` cleared.
+ * @param {object} bundle
+ * @returns {Buffer}
+ */
+export function bundleSigningInput(bundle) {
+    const rest = { ...bundle };
+    delete rest.signature;
+    return domainSeparatedInput(CTX_BUNDLE, [Buffer.from(canonicalizeForSigning(rest), 'utf8')]);
+}
+
+/**
+ * Sign a trust bundle in place with the operator key identified by `kid`.
+ * @param {object} bundle
+ * @param {string} privateKeyPem
+ * @param {string} kid
+ */
+export function signTrustBundle(bundle, privateKeyPem, kid) {
+    bundle.kid = kid;
+    delete bundle.signature;
+    bundle.signature = signData(privateKeyPem, bundleSigningInput(bundle));
+    return bundle;
+}
+
+/**
+ * Reject a bundle whose `expires_at` is unparsable or in the past.
+ * @param {object} bundle
+ */
+export function checkBundleExpiry(bundle) {
+    if (bundle.expires_at === undefined || bundle.expires_at === null) return;
+    const exp = new Date(bundle.expires_at);
+    if (typeof bundle.expires_at !== 'string' || Number.isNaN(exp.getTime())) {
+        throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, 'Trust bundle expires_at is not RFC 3339');
+    }
+    if (exp.getTime() < Date.now()) {
+        throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, 'Trust bundle has expired');
+    }
+}
+
+/**
+ * Verify a trust bundle's signature under `publicKeyPem` and reject it when
+ * expired. Unsigned bundles are rejected.
+ * @param {object} bundle
+ * @param {string} publicKeyPem
+ */
+export function verifyTrustBundle(bundle, publicKeyPem) {
+    if (bundle.signature === undefined || bundle.signature === null) {
+        throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, 'Trust bundle is not signed');
+    }
+    if (!verifySignature(publicKeyPem, bundleSigningInput(bundle), String(bundle.signature))) {
+        throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, 'Trust bundle signature did not verify');
+    }
+    checkBundleExpiry(bundle);
 }

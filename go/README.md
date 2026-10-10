@@ -20,7 +20,7 @@ go get github.com/ThirdKeyAi/agentpin/go
 go install github.com/ThirdKeyAi/agentpin/go/cmd/agentpin@latest
 ```
 
-Requires Go 1.21+.
+Requires Go 1.26+ (the IDNA dependency `golang.org/x/net` v0.60 sets the floor).
 
 ## Quick start
 

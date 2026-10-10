@@ -61,3 +61,28 @@ class TestSha256:
         h = sha256_hash(b"test")
         assert isinstance(h, bytes)
         assert len(h) == 32
+
+
+class TestDomainSeparatedSigning:
+    def test_input_layout(self):
+        from agentpin.crypto import domain_separated_input
+
+        got = domain_separated_input("agentpin-response-v1", ["abc", "", b"xyz"])
+        want = b"agentpin-response-v1\x00" + b"\x00\x00\x00\x03abc" + b"\x00\x00\x00\x00" + b"\x00\x00\x00\x03xyz"
+        assert got == want
+
+    def test_context_signature_does_not_verify_elsewhere(self):
+        from agentpin.crypto import (
+            CTX_ATTESTATION,
+            CTX_RESPONSE,
+            generate_key_pair,
+            sign_with_context,
+            verify_signature,
+            verify_with_context,
+        )
+
+        priv, pub = generate_key_pair()
+        sig = sign_with_context(priv, CTX_RESPONSE, ["nonce"])
+        assert verify_with_context(pub, CTX_RESPONSE, ["nonce"], sig)
+        assert not verify_with_context(pub, CTX_ATTESTATION, ["nonce"], sig)
+        assert not verify_signature(pub, b"nonce", sig)

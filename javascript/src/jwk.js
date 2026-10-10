@@ -33,19 +33,25 @@ export function pemToJwk(publicKeyPem, kid) {
  * @returns {string} PEM-encoded public key
  */
 export function jwkToPem(jwk) {
-    if (jwk.kty !== 'EC' || jwk.crv !== 'P-256') {
+    if (!jwk || typeof jwk !== 'object' || jwk.kty !== 'EC' || jwk.crv !== 'P-256') {
         throw new Error('Invalid JWK: must be EC P-256');
     }
 
-    const keyObject = createPublicKey({
-        key: {
-            kty: jwk.kty,
-            crv: jwk.crv,
-            x: jwk.x,
-            y: jwk.y,
-        },
-        format: 'jwk',
-    });
+    let keyObject;
+    try {
+        keyObject = createPublicKey({
+            key: {
+                kty: jwk.kty,
+                crv: jwk.crv,
+                x: jwk.x,
+                y: jwk.y,
+            },
+            format: 'jwk',
+        });
+    } catch {
+        // Node raises TypeError for malformed coordinates; surface a plain error.
+        throw new Error('Invalid JWK: not a valid P-256 public key');
+    }
 
     return keyObject.export({ type: 'spki', format: 'pem' });
 }

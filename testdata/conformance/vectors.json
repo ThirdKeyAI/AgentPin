@@ -1,0 +1,189 @@
+{
+  "description": "Cross-SDK conformance vectors; regenerate with generate.py.",
+  "discovery": "discovery.json",
+  "credentials": [
+    {
+      "name": "missing_exp",
+      "jwt": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImFnZW50cGluLWNyZWRlbnRpYWwrand0IiwgImtpZCI6ICJleGFtcGxlLTIwMjYtMDEifQ.eyJpc3MiOiAiZXhhbXBsZS5jb20iLCAic3ViIjogInVybjphZ2VudHBpbjpleGFtcGxlLmNvbTp0ZXN0LWFnZW50IiwgImlhdCI6IDE3NjcyMjU2MDAsICJqdGkiOiAiY29uZm9ybWFuY2UtMDAwMSIsICJhZ2VudHBpbl92ZXJzaW9uIjogIjAuMSIsICJjYXBhYmlsaXRpZXMiOiBbInJlYWQ6ZGF0YSJdfQ.MEQCIFGc3-odcOeMDQ7BOLfzQ6UgSE2xc1F01M4yXNJxXGTZAiBCZ34k8iyAqkNjW5URwlW4VKSWoyxx4sUM1ckHA9cI2g",
+      "error_code": "MALFORMED_CREDENTIAL"
+    },
+    {
+      "name": "string_exp",
+      "jwt": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImFnZW50cGluLWNyZWRlbnRpYWwrand0IiwgImtpZCI6ICJleGFtcGxlLTIwMjYtMDEifQ.eyJpc3MiOiAiZXhhbXBsZS5jb20iLCAic3ViIjogInVybjphZ2VudHBpbjpleGFtcGxlLmNvbTp0ZXN0LWFnZW50IiwgImlhdCI6IDE3NjcyMjU2MDAsICJleHAiOiAiMTc2NzIyOTIwMCIsICJqdGkiOiAiY29uZm9ybWFuY2UtMDAwMSIsICJhZ2VudHBpbl92ZXJzaW9uIjogIjAuMSIsICJjYXBhYmlsaXRpZXMiOiBbInJlYWQ6ZGF0YSJdfQ.MEUCIDnRguVD1OEjiuRWCJt8mOPxTOqt-ARWQCrR_8BGtFhVAiEAm8w2P_tbLCA4YY62ITzGtITSpwTO3JV-uclj2cJtyR0",
+      "error_code": "MALFORMED_CREDENTIAL"
+    },
+    {
+      "name": "missing_iat",
+      "jwt": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImFnZW50cGluLWNyZWRlbnRpYWwrand0IiwgImtpZCI6ICJleGFtcGxlLTIwMjYtMDEifQ.eyJpc3MiOiAiZXhhbXBsZS5jb20iLCAic3ViIjogInVybjphZ2VudHBpbjpleGFtcGxlLmNvbTp0ZXN0LWFnZW50IiwgImV4cCI6IDE3NjcyMjkyMDAsICJqdGkiOiAiY29uZm9ybWFuY2UtMDAwMSIsICJhZ2VudHBpbl92ZXJzaW9uIjogIjAuMSIsICJjYXBhYmlsaXRpZXMiOiBbInJlYWQ6ZGF0YSJdfQ.MEUCIFHUBjnjjTqJr3ITZoK7KwIdxcsiZas5lX1SCB7VDckLAiEA06ExZGYe5BqCs7Ob4zDGbPHCyAGySLuB85f_ZoMLD1Q",
+      "error_code": "MALFORMED_CREDENTIAL"
+    },
+    {
+      "name": "iat_i64_min",
+      "jwt": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImFnZW50cGluLWNyZWRlbnRpYWwrand0IiwgImtpZCI6ICJleGFtcGxlLTIwMjYtMDEifQ.eyJpc3MiOiAiZXhhbXBsZS5jb20iLCAic3ViIjogInVybjphZ2VudHBpbjpleGFtcGxlLmNvbTp0ZXN0LWFnZW50IiwgImlhdCI6IC05MjIzMzcyMDM2ODU0Nzc1ODA4LCAiZXhwIjogMTc2NzIyOTIwMCwgImp0aSI6ICJjb25mb3JtYW5jZS0wMDAxIiwgImFnZW50cGluX3ZlcnNpb24iOiAiMC4xIiwgImNhcGFiaWxpdGllcyI6IFsicmVhZDpkYXRhIl19.MEUCIHKEx8W5NzoGxZexCdSwS0_SugvYjdyh9w5XNVYIekQgAiEA1FLiGyrT618YZUGBZhQ8wIVGyKlBz1mLHstfS30bJUs",
+      "error_code": "MALFORMED_CREDENTIAL"
+    },
+    {
+      "name": "null_payload_fields",
+      "jwt": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImFnZW50cGluLWNyZWRlbnRpYWwrand0IiwgImtpZCI6ICJleGFtcGxlLTIwMjYtMDEifQ.eyJpYXQiOiAxNzY3MjI1NjAwLCAiZXhwIjogMTc2NzIyOTIwMCwgImp0aSI6ICJjb25mb3JtYW5jZS0wMDAxIiwgImFnZW50cGluX3ZlcnNpb24iOiAiMC4xIiwgImNhcGFiaWxpdGllcyI6IFsicmVhZDpkYXRhIl19.MEYCIQCzpHSS58f9hSJJyahxoBQdZzXkI310Fu718DkQpzv9WwIhALx_1E97NijmBXmZgbpbN-rvJKoNVqPZCJg1reO5v8_9",
+      "error_code": "MALFORMED_CREDENTIAL"
+    },
+    {
+      "name": "capabilities_not_array",
+      "jwt": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImFnZW50cGluLWNyZWRlbnRpYWwrand0IiwgImtpZCI6ICJleGFtcGxlLTIwMjYtMDEifQ.eyJpc3MiOiAiZXhhbXBsZS5jb20iLCAic3ViIjogInVybjphZ2VudHBpbjpleGFtcGxlLmNvbTp0ZXN0LWFnZW50IiwgImlhdCI6IDE3NjcyMjU2MDAsICJleHAiOiAxNzY3MjI5MjAwLCAianRpIjogImNvbmZvcm1hbmNlLTAwMDEiLCAiYWdlbnRwaW5fdmVyc2lvbiI6ICIwLjEiLCAiY2FwYWJpbGl0aWVzIjogInJlYWQ6ZGF0YSJ9.MEUCIH7_gPOrjqLuSjf6CSoijRNeJ6TzsFGfzHd_Ufu1Ec97AiEA8uG3tcU4A42ObBpbG_XtYBc2gcAGUSR7d6eU8r_j-DI",
+      "error_code": "MALFORMED_CREDENTIAL"
+    }
+  ],
+  "case_variant_issuer": {
+    "comment": "Pin store already holds example.com with the interop key. A credential with iss EXAMPLE.COM signed by a different key, backed by a discovery document for EXAMPLE.COM listing only that key, must hit the existing pin.",
+    "issuer": "EXAMPLE.COM",
+    "error_code": "KEY_PIN_MISMATCH"
+  },
+  "revocation_wrong_field_names": {
+    "comment": "Entries keyed by 'id' instead of jti/agent_id/kid. Typed SDKs may reject at parse time; the others must return DISCOVERY_INVALID.",
+    "document": {
+      "agentpin_version": "0.1",
+      "entity": "example.com",
+      "updated_at": "2026-01-15T00:00:00Z",
+      "revoked_credentials": [
+        {
+          "id": "conformance-0001",
+          "revoked_at": "2026-01-15T00:00:00Z",
+          "reason": "key_compromise"
+        }
+      ],
+      "revoked_agents": [],
+      "revoked_keys": [
+        {
+          "id": "example-2026-01",
+          "revoked_at": "2026-01-15T00:00:00Z",
+          "reason": "key_compromise"
+        }
+      ]
+    },
+    "error_code": "DISCOVERY_INVALID"
+  },
+  "invalid_revocation_endpoints": [
+    "http://example.com/.well-known/agent-identity-revocations.json",
+    "https://evil.example.net/revocations.json",
+    "https://example.com:8443/revocations.json",
+    "https://user@example.com/revocations.json",
+    "file:///etc/passwd"
+  ],
+  "agent_cards": [
+    {
+      "name": "extra_fields_signed",
+      "card": {
+        "name": "Conformance Agent",
+        "description": "Card carrying fields AgentPin does not model",
+        "url": "https://example.com/agents/test-agent",
+        "version": "1.0.0",
+        "capabilities": {
+          "streaming": false,
+          "pushNotifications": false
+        },
+        "skills": [
+          {
+            "id": "read-data",
+            "name": "read:data",
+            "description": "read data",
+            "tags": [
+              "read"
+            ]
+          }
+        ],
+        "defaultInputModes": [
+          "text"
+        ],
+        "provider": {
+          "organization": "Example",
+          "url": "https://example.com"
+        },
+        "x-vendor": {
+          "tier": "gold",
+          "regions": [
+            "us",
+            "eu"
+          ]
+        },
+        "agentpin": {
+          "agentpin_endpoint": "https://example.com/.well-known/agent-identity.json",
+          "public_key_jwk": {
+            "kid": "example-2026-01",
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "nXszbHO3-fXVL--bm8YeaeG63qOEzEjnRRHOI9ofMXY",
+            "y": "hvg_wGE3XQ52VLAUL_JqzhrKFqbfuPSeLVBCLPdt9IU",
+            "use": "sig",
+            "key_ops": [
+              "verify"
+            ]
+          },
+          "signature": "MEYCIQDC8cUu56Cq3n6f0slvo6HB7F6hzjujE+tF6FBi+bd0oAIhAKD90FkP5KWQ06dNpMkhPAdqkz+jVV4OgGzydeE+EKns"
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "extra_field_tampered",
+      "card": {
+        "name": "Conformance Agent",
+        "description": "Card carrying fields AgentPin does not model",
+        "url": "https://example.com/agents/test-agent",
+        "version": "1.0.0",
+        "capabilities": {
+          "streaming": false,
+          "pushNotifications": false
+        },
+        "skills": [
+          {
+            "id": "read-data",
+            "name": "read:data",
+            "description": "read data",
+            "tags": [
+              "read"
+            ]
+          }
+        ],
+        "defaultInputModes": [
+          "text"
+        ],
+        "provider": {
+          "organization": "Example",
+          "url": "https://example.com"
+        },
+        "x-vendor": {
+          "tier": "platinum",
+          "regions": [
+            "us",
+            "eu"
+          ]
+        },
+        "agentpin": {
+          "agentpin_endpoint": "https://example.com/.well-known/agent-identity.json",
+          "public_key_jwk": {
+            "kid": "example-2026-01",
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "nXszbHO3-fXVL--bm8YeaeG63qOEzEjnRRHOI9ofMXY",
+            "y": "hvg_wGE3XQ52VLAUL_JqzhrKFqbfuPSeLVBCLPdt9IU",
+            "use": "sig",
+            "key_ops": [
+              "verify"
+            ]
+          },
+          "signature": "MEYCIQDC8cUu56Cq3n6f0slvo6HB7F6hzjujE+tF6FBi+bd0oAIhAKD90FkP5KWQ06dNpMkhPAdqkz+jVV4OgGzydeE+EKns"
+        }
+      },
+      "valid": false
+    }
+  ],
+  "domain_separated_input": {
+    "context": "agentpin-response-v1",
+    "fields_hex": [
+      "6e6f6e6365",
+      "",
+      "610062"
+    ],
+    "expected_hex": "6167656e7470696e2d726573706f6e73652d763100000000056e6f6e63650000000000000003610062"
+  }
+}

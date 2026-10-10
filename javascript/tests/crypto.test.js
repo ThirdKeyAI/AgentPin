@@ -75,3 +75,27 @@ describe('sha256Hash', () => {
         assert.strictEqual(hash.length, 32);
     });
 });
+
+describe('domain-separated signing', () => {
+    test('input layout is context || NUL || length-prefixed fields', async () => {
+        const { domainSeparatedInput } = await import('../src/crypto.js');
+        const got = domainSeparatedInput('agentpin-response-v1', ['abc', '', 'xyz']);
+        const want = Buffer.concat([
+            Buffer.from('agentpin-response-v1\0'),
+            Buffer.from([0, 0, 0, 3]), Buffer.from('abc'),
+            Buffer.from([0, 0, 0, 0]),
+            Buffer.from([0, 0, 0, 3]), Buffer.from('xyz'),
+        ]);
+        assert.ok(got.equals(want), got.toString('hex'));
+    });
+
+    test('a context signature does not verify under another context or bare', async () => {
+        const { generateKeyPair, signWithContext, verifyWithContext, verifySignature, CTX_RESPONSE, CTX_ATTESTATION } =
+            await import('../src/crypto.js');
+        const kp = generateKeyPair();
+        const sig = signWithContext(kp.privateKeyPem, CTX_RESPONSE, ['nonce']);
+        assert.ok(verifyWithContext(kp.publicKeyPem, CTX_RESPONSE, ['nonce'], sig));
+        assert.strictEqual(verifyWithContext(kp.publicKeyPem, CTX_ATTESTATION, ['nonce'], sig), false);
+        assert.strictEqual(verifySignature(kp.publicKeyPem, Buffer.from('nonce'), sig), false);
+    });
+});

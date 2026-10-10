@@ -38,6 +38,9 @@ pub struct DelegationAttestation {
     pub agent_id: String,
     pub kid: String,
     pub attestation: String,
+    /// Optional attestation expiry (Unix seconds). Covered by the signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exp: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +85,7 @@ mod tests {
                 agent_id: "urn:agentpin:maker.com:agent-type".to_string(),
                 kid: "maker-2026-01".to_string(),
                 attestation: "MEUCIQD7y2F8...".to_string(),
+                exp: None,
             }]),
             nonce: None,
         };

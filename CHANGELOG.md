@@ -5,6 +5,117 @@ All notable changes to the AgentPin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Security release addressing the AP-1 through AP-23 review findings in all
+four SDKs (Rust, Go, JavaScript, Python). Specification bumped to 0.4.0; the
+document `agentpin_version` stays `"0.1"`.
+
+### Breaking wire changes
+
+- **Challenge responses, delegation attestations and AgentCards are signed
+  over new domain-separated inputs** (`context || 0x00 || (u32_be(len) ||
+  field)*`, contexts `agentpin-response-v1`, `agentpin-attestation-v1`,
+  `agentpin-agentcard-v1`). Objects signed by 0.3.x SDKs do not verify in
+  this release and vice versa. JWT credentials and discovery documents are
+  unchanged.
+- AgentCard signatures now cover `agentpin_endpoint`, `public_key_jwk` and
+  every unknown field (top-level and nested).
+- Attestations bind `kid` and an optional `exp`.
+- `allowed_domains: []` now means "restricted to nothing" (absent still means
+  unrestricted).
+
+### Supported runtimes
+
+- Python package builds and CI use setuptools 83.0.0 or later to include its
+  security fixes.
+- Python now requires 3.10 or later; patched runtime dependencies require
+  cryptography 50.0.0 and requests 2.33.0 or later.
+- All Rust crates now require Rust 1.89 or later, matching the current dependency
+  graph. CI tests both declared minimums alongside newer runtimes.
+
+### New defaults
+
+- `require_delegation_verification` (Go: `AllowUnverifiedDelegation` false):
+  credentials with a delegation chain are rejected unless the chain verifies.
+- `strict_capabilities`: true.
+- `credential_ttl_max` enforced, default 86400 seconds.
+- Revocation falls back to `https://{domain}/.well-known/agent-identity-revocations.json`
+  when `revocation_endpoint` is absent; new `require_signed_revocation` and
+  `revocation_max_age_secs` options.
+- Every fetch: HTTPS only, no redirects, 10 s timeout, 1 MiB body cap, JSON
+  content type required.
+- TOFU pins every key of the first validated discovery document and accepts
+  a new key when the document still lists a pinned one
+  (`key_pinning.status: "rotated"`).
+- Server: HSTS is opt-in (`--hsts`).
+- Go module now requires Go 1.26 (floor of the patched `golang.org/x/net`),
+  with Go 1.26.9 selected for its standard-library security fixes.
+
+### Fixed
+
+- **AP-1** (Critical) Mutual-auth response was a raw signing oracle that could
+  forge credentials, attestations and AgentCards; responses now sign a
+  domain-separated, verifier-bound structure.
+- **AP-2** Delegation chains were never verified while results stayed
+  `valid: true`; chains are now verified end to end and fail closed.
+- **AP-3** TOFU pins were keyed on the raw `iss`, bypassable with a case
+  variant; all domains are normalized (`normalize_domain`).
+- **AP-4** AgentCard signature did not cover `agentpin_endpoint`; spec
+  §4.10.4 step 5 (discovery binding) is implemented and
+  `LocalAgentCardStore` requires a trust anchor.
+- **AP-5** JS accepted credentials with missing or non-numeric `exp`/`iat`;
+  claims are validated structurally in every SDK (`MALFORMED_CREDENTIAL`).
+- **AP-6** Intersecting two disjoint allow-lists yielded "unrestricted";
+  `AllowedDomains` is now a tri-state with pattern-aware matching.
+- **AP-7** Rust `A2aAgentCardResolver` followed redirects.
+- **AP-8** Docs published the wrong revocation schema and two SDKs silently
+  failed open on it; revocation documents are validated structurally.
+- **AP-9** Card-derived discovery documents were stamped `"0.3"` and always
+  rejected.
+- **AP-10** `LocalFileResolver` path traversal through an untrusted `iss`.
+- **AP-11** `ChainResolver` swallowed revocation errors (fail-open).
+- **AP-12** SSRF through an unvalidated `iss` and `revocation_endpoint`;
+  JS/Python followed redirects on revocation fetches.
+- **AP-13** No response-size limits or timeouts on fetches.
+- **AP-14** Max-TTL cap bypassable via overflow; `credential_ttl_max` never
+  enforced.
+- **AP-15** Discovery-declared constraints could be dropped by omitting them
+  from the credential; effective constraints are now merged (credential may
+  only narrow).
+- **AP-16** Rust `keygen` wrote private keys with default permissions and
+  overwrote existing files; keys are created `0600` with `create_new`
+  (`--force` to overwrite) and pin stores are written atomically.
+- **AP-17** AgentCard canonicalization diverged on unknown fields between
+  SDKs.
+- **AP-18** Python raised uncaught exceptions on malformed input; JS crashed on
+  a `null` payload.
+- **AP-19** Nonces: single-use not enforced by default, recorded before the
+  signature check, malformed timestamps accepted.
+- **AP-20** Discovery key `exp` parse failures were ignored (now
+  `KEY_EXPIRED`).
+- **AP-21** Key `use`/`key_ops` never checked; `admin` could be granted through
+  a wildcard; unknown capability verbs accepted.
+- **AP-22** Vulnerable dependencies (h2, hickory-proto, rustls,
+  rustls-webpki, rand, anyhow, golang.org/x/net) updated; `cargo audit`,
+  `govulncheck`, `npm audit` and `pip-audit` gates added to CI.
+- **AP-23** Hardening: CLI `--credential`/`--constraints` are always literal
+  (new `--credential-file`/`--constraints-file`), `KeyPair` redacts its
+  private key in `Debug` and zeroizes it on drop, server returns 500 on
+  serialization failure, strict base64url decoding in JS/Python, and doc
+  drift corrected.
+
+### Added
+
+- Signed revocation documents and signed, expiring trust bundles
+  (`agentpin-revocation-v1`, `agentpin-bundle-v1`).
+- `sign_with_context`/`verify_with_context` and `domain_separated_input`
+  helpers in every SDK.
+- Cross-SDK conformance vectors in `testdata/conformance/` run by all four
+  test suites.
+- Fuzz targets: cargo-fuzz crate in `fuzz/`, Go native fuzz tests,
+  fast-check (JS) and hypothesis (Python) properties.
+
 ## [0.3.0] - 2026-05-14
 
 ### Added

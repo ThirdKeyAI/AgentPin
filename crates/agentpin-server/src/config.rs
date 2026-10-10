@@ -18,6 +18,12 @@ pub struct ServerConfig {
     /// Port
     #[arg(long, default_value = "8080")]
     pub port: u16,
+
+    /// Emit a Strict-Transport-Security header. This listener speaks
+    /// plaintext HTTP; only enable HSTS when a TLS-terminating reverse proxy
+    /// serves these endpoints under https (AP-23).
+    #[arg(long)]
+    pub hsts: bool,
 }
 
 impl ServerConfig {

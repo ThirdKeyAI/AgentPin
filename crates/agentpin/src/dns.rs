@@ -152,15 +152,18 @@ pub fn txt_record_name(domain: &str) -> String {
 /// the first one whose value contains `v=agentpin1` is used.
 #[cfg(feature = "dns")]
 pub async fn fetch_dns_txt(domain: &str) -> Result<Option<DnsTxtRecord>, Error> {
-    use hickory_resolver::error::ResolveErrorKind;
-    use hickory_resolver::TokioAsyncResolver;
+    use hickory_resolver::proto::rr::RData;
+    use hickory_resolver::TokioResolver;
 
     let name = txt_record_name(domain);
-    let resolver = TokioAsyncResolver::tokio(Default::default(), Default::default());
-    let lookup = match resolver.txt_lookup(&name).await {
+    // Use the host's resolver configuration (hickory 0.26 builder API).
+    let resolver = TokioResolver::builder_tokio()
+        .and_then(|builder| builder.build())
+        .map_err(|_| Error::Discovery("DNS resolver initialization failed".to_string()))?;
+    let lookup = match resolver.txt_lookup(name.clone()).await {
         Ok(l) => l,
         Err(e) => {
-            if matches!(e.kind(), ResolveErrorKind::NoRecordsFound { .. }) {
+            if e.is_no_records_found() {
                 return Ok(None);
             }
             return Err(Error::Discovery(format!(
@@ -170,9 +173,14 @@ pub async fn fetch_dns_txt(domain: &str) -> Result<Option<DnsTxtRecord>, Error> 
         }
     };
 
-    for record in lookup.iter() {
-        // hickory yields TxtData as Vec<Box<[u8]>>; concatenate chunks per RFC 1464.
-        let joined: String = record
+    for record in lookup.answers() {
+        let RData::TXT(txt) = &record.data else {
+            continue;
+        };
+        // hickory yields TXT data as character-string chunks; concatenate
+        // them per RFC 1464.
+        let joined: String = txt
+            .txt_data
             .iter()
             .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
             .collect::<Vec<_>>()

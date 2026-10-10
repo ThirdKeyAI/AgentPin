@@ -61,3 +61,45 @@ describe('constraintsSubsetOf', () => {
         assert.ok(constraintsSubsetOf({ rate_limit: '100/hour' }, null));
     });
 });
+
+describe('mergeConstraints (AP-15)', () => {
+    test('omitted credential fields inherit discovery defaults; widening throws', async () => {
+        const { mergeConstraints } = await import('../src/constraint.js');
+        const disc = {
+            allowed_domains: ['*.client-corp.com'],
+            denied_domains: ['internal.client-corp.com'],
+            rate_limit: '100/hour',
+            data_classification_max: 'confidential',
+            ip_allowlist: ['203.0.113.0/24', '198.51.100.0/24'],
+            valid_hours: { start: '08:00', end: '18:00', timezone: 'UTC' },
+        };
+        assert.deepStrictEqual(mergeConstraints(disc, null), disc);
+        const merged = mergeConstraints(disc, { rate_limit: '1/minute', data_classification_max: 'internal', denied_domains: ['staging.client-corp.com'] });
+        assert.deepStrictEqual(merged.allowed_domains, disc.allowed_domains);
+        assert.strictEqual(merged.rate_limit, '1/minute');
+        assert.strictEqual(merged.data_classification_max, 'internal');
+        assert.deepStrictEqual(merged.denied_domains, ['internal.client-corp.com', 'staging.client-corp.com']);
+        assert.deepStrictEqual(merged.ip_allowlist, disc.ip_allowlist);
+        assert.deepStrictEqual(merged.valid_hours, disc.valid_hours);
+        for (const widen of [
+            { allowed_domains: ['evil.com'] }, { rate_limit: '1000/hour' }, { rate_limit: 'unlimited/hour' },
+            { data_classification_max: 'restricted' }, { ip_allowlist: ['0.0.0.0/0'] },
+            { valid_hours: { start: '07:00', end: '18:00', timezone: 'UTC' } },
+            { valid_hours: { start: '09:00', end: '17:00', timezone: 'America/New_York' } },
+        ]) {
+            assert.throws(() => mergeConstraints(disc, widen), JSON.stringify(widen));
+        }
+        const narrow = mergeConstraints(disc, { allowed_domains: ['api.client-corp.com'], ip_allowlist: ['203.0.113.0/24'], valid_hours: { start: '09:00', end: '17:00', timezone: 'UTC' } });
+        assert.deepStrictEqual(narrow.allowed_domains, ['api.client-corp.com']);
+        assert.strictEqual(narrow.rate_limit, '100/hour');
+        assert.throws(() => mergeConstraints(null, { rate_limit: 'x/hour' }));
+        assert.strictEqual(mergeConstraints(null, null), null);
+    });
+
+    test('parseRateLimit rejects overflow and junk', () => {
+        assert.strictEqual(parseRateLimit('9007199254740991/second'), null);
+        assert.strictEqual(parseRateLimit('unlimited/hour'), null);
+        assert.strictEqual(parseRateLimit('-5/hour'), null);
+        assert.strictEqual(parseRateLimit('+5/hour'), null);
+    });
+});

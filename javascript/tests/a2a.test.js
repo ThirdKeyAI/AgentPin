@@ -169,3 +169,84 @@ describe('canonicalizeForSigning', () => {
         assert.equal(out, '[{"a":2,"b":1}]');
     });
 });
+
+describe('AgentCard signature coverage (AP-1, AP-4)', () => {
+    it('fails when agentpin_endpoint is rewritten after signing', async () => {
+        const { generateKeyPair, buildAndSignAgentCard, verifyAgentpinExtension, AgentStatus } = await import('../src/index.js');
+        const { privateKeyPem } = generateKeyPair();
+        const card = buildAndSignAgentCard(
+            'https://example.com/agent',
+            { agent_id: 'urn:agentpin:example.com:t', name: 'T', capabilities: ['read:*'], status: AgentStatus.ACTIVE },
+            privateKeyPem, 'kid-1', 'https://example.com/.well-known/agent-identity.json'
+        );
+        card.agentpin.agentpin_endpoint = 'https://bank.example/.well-known/agent-identity.json';
+        assert.throws(() => verifyAgentpinExtension(card), /did not verify/);
+    });
+
+    it('fails when the extension JWK kid is rewritten', async () => {
+        const { generateKeyPair, buildAndSignAgentCard, verifyAgentpinExtension, AgentStatus } = await import('../src/index.js');
+        const { privateKeyPem } = generateKeyPair();
+        const card = buildAndSignAgentCard(
+            'https://example.com/agent',
+            { agent_id: 'urn:agentpin:example.com:t', name: 'T', capabilities: ['read:*'], status: AgentStatus.ACTIVE },
+            privateKeyPem, 'kid-1', 'https://example.com/.well-known/agent-identity.json'
+        );
+        card.agentpin.public_key_jwk.kid = 'kid-2';
+        assert.throws(() => verifyAgentpinExtension(card), /did not verify/);
+    });
+
+    it('is domain separated and rejects the legacy extension-cleared format', async () => {
+        const { generateKeyPair, buildAndSignAgentCard, verifyAgentpinExtension, agentCardSigningInput,
+            canonicalizeForSigning, signData, verifySignature, CTX_AGENTCARD, AgentStatus } = await import('../src/index.js');
+        const kp = generateKeyPair();
+        const card = buildAndSignAgentCard(
+            'https://example.com/agent',
+            { agent_id: 'urn:agentpin:example.com:t', name: 'T', capabilities: ['read:*'], status: AgentStatus.ACTIVE },
+            kp.privateKeyPem, 'kid-1', 'https://example.com/.well-known/agent-identity.json'
+        );
+        const input = agentCardSigningInput(card);
+        assert.ok(input.subarray(0, CTX_AGENTCARD.length + 1).equals(Buffer.from(`${CTX_AGENTCARD}\0`)));
+        const canonical = input.subarray(CTX_AGENTCARD.length + 1 + 4);
+        assert.strictEqual(verifySignature(kp.publicKeyPem, canonical, card.agentpin.signature), false);
+
+        const legacy = canonicalizeForSigning({ ...card, agentpin: undefined });
+        const forged = { ...card, agentpin: { ...card.agentpin, signature: signData(kp.privateKeyPem, Buffer.from(legacy)) } };
+        assert.throws(() => verifyAgentpinExtension(forged), /did not verify/);
+    });
+});
+
+describe('allowed_domains tri-state on cards (AP-6)', () => {
+    it('round-trips an empty list as restricted to nothing', async () => {
+        const { buildUnsignedAgentCard, AllowedDomains, deriveDiscoveryFromCard, generateKeyPair, buildAndSignAgentCard, AgentStatus } = await import('../src/index.js');
+        const decl = { agent_id: 'urn:agentpin:example.com:t', name: 'T', capabilities: ['read:*'], constraints: { allowed_domains: [] }, status: AgentStatus.ACTIVE };
+        const card = buildUnsignedAgentCard('https://example.com/agent', decl);
+        assert.deepStrictEqual(card.capabilities.allowed_domains, []);
+        assert.ok(!AllowedDomains.isUnrestricted(JSON.parse(JSON.stringify(card)).capabilities.allowed_domains));
+        const { privateKeyPem } = generateKeyPair();
+        const signed = buildAndSignAgentCard('https://example.com/agent', decl, privateKeyPem, 'k', 'https://example.com/.well-known/agent-identity.json');
+        const doc = deriveDiscoveryFromCard(signed);
+        assert.deepStrictEqual(doc.agents[0].constraints, { allowed_domains: [] });
+    });
+});
+
+
+describe('unknown upstream fields (AP-17)', () => {
+    it('are preserved and covered by the signature', async () => {
+        const { generateKeyPair, buildUnsignedAgentCard, signAgentCard, verifyAgentpinExtension, AgentStatus } = await import('../src/index.js');
+        const { privateKeyPem } = generateKeyPair();
+        const unsigned = {
+            ...buildUnsignedAgentCard('https://example.com/agent', { agent_id: 'urn:agentpin:example.com:t', name: 'T', capabilities: ['read:*'], status: AgentStatus.ACTIVE }),
+            provider: { organization: 'Example' },
+            documentationUrl: 'https://example.com/docs',
+        };
+        const card = signAgentCard(unsigned, privateKeyPem, 'kid-1', 'https://example.com/.well-known/agent-identity.json');
+        const parsed = JSON.parse(JSON.stringify(card));
+        assert.equal(parsed.documentationUrl, 'https://example.com/docs');
+        assert.doesNotThrow(() => verifyAgentpinExtension(parsed));
+        assert.throws(() => verifyAgentpinExtension({ ...parsed, documentationUrl: 'https://evil.example/docs' }), /did not verify/);
+        assert.throws(() => verifyAgentpinExtension({ ...parsed, securitySchemes: { x: 1 } }), /did not verify/);
+        const removed = { ...parsed };
+        delete removed.provider;
+        assert.throws(() => verifyAgentpinExtension(removed), /did not verify/);
+    });
+});

@@ -85,23 +85,28 @@ cargo run -p agentpin-cli -- bundle \
 
 ```rust
 use agentpin::{
-    crypto,
-    credential::CredentialBuilder,
-    verification::verify_credential,
+    credential::issue_credential,
+    crypto::{generate_key_pair, load_signing_key},
     pinning::KeyPinStore,
+    types::capability::Capability,
+    verification::{verify_credential_offline, VerifierConfig},
 };
 
-let (private_key, public_key) = crypto::generate_keypair()?;
+let kp = generate_key_pair()?;
+let sk = load_signing_key(&kp.private_key_pem)?;
 
-let credential = CredentialBuilder::new()
-    .issuer("https://example.com")
-    .agent_id("my-agent")
-    .capability("read")
-    .capability("write")
-    .ttl_secs(3600)
-    .sign(&private_key)?;
+let jwt = issue_credential(
+    &sk, "example-2026-01", "example.com",
+    "urn:agentpin:example.com:my-agent", Some("verifier.com"),
+    vec![Capability::from("read:data")], None, None, 3600,
+)?;
 
-let result = verify_credential(&credential, &discovery_doc, &pin_store)?;
+let mut pin_store = KeyPinStore::new();
+let result = verify_credential_offline(
+    &jwt, &discovery_doc, Some(&revocation_doc), &mut pin_store,
+    Some("verifier.com"), &VerifierConfig::default(),
+);
+assert!(result.valid);
 ```
 
 ### JavaScript
@@ -112,24 +117,20 @@ npm install agentpin
 
 ```javascript
 import {
-    generateKeypair, issueCredential, verifyCredential,
-    KeyPinStore
+    generateKeyPair, issueCredential, verifyCredentialOffline,
+    KeyPinStore, Capability,
 } from 'agentpin';
 
-// Generate ECDSA P-256 keypair
-const { privateKey, publicKey } = await generateKeypair();
+const { privateKeyPem } = generateKeyPair();
 
-// Issue a credential
-const credential = await issueCredential(privateKey, {
-    issuer: 'https://example.com',
-    agentId: 'my-agent',
-    capabilities: ['read', 'write'],
-    ttlSecs: 3600,
-});
+const jwt = issueCredential(
+    privateKeyPem, 'example-2026-01', 'example.com',
+    'urn:agentpin:example.com:my-agent', 'verifier.com',
+    [new Capability('read:data')], null, null, 3600,
+);
 
-// Verify
 const pinStore = new KeyPinStore();
-const result = await verifyCredential(credential, discoveryDoc, pinStore);
+const result = verifyCredentialOffline(jwt, discoveryDoc, revocationDoc, pinStore, 'verifier.com');
 ```
 
 ### Python
@@ -139,23 +140,22 @@ pip install agentpin
 ```
 
 ```python
-from agentpin.crypto import generate_keypair
+from agentpin.capability import Capability
 from agentpin.credential import issue_credential
-from agentpin.verification import verify_credential
+from agentpin.crypto import generate_key_pair
 from agentpin.pinning import KeyPinStore
+from agentpin.verification import verify_credential_offline
 
-private_key, public_key = generate_keypair()
+private_pem, public_pem = generate_key_pair()
 
-credential = issue_credential(
-    private_key,
-    issuer="https://example.com",
-    agent_id="my-agent",
-    capabilities=["read", "write"],
-    ttl_secs=3600,
+jwt = issue_credential(
+    private_pem, "example-2026-01", "example.com",
+    "urn:agentpin:example.com:my-agent", "verifier.com",
+    [Capability("read:data")], None, None, 3600,
 )
 
 pin_store = KeyPinStore()
-result = verify_credential(credential, discovery_doc, pin_store)
+result = verify_credential_offline(jwt, discovery_doc, revocation_doc, pin_store, "verifier.com")
 ```
 
 ### Go
@@ -270,18 +270,35 @@ The credential verification flow includes:
 
 ### TOFU Key Pinning
 
-On first credential verification for a domain, the agent's public key (JWK thumbprint) is pinned. Subsequent verifications reject different keys for the same domain — detecting key substitution attacks.
+Pins are keyed by the normalized domain (lowercase, trailing dot removed,
+IDNA). On first verification every key in the validated discovery document is
+pinned. A credential signed by an unpinned key is accepted only when the
+document still lists a pinned key (rotation continuity,
+`key_pinning.status: "rotated"`); otherwise it fails with `KEY_PIN_MISMATCH`.
 
 ### Delegation Chains
 
-Agents can delegate capabilities to sub-agents. The delegation chain is validated to ensure:
-- Each link is signed by the delegator
-- Capabilities only narrow (never widen) down the chain
-- Chain depth limits are respected
+Delegation chains are verified by default (`require_delegation_verification`):
+each attestation is checked against the attester's discovery document,
+capabilities only narrow down the chain, depth limits are respected, and a
+chain that cannot be verified rejects the credential.
 
 ### Mutual Authentication
 
-Challenge-response protocol with 128-bit nonces for bidirectional agent identity verification.
+Challenge-response with 128-bit nonces (22 base64url characters), single-use
+by default. Responses sign a domain-separated structure bound to the nonce,
+timestamp, responder `kid` and the verifier's credential, never raw bytes.
+
+### Security Defaults (0.4.0, unreleased)
+
+- Every non-JWT signature uses a domain-separated input
+  (`context || 0x00 || length-prefixed fields`).
+- `allowed_domains`: absent = unrestricted, `[]` = nothing.
+- `credential_ttl_max` enforced (default 86400 s); malformed claims fail with
+  `MALFORMED_CREDENTIAL`.
+- Fetches: HTTPS only, no redirects, 10 s timeout, 1 MiB cap.
+- Revocation falls back to the default `.well-known` URL; signed revocation
+  documents and trust bundles are supported.
 
 ---
 
@@ -291,23 +308,29 @@ Published at `/.well-known/agent-identity.json`:
 
 ```json
 {
-    "schema_version": "0.2",
-    "domain": "example.com",
+    "agentpin_version": "0.1",
+    "entity": "example.com",
+    "entity_type": "maker",
+    "public_keys": [ { "kid": "example-2026-01", "kty": "EC", "crv": "P-256", "x": "...", "y": "...", "use": "sig" } ],
     "agents": [
         {
-            "agent_id": "my-agent",
-            "display_name": "My Agent",
+            "agent_id": "urn:agentpin:example.com:my-agent",
+            "name": "My Agent",
             "description": "A helpful agent",
-            "capabilities": ["read", "write"],
-            "public_key_jwk": { ... },
+            "capabilities": ["read:data", "write:report"],
             "constraints": {
-                "max_ttl_secs": 86400,
-                "allowed_scopes": ["api"]
-            }
+                "allowed_domains": ["*.partner.com"],
+                "data_classification_max": "internal",
+                "rate_limit": "100/hour"
+            },
+            "credential_ttl_max": 3600,
+            "status": "active",
+            "directory_listing": true
         }
     ],
-    "revocation_endpoint": "https://example.com/.well-known/agent-identity-revocations.json",
-    "directory_listing": true
+    "max_delegation_depth": 2,
+    "updated_at": "2026-01-15T00:00:00Z",
+    "revocation_endpoint": "https://example.com/.well-known/agent-identity-revocations.json"
 }
 ```
 

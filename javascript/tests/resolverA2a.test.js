@@ -43,14 +43,12 @@ function stubFetch(responses) {
         if (entry.networkError) {
             throw new Error(entry.networkError);
         }
-        return {
-            ok: entry.status >= 200 && entry.status < 300,
+        // A realistic Response: the hardened fetch layer checks status,
+        // content-type and body size before parsing.
+        return new Response(entry.body === undefined ? '' : JSON.stringify(entry.body), {
             status: entry.status,
-            async json() {
-                if (entry.body === undefined) throw new Error('no body');
-                return entry.body;
-            },
-        };
+            headers: { 'content-type': 'application/json' },
+        });
     };
 }
 
@@ -60,7 +58,7 @@ describe('A2aAgentCardResolver', () => {
         const fetchImpl = stubFetch({
             'https://example.com/.well-known/agent-card.json': { status: 200, body: card },
         });
-        const resolver = new A2aAgentCardResolver({ fetchImpl });
+        const resolver = new A2aAgentCardResolver({ requireDiscoveryBinding: false, fetchImpl });
         const doc = await resolver.resolveDiscovery('example.com');
         assert.equal(doc.entity, 'example.com');
         assert.equal(doc.public_keys.length, 1);
@@ -71,7 +69,7 @@ describe('A2aAgentCardResolver', () => {
         const fetchImpl = stubFetch({
             'https://example.com/.well-known/agent-card.json': { status: 404 },
         });
-        const resolver = new A2aAgentCardResolver({ fetchImpl });
+        const resolver = new A2aAgentCardResolver({ requireDiscoveryBinding: false, fetchImpl });
         await assert.rejects(() => resolver.resolveDiscovery('example.com'), /HTTP 404/);
     });
 
@@ -81,7 +79,7 @@ describe('A2aAgentCardResolver', () => {
         const fetchImpl = stubFetch({
             'https://example.com/.well-known/agent-card.json': { status: 200, body: card },
         });
-        const resolver = new A2aAgentCardResolver({ fetchImpl });
+        const resolver = new A2aAgentCardResolver({ requireDiscoveryBinding: false, fetchImpl });
         await assert.rejects(() => resolver.resolveDiscovery('example.com'), /did not verify/);
     });
 
@@ -90,7 +88,7 @@ describe('A2aAgentCardResolver', () => {
         const fetchImpl = stubFetch({
             'https://example.com/.well-known/agent-card.json': { status: 200, body: card },
         });
-        const resolver = new A2aAgentCardResolver({ fetchImpl });
+        const resolver = new A2aAgentCardResolver({ requireDiscoveryBinding: false, fetchImpl });
         await assert.rejects(() => resolver.resolveDiscovery('example.com'), /mismatch/);
     });
 
@@ -99,8 +97,32 @@ describe('A2aAgentCardResolver', () => {
         const fetchImpl = stubFetch({
             'https://example.com/.well-known/agent-card.json': { status: 200, body: card },
         });
-        const resolver = new A2aAgentCardResolver({ fetchImpl });
+        const resolver = new A2aAgentCardResolver({ requireDiscoveryBinding: false, fetchImpl });
         const doc = await resolver.resolveDiscovery('example.com');
         assert.equal(await resolver.resolveRevocation('example.com', doc), null);
+    });
+});
+
+
+describe('discovery binding (AP-4, spec §4.10.4 step 5)', () => {
+    it('requires the card key to be published in the discovery document', async () => {
+        const { buildDiscoveryDocument, pemToJwk, EntityType } = await import('../src/index.js');
+        const kp = generateKeyPair();
+        const decl = { agent_id: 'urn:agentpin:example.com:test', name: 'Test Agent', capabilities: ['read:*'], status: AgentStatus.ACTIVE };
+        const card = buildAndSignAgentCard('https://example.com/agent', decl, kp.privateKeyPem, 'kid-1', 'https://example.com/.well-known/agent-identity.json');
+        const cardUrl = 'https://example.com/.well-known/agent-card.json';
+        const docUrl = 'https://example.com/.well-known/agent-identity.json';
+        const published = buildDiscoveryDocument('example.com', EntityType.BOTH, [pemToJwk(kp.publicKeyPem, 'kid-1')], [], 0, '2026-01-15T00:00:00Z');
+        const ok = new A2aAgentCardResolver({ fetchImpl: stubFetch({ [cardUrl]: { status: 200, body: card }, [docUrl]: { status: 200, body: published } }) });
+        const doc = await ok.resolveDiscovery('example.com');
+        assert.equal(doc.entity, 'example.com');
+
+        const other = generateKeyPair();
+        const unrelated = buildDiscoveryDocument('example.com', EntityType.BOTH, [pemToJwk(other.publicKeyPem, 'other')], [], 0, '2026-01-15T00:00:00Z');
+        const bad = new A2aAgentCardResolver({ fetchImpl: stubFetch({ [cardUrl]: { status: 200, body: card }, [docUrl]: { status: 200, body: unrelated } }) });
+        await assert.rejects(bad.resolveDiscovery('example.com'), /not published/);
+
+        const missing = new A2aAgentCardResolver({ fetchImpl: stubFetch({ [cardUrl]: { status: 200, body: card }, [docUrl]: { status: 404 } }) });
+        await assert.rejects(missing.resolveDiscovery('example.com'));
     });
 });

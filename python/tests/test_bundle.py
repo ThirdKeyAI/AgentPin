@@ -1,8 +1,10 @@
 """Tests for trust bundle support."""
 
 import json
-import tempfile
 import os
+import tempfile
+
+import pytest
 
 from agentpin.bundle import (
     create_trust_bundle,
@@ -14,12 +16,12 @@ from agentpin.bundle import (
 )
 from agentpin.capability import Capability
 from agentpin.credential import issue_credential
-from agentpin.crypto import generate_key_pair, generate_key_id
+from agentpin.crypto import generate_key_id, generate_key_pair
 from agentpin.discovery import build_discovery_document
 from agentpin.jwk import pem_to_jwk
 from agentpin.jwt import decode_jwt_unverified
 from agentpin.pinning import KeyPinStore
-from agentpin.revocation import build_revocation_document, add_revoked_credential
+from agentpin.revocation import add_revoked_credential, build_revocation_document
 from agentpin.types import (
     AgentStatus,
     DataClassification,
@@ -183,3 +185,29 @@ class TestVerifyCredentialWithBundle:
 
         assert result.valid is False
         assert result.error_code == ErrorCode.CREDENTIAL_REVOKED
+
+
+def test_signed_trust_bundle():
+    """Design issue 5: signed bundle verifies; unsigned, tampered, wrong-key and expired fail."""
+    import json
+
+    from agentpin import generate_key_pair
+    from agentpin.bundle import create_trust_bundle, sign_trust_bundle, verify_trust_bundle
+    from agentpin.types import AgentPinError
+
+    priv, pub = generate_key_pair()
+    _, other_pub = generate_key_pair()
+    bundle = create_trust_bundle("2026-02-10T00:00:00Z")
+    with pytest.raises(AgentPinError, match="not signed"):
+        verify_trust_bundle(bundle, pub)
+    sign_trust_bundle(bundle, priv, "ops-1")
+    verify_trust_bundle(bundle, pub)
+    verify_trust_bundle(json.loads(json.dumps(bundle)), pub)
+    with pytest.raises(AgentPinError, match="did not verify"):
+        verify_trust_bundle(bundle, other_pub)
+    with pytest.raises(AgentPinError, match="did not verify"):
+        verify_trust_bundle(dict(bundle, created_at="2030-01-01T00:00:00Z"), pub)
+    expired = dict(create_trust_bundle("2026-02-10T00:00:00Z"), expires_at="2020-01-01T00:00:00Z")
+    sign_trust_bundle(expired, priv, "ops-1")
+    with pytest.raises(AgentPinError, match="expired"):
+        verify_trust_bundle(expired, pub)

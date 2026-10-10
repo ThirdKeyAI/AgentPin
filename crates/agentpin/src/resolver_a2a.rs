@@ -32,14 +32,17 @@ const DEFAULT_TIMEOUT_SECS: u64 = 10;
 /// HTTPS resolver for A2A AgentCards published at `.well-known/agent-card.json`.
 pub struct A2aAgentCardResolver {
     timeout: Duration,
+    require_discovery_binding: bool,
     last_card: Mutex<Option<(String, A2aAgentCard)>>,
 }
 
 impl A2aAgentCardResolver {
-    /// Construct with the default 10s timeout.
+    /// Construct with the default 10s timeout and discovery binding
+    /// required.
     pub fn new() -> Self {
         Self {
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            require_discovery_binding: true,
             last_card: Mutex::new(None),
         }
     }
@@ -48,8 +51,19 @@ impl A2aAgentCardResolver {
     pub fn with_timeout(timeout: Duration) -> Self {
         Self {
             timeout,
+            require_discovery_binding: true,
             last_card: Mutex::new(None),
         }
+    }
+
+    /// Control spec §4.10.4 step 5 (default `true`): after the card
+    /// signature verifies, the domain's `.well-known/agent-identity.json`
+    /// is fetched and the card key must be published there by thumbprint.
+    /// Disabling this makes the resolver trust self-certifying cards; only
+    /// do so when another channel establishes the card's provenance.
+    pub fn with_discovery_binding(mut self, required: bool) -> Self {
+        self.require_discovery_binding = required;
+        self
     }
 
     /// Return the last successfully resolved AgentCard, if any.
@@ -75,26 +89,20 @@ impl Default for A2aAgentCardResolver {
 #[async_trait::async_trait]
 impl AsyncDiscoveryResolver for A2aAgentCardResolver {
     async fn resolve_discovery(&self, domain: &str) -> Result<DiscoveryDocument, Error> {
+        let domain = &crate::domain::normalize_domain(domain)?;
         let url = format!("https://{}{}", domain, AGENT_CARD_PATH);
-        let client = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .build()
-            .map_err(|e| Error::Discovery(format!("HTTP client init failed: {e}")))?;
-        let response = client
-            .get(&url)
-            .send()
+        // No redirects (spec §4.8.5), bounded timeout and body size (AP-7,
+        // AP-13).
+        let opts = crate::net::FetchOptions {
+            timeout: self.timeout,
+            ..Default::default()
+        };
+        let body = crate::net::fetch_json_bounded(&url, &opts)
             .await
-            .map_err(|e| Error::Discovery(format!("Failed to fetch {}: {}", url, e)))?;
-        if !response.status().is_success() {
-            return Err(Error::Discovery(format!(
-                "Failed to fetch {}: HTTP {}",
-                url,
-                response.status()
-            )));
-        }
-        let card: A2aAgentCard = response.json().await.map_err(|e| {
-            Error::Discovery(format!("Failed to parse AgentCard at {}: {}", url, e))
-        })?;
+            .map_err(|e| Error::Discovery(e.to_string()))?
+            .ok_or_else(|| Error::Discovery(format!("Failed to fetch {}: HTTP 404", url)))?;
+        let card: A2aAgentCard = serde_json::from_slice(&body)
+            .map_err(|_| Error::Discovery(format!("Failed to parse AgentCard at {}", url)))?;
 
         // Verify the extension signature before trusting any field.
         verify_agentpin_extension(&card)?;
@@ -103,11 +111,30 @@ impl AsyncDiscoveryResolver for A2aAgentCardResolver {
         // domain we just fetched from — defends against a card that points at
         // some other domain's AgentPin discovery.
         let endpoint_host = card_endpoint_host(&card)?;
-        if endpoint_host != domain {
+        if &endpoint_host != domain {
             return Err(Error::Discovery(format!(
                 "AgentCard at {} declares agentpin endpoint host {} (mismatch)",
                 domain, endpoint_host
             )));
+        }
+
+        // Spec §4.10.4 step 5 (AP-4): bind the card to the AgentPin identity
+        // by requiring its key in the authoritative discovery document.
+        if self.require_discovery_binding {
+            let authoritative = crate::discovery::fetch_discovery_document_with(
+                domain,
+                &crate::net::FetchOptions {
+                    timeout: self.timeout,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            if !crate::resolver_local::card_key_published_in(&authoritative, &card) {
+                return Err(Error::Discovery(format!(
+                    "AgentCard key for {} is not published in the domain's discovery document",
+                    domain
+                )));
+            }
         }
 
         let discovery = derive_discovery_from_card(&card)?;

@@ -1,6 +1,5 @@
 """Tests for AllowedDomains helpers + a2a_endpoint discovery field (v0.3.0)."""
 
-import pytest
 
 from agentpin import (
     AllowedDomains,
@@ -68,3 +67,27 @@ def test_build_discovery_document_without_a2a_endpoint_omits_field():
         "2026-05-01T00:00:00Z",
     )
     assert "a2a_endpoint" not in doc
+
+
+def test_from_constraints_empty_list_is_restricted():
+    """AP-6: a present-but-empty list is restricted to nothing."""
+    assert not AllowedDomains.is_unrestricted(AllowedDomains.from_constraints({"allowed_domains": []}))
+
+
+def test_intersect_of_disjoint_lists_allows_nothing():
+    """AP-6: disjoint allow-lists intersect to "restricted to nothing"."""
+    inter = AllowedDomains.intersect(["a.com"], ["b.com"])
+    assert inter == []
+    assert not AllowedDomains.is_unrestricted(inter)
+    assert not AllowedDomains.allows(inter, "a.com")
+    assert not AllowedDomains.allows(inter, "anything.com")
+    assert not AllowedDomains.allows([], "x.com")
+
+
+def test_pattern_matching():
+    """AP-6: allows and intersect use the §5.5 pattern rules."""
+    assert AllowedDomains.allows(["*.corp.com"], "api.corp.com")
+    assert not AllowedDomains.allows(["*.corp.com"], "corp.com")
+    assert not AllowedDomains.allows(["*.corp.com"], "evil-corp.com")
+    assert AllowedDomains.intersect(["*.corp.com"], ["api.corp.com"]) == ["api.corp.com"]
+    assert AllowedDomains.intersect(["api.corp.com"], ["*.corp.com"]) == ["api.corp.com"]

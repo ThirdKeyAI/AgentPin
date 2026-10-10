@@ -25,3 +25,6 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npm test
+      - name: Audit runtime dependencies
+        working-directory: javascript
+        run: npm audit --omit=dev --audit-level=low

@@ -77,7 +77,7 @@ if (result.valid) {
 - **Trust bundles** for air-gapped and enterprise verification (v0.2.0)
 - **Signed A2A AgentCards** (v0.3.0) — extends the [A2A](https://github.com/google-a2a/A2A) AgentCard with an AgentPin cryptographic-identity payload. `LocalAgentCardStore` for push-registered agents, `A2aAgentCardResolver` for `.well-known/agent-card.json` fetches.
 - **DNS TXT cross-verification** (v0.3.0) — second-channel trust via `_agentpin.{domain}` TXT records (`v=agentpin1; kid=...; fp=sha256:<hex>`).
-- **`AllowedDomains` typed wrapper** (v0.3.0) — empty-list-equals-unrestricted convention with intersection semantics for cross-protocol scoping.
+- **`AllowedDomains` typed wrapper** (v0.3.0; tri-state since v0.4) — `null` = unrestricted, `[]` = restricted to nothing, pattern-aware intersection for cross-protocol scoping.
 - **Zero dependencies** — Node.js built-in crypto only
 
 ## API
@@ -216,7 +216,7 @@ import { AllowedDomains } from 'agentpin';
 
 const caller   = AllowedDomains.fromConstraints(callerCredential.constraints);
 const provider = AllowedDomains.fromConstraints(providerAgent.constraints);
-const scope    = AllowedDomains.intersect(caller, provider);  // unrestricted ∩ X = X
+const scope    = AllowedDomains.intersect(caller, provider);  // null ∩ X = X; disjoint lists -> [] (allows nothing)
 ```
 
 ## Cross-Language Interoperability
