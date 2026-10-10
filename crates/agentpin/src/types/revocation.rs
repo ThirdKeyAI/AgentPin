@@ -11,6 +11,14 @@ pub struct RevocationDocument {
     pub revoked_agents: Vec<RevokedAgent>,
     #[serde(default)]
     pub revoked_keys: Vec<RevokedKey>,
+    /// Optional: `kid` of the discovery-document key that signed this
+    /// document (design issue 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    /// Optional: standard-base64 DER signature over the domain-separated
+    /// canonical JSON of this document with `signature` cleared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,6 +74,8 @@ mod tests {
                 revoked_at: "2026-01-30T00:00:00Z".to_string(),
                 reason: RevocationReason::Superseded,
             }],
+            kid: None,
+            signature: None,
         };
         let json = serde_json::to_string_pretty(&doc).unwrap();
         let doc2: RevocationDocument = serde_json::from_str(&json).unwrap();

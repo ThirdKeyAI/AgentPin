@@ -1,7 +1,10 @@
 """Discovery document handling for AgentPin."""
 
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
+from .constraint import domain_pattern_matches
+from .domain import normalize_domain, validate_https_url_for_domain
+from .net import fetch_json_bounded
 from .types import AgentPinError, ErrorCode
 
 
@@ -42,49 +45,68 @@ def build_discovery_document(
 class AllowedDomains:
     """Helpers for the ``allowed_domains`` constraint as a typed allow-list.
 
-    Convention: an empty list means *unrestricted* (all domains trusted); a
-    non-empty list restricts the agent to exactly those domains. Mirrors the
+    v0.3.0, made a proper tri-state in v0.4 (AP-6). Three states: ``None`` is
+    *unrestricted* (the field is absent on the wire); a list, including an
+    empty one, is *restricted* to the listed literals and ``*.`` patterns
+    (spec §5.5). "No restriction" and "restricted to nothing" are therefore
+    distinct: the intersection of two disjoint allow-lists is ``[]``, which
+    allows nothing and is never re-interpreted as unrestricted. Mirrors the
     ``AllowedDomains`` type in the Rust SDK.
 
-    All methods are static — instances are plain ``list[str]``.
+    All methods are static — instances are plain ``list[str]`` or ``None``.
     """
 
     @staticmethod
-    def unrestricted() -> List[str]:
-        """Construct an empty (unrestricted) list."""
-        return []
+    def unrestricted() -> None:
+        """The unrestricted allow-list (``None``)."""
+        return None
 
     @staticmethod
     def from_domains(iter_: Iterable[str]) -> List[str]:
-        """Construct from any iterable of strings."""
+        """Construct a restricted list from any iterable; empty allows nothing."""
         return [str(d) for d in iter_]
 
     @staticmethod
     def is_unrestricted(list_: Optional[List[str]]) -> bool:
-        """``True`` when the list is empty (no restriction)."""
-        return not list_
+        """``True`` when the list places no restriction (``None``)."""
+        return list_ is None
 
     @staticmethod
     def allows(list_: Optional[List[str]], domain: str) -> bool:
-        """``True`` when ``domain`` is allowed under this list."""
-        return AllowedDomains.is_unrestricted(list_) or domain in list_
+        """``True`` when ``domain`` is allowed: unrestricted allows all, entries use
+        §5.5 patterns, ``[]`` allows nothing."""
+        if list_ is None:
+            return True
+        return any(domain_pattern_matches(p, domain) for p in list_)
 
     @staticmethod
-    def intersect(a: Optional[List[str]], b: Optional[List[str]]) -> List[str]:
-        """Intersection of two allow-lists. ``unrestricted ∩ X = X``."""
-        if AllowedDomains.is_unrestricted(a):
-            return list(b or [])
-        if AllowedDomains.is_unrestricted(b):
-            return list(a or [])
-        b_set = set(b or [])
-        return [d for d in a if d in b_set]
+    def intersect(a: Optional[List[str]], b: Optional[List[str]]) -> Optional[List[str]]:
+        """Intersection of two allow-lists.
+
+        ``unrestricted ∩ X = X``; otherwise the entries of either list that are
+        allowed by the other (so ``*.corp.com ∩ api.corp.com = api.corp.com``).
+        Disjoint lists yield ``[]``, which allows nothing.
+        """
+        if a is None:
+            return None if b is None else list(b)
+        if b is None:
+            return list(a)
+        out: List[str] = []
+        for d in a:
+            if AllowedDomains.allows(b, d) and d not in out:
+                out.append(d)
+        for d in b:
+            if AllowedDomains.allows(a, d) and d not in out:
+                out.append(d)
+        return out
 
     @staticmethod
-    def from_constraints(constraints: Optional[dict]) -> List[str]:
+    def from_constraints(constraints: Optional[dict]) -> Optional[List[str]]:
         """Pull the typed list from a constraints dict.
 
         Returns ``unrestricted()`` when constraints are ``None`` or have no
-        ``allowed_domains`` field.
+        ``allowed_domains`` field, and a copy of the list (including an empty
+        one) when present.
         """
         if not constraints:
             return AllowedDomains.unrestricted()
@@ -100,14 +122,34 @@ def validate_discovery_document(doc: dict, expected_entity: str) -> None:
     Raises:
         AgentPinError: on validation failure
     """
+    if not isinstance(doc, dict):
+        raise AgentPinError(ErrorCode.DISCOVERY_INVALID, "Discovery document must be a JSON object")
     if doc.get("agentpin_version") != "0.1":
         raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Unsupported version: {doc.get('agentpin_version')}")
 
-    if doc.get("entity") != expected_entity:
+    # Compare entity and the expected domain in normalized form (AP-3).
+    expected = normalize_domain(expected_entity)
+    try:
+        entity = normalize_domain(doc.get("entity"))
+    except AgentPinError as e:
+        raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Invalid entity: {e}") from None
+    if entity != expected:
         raise AgentPinError(
             ErrorCode.DOMAIN_MISMATCH,
             f"Discovery entity '{doc.get('entity')}' does not match expected '{expected_entity}'",
         )
+    # Endpoints the verifier may fetch must be https on the entity's own
+    # host (AP-12; spec §17 for a2a_endpoint).
+    if doc.get("revocation_endpoint") is not None:
+        try:
+            validate_https_url_for_domain(doc.get("revocation_endpoint"), entity)
+        except AgentPinError as e:
+            raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Invalid revocation_endpoint: {e}") from None
+    if doc.get("a2a_endpoint") is not None:
+        try:
+            validate_https_url_for_domain(doc.get("a2a_endpoint"), entity)
+        except AgentPinError as e:
+            raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Invalid a2a_endpoint: {e}") from None
 
     if not doc.get("public_keys"):
         raise AgentPinError(ErrorCode.DISCOVERY_INVALID, "Discovery document must have at least one public key")
@@ -132,22 +174,19 @@ def find_agent_by_id(doc: dict, agent_id: str) -> Optional[dict]:
     return None
 
 
-def fetch_discovery_document(domain: str) -> dict:
-    """Fetch a discovery document from a domain over HTTPS."""
-    import requests
+def fetch_discovery_document(domain: str, **fetch_opts: Any) -> dict:
+    """Fetch a discovery document from a domain over HTTPS.
 
+    No redirects, 10 s timeout, 1 MiB body cap, JSON content type required
+    (see :mod:`agentpin.net`). ``fetch_opts`` are forwarded to
+    :func:`agentpin.net.fetch_json_bounded`.
+    """
+    domain = normalize_domain(domain)
     url = f"https://{domain}/.well-known/agent-identity.json"
-    resp = requests.get(url, headers={"Accept": "application/json"}, allow_redirects=False, timeout=10)
-
-    if resp.is_redirect or resp.is_permanent_redirect:
-        raise AgentPinError(
-            ErrorCode.DISCOVERY_FETCH_FAILED,
-            f"Redirect detected fetching {url} (status {resp.status_code}). Redirects are not allowed.",
-        )
-
-    if not resp.ok:
-        raise AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, f"HTTP {resp.status_code} fetching {url}")
-
-    doc = resp.json()
+    doc = fetch_json_bounded(url, **fetch_opts)
+    if doc is None:
+        raise AgentPinError(ErrorCode.DISCOVERY_FETCH_FAILED, f"HTTP 404 fetching {url}")
+    if not isinstance(doc, dict):
+        raise AgentPinError(ErrorCode.DISCOVERY_INVALID, f"Discovery document from {url} is not an object")
     validate_discovery_document(doc, domain)
     return doc

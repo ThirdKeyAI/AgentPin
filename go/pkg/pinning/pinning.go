@@ -9,9 +9,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/jwk"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
 )
+
+// pinKey is the normalized hostname when valid, the raw string otherwise
+// (AP-3).
+func pinKey(d string) string {
+	if n, err := domain.Normalize(d); err == nil {
+		return n
+	}
+	return d
+}
 
 // Result is the outcome of a CheckAndPin call.
 type Result int
@@ -24,6 +34,10 @@ const (
 	// ResultChanged indicates the domain was known but the key does not match
 	// any pinned key — likely key rotation or attack.
 	ResultChanged
+	// ResultRotated indicates the key was not pinned but appeared in a
+	// discovery document alongside an already-pinned key, so it has been
+	// pinned as a rotation (spec §7.2 continuity).
+	ResultRotated
 )
 
 // String returns a stable label for r.
@@ -35,6 +49,8 @@ func (r Result) String() string {
 		return "pinned"
 	case ResultChanged:
 		return "changed"
+	case ResultRotated:
+		return "rotated"
 	}
 	return "unknown"
 }
@@ -51,41 +67,80 @@ func NewKeyPinStore() *KeyPinStore {
 }
 
 // CheckAndPin checks j against the pinned keys for domain. On first use it
-// pins j and returns ResultFirstUse.
+// pins j and returns ResultFirstUse. Prefer CheckAndPinSet when the full
+// validated discovery document is available.
 func (s *KeyPinStore) CheckAndPin(domain string, j *types.JWK) Result {
+	return s.CheckAndPinSet(domain, j, []types.JWK{*j})
+}
+
+// CheckAndPinSet checks j against the pin store using the key set of a
+// validated discovery document (spec §7.3 "pins the public key(s)").
+//
+//   - First use: every key in docKeys (plus j) is pinned.
+//   - Known domain, j pinned: ResultMatched.
+//   - Known domain, j not pinned, but at least one other key in docKeys is
+//     already pinned: j is pinned and ResultRotated is returned.
+//   - Otherwise ResultChanged; nothing is modified.
+func (s *KeyPinStore) CheckAndPinSet(domain string, j *types.JWK, docKeys []types.JWK) Result {
+	domain = pinKey(domain)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	hash := jwk.JWKThumbprint(j)
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	if pd, ok := s.domains[domain]; ok {
-		for i := range pd.PinnedKeys {
-			if pd.PinnedKeys[i].PublicKeyHash == hash {
-				pd.PinnedKeys[i].LastSeen = now
-				return ResultMatched
-			}
+	pd, ok := s.domains[domain]
+	if !ok {
+		pd = &types.PinnedDomain{Domain: domain}
+		s.domains[domain] = pd
+		addKeyLocked(pd, j, now)
+		for i := range docKeys {
+			addKeyLocked(pd, &docKeys[i], now)
 		}
-		return ResultChanged
+		return ResultFirstUse
 	}
 
-	s.domains[domain] = &types.PinnedDomain{
-		Domain: domain,
-		PinnedKeys: []types.PinnedKey{
-			{
-				Kid:           j.Kid,
-				PublicKeyHash: hash,
-				FirstSeen:     now,
-				LastSeen:      now,
-				TrustLevel:    types.TrustTOFU,
-			},
-		},
+	for i := range pd.PinnedKeys {
+		if pd.PinnedKeys[i].PublicKeyHash == hash {
+			pd.PinnedKeys[i].LastSeen = now
+			return ResultMatched
+		}
 	}
-	return ResultFirstUse
+
+	for i := range docKeys {
+		h := jwk.JWKThumbprint(&docKeys[i])
+		if h == hash {
+			continue
+		}
+		for _, pk := range pd.PinnedKeys {
+			if pk.PublicKeyHash == h {
+				addKeyLocked(pd, j, now)
+				return ResultRotated
+			}
+		}
+	}
+	return ResultChanged
+}
+
+func addKeyLocked(pd *types.PinnedDomain, j *types.JWK, now string) {
+	hash := jwk.JWKThumbprint(j)
+	for _, k := range pd.PinnedKeys {
+		if k.PublicKeyHash == hash {
+			return
+		}
+	}
+	pd.PinnedKeys = append(pd.PinnedKeys, types.PinnedKey{
+		Kid:           j.Kid,
+		PublicKeyHash: hash,
+		FirstSeen:     now,
+		LastSeen:      now,
+		TrustLevel:    types.TrustTOFU,
+	})
 }
 
 // AddKey adds an additional pinned key to a domain (e.g., during key rotation).
 func (s *KeyPinStore) AddKey(domain string, j *types.JWK) {
+	domain = pinKey(domain)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -113,6 +168,7 @@ func (s *KeyPinStore) AddKey(domain string, j *types.JWK) {
 
 // GetDomain returns the pinned-domain entry for domain, or nil.
 func (s *KeyPinStore) GetDomain(domain string) *types.PinnedDomain {
+	domain = pinKey(domain)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	pd, ok := s.domains[domain]
@@ -147,7 +203,25 @@ func (s *KeyPinStore) LoadFromJSON(data []byte) error {
 	s.domains = make(map[string]*types.PinnedDomain, len(domains))
 	for i := range domains {
 		d := domains[i]
-		s.domains[d.Domain] = &d
+		key := pinKey(d.Domain)
+		d.Domain = key
+		if existing, ok := s.domains[key]; ok {
+			// Merge entries that differ only by case into one pin set.
+			for _, pk := range d.PinnedKeys {
+				dup := false
+				for _, e := range existing.PinnedKeys {
+					if e.PublicKeyHash == pk.PublicKeyHash {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					existing.PinnedKeys = append(existing.PinnedKeys, pk)
+				}
+			}
+			continue
+		}
+		s.domains[key] = &d
 	}
 	return nil
 }
@@ -155,7 +229,13 @@ func (s *KeyPinStore) LoadFromJSON(data []byte) error {
 // CheckPinning runs CheckAndPin and returns ResultChanged as a typed
 // VerificationError so verifiers can fail closed cleanly.
 func CheckPinning(store *KeyPinStore, domain string, j *types.JWK) (Result, error) {
-	r := store.CheckAndPin(domain, j)
+	return CheckPinningSet(store, domain, j, []types.JWK{*j})
+}
+
+// CheckPinningSet is CheckPinning over a validated document's key set; see
+// KeyPinStore.CheckAndPinSet.
+func CheckPinningSet(store *KeyPinStore, domain string, j *types.JWK, docKeys []types.JWK) (Result, error) {
+	r := store.CheckAndPinSet(domain, j, docKeys)
 	if r == ResultChanged {
 		return r, types.NewVerificationError(
 			types.ErrKeyPinMismatch,

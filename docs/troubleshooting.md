@@ -6,12 +6,12 @@ Common issues and solutions when working with AgentPin.
 
 ## Verification Errors
 
-### `invalid_algorithm`
+### `ALGORITHM_REJECTED`
 
 **Problem:** The JWT header contains an algorithm other than ES256.
 
 ```json
-{ "valid": false, "error_code": "invalid_algorithm" }
+{ "valid": false, "error_code": "ALGORITHM_REJECTED" }
 ```
 
 **Cause:** The credential was signed with RSA, HS256, EdDSA, or another algorithm.
@@ -25,12 +25,12 @@ const { privateKeyPem, publicKeyPem } = generateKeyPair(); // Always ES256
 
 ---
 
-### `expired`
+### `CREDENTIAL_EXPIRED`
 
 **Problem:** The credential's `exp` claim is in the past.
 
 ```json
-{ "valid": false, "error_code": "expired" }
+{ "valid": false, "error_code": "CREDENTIAL_EXPIRED" }
 ```
 
 **Solution:** Issue a new credential. Use the `clockSkewSecs` config to allow small time differences:
@@ -43,9 +43,9 @@ const result = verifyCredentialOffline(jwt, discovery, null, pinStore, audience,
 
 ---
 
-### `not_yet_valid`
+### `CREDENTIAL_EXPIRED` ("Credential issued in the future")
 
-**Problem:** The credential's `iat` (issued-at) timestamp is in the future.
+**Problem:** The credential's `iat` (issued-at) timestamp is in the future. The error code is the same as for an expired credential; the `error_message` distinguishes the two.
 
 **Cause:** Clock skew between issuer and verifier.
 
@@ -59,7 +59,7 @@ config = VerifierConfig(clock_skew_secs=120)  # Allow 2 minutes of skew
 
 ---
 
-### `discovery_failed`
+### `DISCOVERY_FETCH_FAILED`
 
 **Problem:** Cannot fetch or parse the discovery document.
 
@@ -85,7 +85,7 @@ curl -s https://example.com/.well-known/agent-identity.json | jq .
 
 ---
 
-### `invalid_signature`
+### `SIGNATURE_INVALID`
 
 **Problem:** The ECDSA signature does not match.
 
@@ -108,7 +108,7 @@ curl -s https://example.com/.well-known/agent-identity.json | jq '.public_keys[]
 
 ---
 
-### `key_not_found`
+### `KEY_NOT_FOUND`
 
 **Problem:** The `kid` from the JWT header is not in the discovery document.
 
@@ -123,7 +123,7 @@ curl -s https://example.com/.well-known/agent-identity.json | jq '.public_keys[]
 
 ---
 
-### `agent_inactive`
+### `AGENT_INACTIVE`
 
 **Problem:** The agent is declared in the discovery document but its status is not `active`.
 
@@ -139,7 +139,7 @@ curl -s https://example.com/.well-known/agent-identity.json | jq '.public_keys[]
 
 ---
 
-### `revoked`
+### `CREDENTIAL_REVOKED`
 
 **Problem:** The credential, agent, or key has been revoked.
 
@@ -157,7 +157,7 @@ curl -s https://example.com/.well-known/agent-identity-revocations.json | jq '.r
 
 ---
 
-### `capability_mismatch`
+### `CAPABILITY_EXCEEDED`
 
 **Problem:** The credential claims capabilities not declared in the discovery document.
 
@@ -179,7 +179,7 @@ print("Declared:", discovery["agents"][0]["capabilities"])
 
 ---
 
-### `key_changed` (TOFU Pin Violation)
+### `KEY_PIN_MISMATCH` (TOFU Pin Violation)
 
 **Problem:** The public key for a domain changed since it was first pinned.
 
@@ -206,7 +206,7 @@ pin_store.add_key("example.com", new_jwk)  # Explicitly trust new key
 
 ### Credential Issued by Python, Verified by JavaScript
 
-If you get `invalid_signature` when cross-verifying, check:
+If you get `SIGNATURE_INVALID` when cross-verifying, check:
 
 1. Both implementations use DER-encoded signatures (not raw R+S)
 2. The JWT encoding is identical (Base64url without padding)

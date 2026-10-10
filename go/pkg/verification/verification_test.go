@@ -5,8 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/credential"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/crypto"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/delegation"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/jwk"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/jwt"
@@ -14,6 +18,7 @@ import (
 	"github.com/ThirdKeyAi/agentpin/go/pkg/resolver"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/revocation"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
+	"strings"
 )
 
 type fixture struct {
@@ -206,6 +211,48 @@ func TestKeyPinChangeRejected(t *testing.T) {
 	}
 }
 
+func TestKeyRotationWithContinuityAccepted(t *testing.T) {
+	f := setup(t)
+	if r1 := VerifyCredentialOffline(f.jwt, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg); !r1.Valid {
+		t.Fatalf("first verify failed: %+v", r1)
+	}
+	// Spec §7.2 rotation: publish the new key next to the old one, sign with it.
+	kp2, _ := crypto.GenerateKeyPair()
+	priv2, _ := crypto.LoadPrivateKey(kp2.PrivateKeyPEM)
+	pub2, _ := crypto.LoadPublicKey(kp2.PublicKeyPEM)
+	f.discovery.PublicKeys = append(f.discovery.PublicKeys, jwk.VerifyingKeyToJWK(pub2, "test-2026-02"))
+	jwt2, _ := credential.IssueCredential(
+		priv2, "test-2026-02", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, nil, nil, 3600,
+	)
+	r2 := VerifyCredentialOffline(jwt2, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg)
+	if !r2.Valid || r2.KeyPinning == nil || r2.KeyPinning.Status != "rotated" {
+		t.Fatalf("rotation with continuity rejected: %+v", r2)
+	}
+	if len(r2.Warnings) == 0 {
+		t.Fatal("rotation should be surfaced as a warning")
+	}
+	// Retire the old key; the new one is now pinned.
+	f.discovery.PublicKeys = f.discovery.PublicKeys[1:]
+	r3 := VerifyCredentialOffline(jwt2, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg)
+	if !r3.Valid || r3.KeyPinning.Status != "pinned" {
+		t.Fatalf("after retirement: %+v", r3)
+	}
+}
+
+func TestFirstUsePinsEveryPublishedKey(t *testing.T) {
+	f := setup(t)
+	kp2, _ := crypto.GenerateKeyPair()
+	pub2, _ := crypto.LoadPublicKey(kp2.PublicKeyPEM)
+	f.discovery.PublicKeys = append(f.discovery.PublicKeys, jwk.VerifyingKeyToJWK(pub2, "test-2026-02"))
+	if r := VerifyCredentialOffline(f.jwt, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg); !r.Valid {
+		t.Fatalf("%+v", r)
+	}
+	if n := len(f.pinStore.GetDomain("example.com").PinnedKeys); n != 2 {
+		t.Fatalf("pinned %d keys, want 2", n)
+	}
+}
+
 func TestVerifyWithTrustBundleResolver(t *testing.T) {
 	f := setup(t)
 	b := types.TrustBundle{
@@ -276,5 +323,381 @@ func TestWildcardAudienceAccepted(t *testing.T) {
 	r := VerifyCredentialOffline(cred, &disc, nil, pinning.NewKeyPinStore(), "any.com", DefaultVerifierConfig())
 	if !r.Valid {
 		t.Fatalf("wildcard aud should pass: %+v", r)
+	}
+}
+
+// AP-3: a case variant of a pinned issuer must hit the existing pin, not
+// create a fresh first-use entry under a different key.
+func TestCaseVariantIssHitsExistingPin(t *testing.T) {
+	f := setup(t)
+	if r := VerifyCredentialOffline(f.jwt, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg); !r.Valid {
+		t.Fatalf("first verify: %+v", r)
+	}
+	kp2, _ := crypto.GenerateKeyPair()
+	priv2, _ := crypto.LoadPrivateKey(kp2.PrivateKeyPEM)
+	pub2, _ := crypto.LoadPublicKey(kp2.PublicKeyPEM)
+	evil := *f.discovery
+	evil.Entity = "EXAMPLE.COM"
+	evil.PublicKeys = []types.JWK{jwk.VerifyingKeyToJWK(pub2, "evil-key")}
+	evilJWT, _ := credential.IssueCredential(priv2, "evil-key", "EXAMPLE.COM",
+		"urn:agentpin:example.com:agent", "verifier.com", []types.Capability{"read:data"}, nil, nil, 3600)
+	r := VerifyCredentialOffline(evilJWT, &evil, nil, f.pinStore, "verifier.com", f.cfg)
+	if r.Valid || r.ErrorCode != types.ErrKeyPinMismatch {
+		t.Fatalf("case-variant iss must hit the pin: %+v", r)
+	}
+	if pd := f.pinStore.GetDomain("example.com"); pd == nil || len(pd.PinnedKeys) != 1 {
+		t.Fatalf("expected exactly one pin set under the normalized name")
+	}
+}
+
+// AP-3: issuer and entity are compared after normalization.
+func TestIssuerEntityComparedNormalized(t *testing.T) {
+	f := setup(t)
+	f.discovery.Entity = "Example.COM."
+	r := VerifyCredentialOffline(f.jwt, f.discovery, f.revocation, f.pinStore, "verifier.com", f.cfg)
+	if !r.Valid || r.Issuer != "example.com" {
+		t.Fatalf("normalized entity comparison failed: %+v", r)
+	}
+}
+
+// AP-10 / AP-12: an iss that is not a bare hostname is rejected before it
+// can reach a file path, URL or pin store.
+func TestNonHostnameIssRejected(t *testing.T) {
+	f := setup(t)
+	for _, bad := range []string{"127.0.0.1:8443", "../../tmp/x", "/srv/uploads/x", "example.com/path", "user@example.com"} {
+		jwtStr, _ := credential.IssueCredential(f.priv, "test-2026-01", bad,
+			"urn:agentpin:example.com:agent", "", []types.Capability{"read:data"}, nil, nil, 3600)
+		r := VerifyCredentialOffline(jwtStr, f.discovery, nil, pinning.NewKeyPinStore(), "", f.cfg)
+		if r.Valid || r.ErrorCode != types.ErrDiscoveryInvalid {
+			t.Fatalf("iss %q: %+v", bad, r)
+		}
+		r = VerifyCredentialWithResolver(jwtStr, resolver.NewLocalFileResolver("/", ""), pinning.NewKeyPinStore(), "", f.cfg)
+		if r.ErrorCode != types.ErrDiscoveryInvalid {
+			t.Fatalf("iss %q via resolver: %+v", bad, r)
+		}
+	}
+}
+
+// Design issue 3: foreign, tampered, unsigned-under-strict and stale
+// revocation documents fail closed.
+func TestRevocationDocumentValidation(t *testing.T) {
+	f := setup(t)
+	run := func(rev *types.RevocationDocument, cfg VerifierConfig) Result {
+		return VerifyCredentialOffline(f.jwt, f.discovery, rev, pinning.NewKeyPinStore(), "verifier.com", cfg)
+	}
+	foreign := *f.revocation
+	foreign.Entity = "other.com"
+	if r := run(&foreign, f.cfg); r.ErrorCode != types.ErrDiscoveryInvalid {
+		t.Fatalf("foreign entity: %+v", r)
+	}
+	strict := f.cfg
+	strict.RequireSignedRevocation = true
+	if r := run(f.revocation, strict); r.ErrorCode != types.ErrDiscoveryInvalid {
+		t.Fatalf("unsigned under strict: %+v", r)
+	}
+	signed := *f.revocation
+	if err := revocation.SignRevocationDocument(&signed, f.priv, "test-2026-01"); err != nil {
+		t.Fatal(err)
+	}
+	if r := run(&signed, strict); !r.Valid {
+		t.Fatalf("signed under strict: %+v", r)
+	}
+	tampered := signed
+	tampered.UpdatedAt = "2030-01-01T00:00:00Z"
+	if r := run(&tampered, f.cfg); r.ErrorCode != types.ErrDiscoveryInvalid {
+		t.Fatalf("tampered: %+v", r)
+	}
+	aged := f.cfg
+	aged.RevocationMaxAgeSecs = 60
+	stale := *f.revocation
+	stale.UpdatedAt = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	if r := run(&stale, aged); r.ErrorCode != types.ErrDiscoveryInvalid {
+		t.Fatalf("stale: %+v", r)
+	}
+	if r := run(f.revocation, aged); !r.Valid {
+		t.Fatalf("fresh under max age: %+v", r)
+	}
+}
+
+func rawCredential(t *testing.T, priv *ecdsa.PrivateKey, payload string) string {
+	t.Helper()
+	header := jwt.Base64URLEncode([]byte(`{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"test-2026-01"}`))
+	signingInput := header + "." + jwt.Base64URLEncode([]byte(payload))
+	sigB64, err := crypto.SignBytes(priv, []byte(signingInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, _ := base64.StdEncoding.DecodeString(sigB64)
+	return signingInput + "." + jwt.Base64URLEncode(der)
+}
+
+// AP-5 / AP-14 / AP-18: correctly signed credentials with missing, string
+// or negative exp/iat, or exp <= iat, fail with MALFORMED_CREDENTIAL; an
+// int64-min iat cannot wrap past the max-TTL cap.
+func TestMalformedClaimsRejected(t *testing.T) {
+	f := setup(t)
+	now := time.Now().Unix()
+	base := `"iss":"example.com","sub":"urn:agentpin:example.com:agent","jti":"j","agentpin_version":"0.1","capabilities":["read:data"]`
+	cases := []string{
+		fmt.Sprintf(`{%s,"iat":%d}`, base, now),
+		fmt.Sprintf(`{%s,"iat":%d,"exp":"never"}`, base, now),
+		fmt.Sprintf(`{%s,"iat":-9223372036854775808,"exp":%d}`, base, now+315360000),
+		fmt.Sprintf(`{%s,"iat":%d,"exp":%d}`, base, now, now),
+	}
+	for _, payload := range cases {
+		r := VerifyCredentialOffline(rawCredential(t, f.priv, payload), f.discovery, nil, pinning.NewKeyPinStore(), "", f.cfg)
+		if r.Valid || r.ErrorCode != types.ErrMalformedCredential {
+			t.Fatalf("payload %s: %+v", payload, r)
+		}
+	}
+}
+
+// AP-14: the agent's declared credential_ttl_max is enforced (default 86400).
+func TestCredentialTTLMaxEnforced(t *testing.T) {
+	f := setup(t)
+	short := uint64(600)
+	f.discovery.Agents[0].CredentialTTLMax = &short
+	long, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, nil, nil, 3600)
+	if r := VerifyCredentialOffline(long, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg); r.ErrorCode != types.ErrCredentialExpired || !strings.Contains(r.ErrorMessage, "credential_ttl_max") {
+		t.Fatalf("expected ttl_max rejection: %+v", r)
+	}
+	ok, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, nil, nil, 600)
+	if r := VerifyCredentialOffline(ok, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg); !r.Valid {
+		t.Fatalf("600s credential should pass: %+v", r)
+	}
+	f.discovery.Agents[0].CredentialTTLMax = nil
+	twoDays, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, nil, nil, 172800)
+	lax := f.cfg
+	lax.MaxTTLSecs = 10 * 86400
+	if r := VerifyCredentialOffline(twoDays, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", lax); r.ErrorCode != types.ErrCredentialExpired {
+		t.Fatalf("default ttl_max 86400 should reject: %+v", r)
+	}
+}
+
+// AP-8: a revocation document that uses the wrong field names (the schema
+// the old docs published) must fail closed, not be silently ignored.
+func TestRevocationDocumentWithWrongFieldNamesFailsClosed(t *testing.T) {
+	f := setup(t)
+	_, payload, _, _ := jwt.DecodeJWTUnverified(f.jwt)
+	raw := fmt.Sprintf(`{
+	  "agentpin_version": "0.1",
+	  "entity": "example.com",
+	  "revoked_credentials": [{"id": %q, "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z"}],
+	  "revoked_agents": [],
+	  "revoked_keys": [{"id": "test-2026-01", "reason": "key_compromise", "revoked_at": "2026-02-15T00:00:00Z"}],
+	  "updated_at": "2026-02-15T00:00:00Z"
+	}`, payload.Jti)
+	var rev types.RevocationDocument
+	if err := json.Unmarshal([]byte(raw), &rev); err != nil {
+		t.Fatal(err)
+	}
+	r := VerifyCredentialOffline(f.jwt, f.discovery, &rev, pinning.NewKeyPinStore(), "verifier.com", f.cfg)
+	if r.Valid {
+		t.Fatal("malformed revocation document must not be ignored")
+	}
+	if r.ErrorCode != types.ErrDiscoveryInvalid {
+		t.Fatalf("ErrorCode: %s", r.ErrorCode)
+	}
+}
+
+// AP-15: a credential that omits constraints inherits the discovery
+// declaration's constraints in the result; widening is rejected.
+func TestOmittedConstraintsInheritDiscoveryDefaults(t *testing.T) {
+	f := setup(t)
+	f.discovery.Agents[0].Constraints = &types.Constraints{AllowedDomains: []string{"*.client-corp.com"}, RateLimit: "100/hour"}
+	jwtStr, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, nil, nil, 3600)
+	r := VerifyCredentialOffline(jwtStr, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg)
+	if !r.Valid || r.Constraints == nil || len(r.Constraints.AllowedDomains) != 1 || r.Constraints.RateLimit != "100/hour" {
+		t.Fatalf("effective constraints missing: %+v", r)
+	}
+	wide, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", []types.Capability{"read:data"}, &types.Constraints{AllowedDomains: []string{"evil.com"}}, nil, 3600)
+	if r := VerifyCredentialOffline(wide, f.discovery, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg); r.ErrorCode != types.ErrConstraintViolation {
+		t.Fatalf("widening must be rejected: %+v", r)
+	}
+}
+
+type delegationFixture struct {
+	jwt         string
+	deployerDoc types.DiscoveryDocument
+	makerDoc    types.DiscoveryDocument
+	deployerKey *ecdsa.PrivateKey
+	caps        []types.Capability
+}
+
+func newDelegationFixture(t *testing.T) delegationFixture {
+	t.Helper()
+	makerKP, _ := crypto.GenerateKeyPair()
+	makerPriv, _ := crypto.LoadPrivateKey(makerKP.PrivateKeyPEM)
+	makerPub, _ := crypto.LoadPublicKey(makerKP.PublicKeyPEM)
+	ttl := uint64(86400)
+	makerDoc := discovery.BuildDiscoveryDocument("maker.com", types.EntityMaker,
+		[]types.JWK{jwk.VerifyingKeyToJWK(makerPub, "maker-2026-01")},
+		[]types.AgentDeclaration{{AgentID: "urn:agentpin:maker.com:agent-type", Name: "Agent Type",
+			Capabilities: []types.Capability{"read:*"}, CredentialTTLMax: &ttl, Status: types.AgentActive}},
+		2, "2026-01-15T00:00:00Z")
+	depKP, _ := crypto.GenerateKeyPair()
+	depPriv, _ := crypto.LoadPrivateKey(depKP.PrivateKeyPEM)
+	depPub, _ := crypto.LoadPublicKey(depKP.PublicKeyPEM)
+	depDoc := discovery.BuildDiscoveryDocument("example.com", types.EntityDeployer,
+		[]types.JWK{jwk.VerifyingKeyToJWK(depPub, "deployer-2026-01")},
+		[]types.AgentDeclaration{{AgentID: "urn:agentpin:example.com:agent", AgentType: "urn:agentpin:maker.com:agent-type",
+			Name: "Deployed Agent", Capabilities: []types.Capability{"read:*"}, CredentialTTLMax: &ttl, Status: types.AgentActive}},
+		2, "2026-01-15T00:00:00Z")
+	caps := []types.Capability{"read:data"}
+	att, err := delegation.CreateAttestation(makerPriv, "maker-2026-01", "maker.com", types.RoleMaker,
+		"urn:agentpin:maker.com:agent-type", "example.com", "urn:agentpin:example.com:agent", caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwtStr, err := credential.IssueCredential(depPriv, "deployer-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", caps, nil, []types.DelegationAttestation{*att}, 3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return delegationFixture{jwt: jwtStr, deployerDoc: depDoc, makerDoc: makerDoc, deployerKey: depPriv, caps: caps}
+}
+
+func bundleResolver(docs ...types.DiscoveryDocument) *resolver.TrustBundleResolver {
+	return resolver.NewTrustBundleResolver(&types.TrustBundle{AgentpinBundleVersion: "0.1", Documents: docs})
+}
+
+// AP-2: a genuine chain verifies end to end and is reported as verified.
+func TestDelegationChainVerified(t *testing.T) {
+	f := newDelegationFixture(t)
+	r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc, f.makerDoc), pinning.NewKeyPinStore(), "verifier.com", DefaultVerifierConfig())
+	if !r.Valid || r.DelegationVerified == nil || !*r.DelegationVerified || len(r.DelegationChain) != 1 || !r.DelegationChain[0].Verified {
+		t.Fatalf("expected verified chain: %+v", r)
+	}
+	if r.DelegationChain[0].Domain != "maker.com" || r.DelegationChain[0].Role != "maker" || len(r.Warnings) != 0 {
+		t.Fatalf("chain entry wrong: %+v", r)
+	}
+}
+
+// AP-2: a fabricated attestation is rejected with DELEGATION_INVALID
+// instead of being reported alongside Valid: true.
+func TestForgedDelegationChainRejected(t *testing.T) {
+	f := newDelegationFixture(t)
+	forged, _ := credential.IssueCredential(f.deployerKey, "deployer-2026-01", "example.com", "urn:agentpin:example.com:agent",
+		"verifier.com", f.caps, nil, []types.DelegationAttestation{{Domain: "maker.com", Role: types.RoleMaker,
+			AgentID: "urn:agentpin:maker.com:agent-type", Kid: "maker-2026-01", Attestation: "AAAA"}}, 3600)
+	r := VerifyCredentialWithResolver(forged, bundleResolver(f.deployerDoc, f.makerDoc), pinning.NewKeyPinStore(), "verifier.com", DefaultVerifierConfig())
+	if r.Valid || r.ErrorCode != types.ErrDelegationInvalid {
+		t.Fatalf("forged chain must fail: %+v", r)
+	}
+	// Offline with no way to resolve the attester: fail closed by default.
+	r = VerifyCredentialOffline(f.jwt, &f.deployerDoc, nil, pinning.NewKeyPinStore(), "verifier.com", DefaultVerifierConfig())
+	if r.Valid || r.ErrorCode != types.ErrDelegationInvalid {
+		t.Fatalf("unverifiable chain must fail by default: %+v", r)
+	}
+	// Explicit opt-out: accepted but marked unverified.
+	lax := DefaultVerifierConfig()
+	lax.AllowUnverifiedDelegation = true
+	r = VerifyCredentialOffline(f.jwt, &f.deployerDoc, nil, pinning.NewKeyPinStore(), "verifier.com", lax)
+	if !r.Valid || r.DelegationVerified == nil || *r.DelegationVerified || len(r.Warnings) == 0 {
+		t.Fatalf("opt-out should accept with warning: %+v", r)
+	}
+	// Offline with a chain resolver works too.
+	r = VerifyCredentialOfflineWithChain(f.jwt, &f.deployerDoc, nil, pinning.NewKeyPinStore(), "verifier.com", DefaultVerifierConfig(), bundleResolver(f.makerDoc))
+	if !r.Valid || r.DelegationVerified == nil || !*r.DelegationVerified {
+		t.Fatalf("chain resolver should verify: %+v", r)
+	}
+}
+
+// AP-2: unresolvable attester, unknown kid, exceeded depth and capability
+// widening beyond the attester's declaration all fail.
+func TestDelegationChainFailureModes(t *testing.T) {
+	f := newDelegationFixture(t)
+	cfg := DefaultVerifierConfig()
+	if r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc), pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrDelegationInvalid {
+		t.Fatalf("unresolvable attester: %+v", r)
+	}
+	noKey := f.makerDoc
+	noKey.PublicKeys = []types.JWK{f.makerDoc.PublicKeys[0]}
+	noKey.PublicKeys[0].Kid = "maker-2026-02"
+	if r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc, noKey), pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrDelegationInvalid {
+		t.Fatalf("unknown kid: %+v", r)
+	}
+	shallow := f.makerDoc
+	shallow.MaxDelegationDepth = 0
+	if r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc, shallow), pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrDelegationDepthExceeded {
+		t.Fatalf("depth: %+v", r)
+	}
+	narrow := f.makerDoc
+	narrow.Agents = []types.AgentDeclaration{f.makerDoc.Agents[0]}
+	narrow.Agents[0].Capabilities = []types.Capability{"read:public"}
+	if r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc, narrow), pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrDelegationInvalid || !strings.Contains(r.ErrorMessage, "exceed") {
+		t.Fatalf("scope narrowing: %+v", r)
+	}
+	suspended := f.makerDoc
+	suspended.Agents = []types.AgentDeclaration{f.makerDoc.Agents[0]}
+	suspended.Agents[0].Status = types.AgentSuspended
+	if r := VerifyCredentialWithResolver(f.jwt, bundleResolver(f.deployerDoc, suspended), pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrDelegationInvalid {
+		t.Fatalf("inactive attested agent: %+v", r)
+	}
+}
+
+// AP-20 / AP-21: a key with an unparsable exp, use != sig, or key_ops
+// without verify is rejected.
+func TestKeyMetadataEnforced(t *testing.T) {
+	f := setup(t)
+	run := func(mutate func(k *types.JWK)) Result {
+		doc := *f.discovery
+		doc.PublicKeys = []types.JWK{f.discovery.PublicKeys[0]}
+		mutate(&doc.PublicKeys[0])
+		return VerifyCredentialOffline(f.jwt, &doc, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg)
+	}
+	if r := run(func(k *types.JWK) { k.Exp = "expired" }); r.ErrorCode != types.ErrKeyExpired {
+		t.Fatalf("unparsable exp: %+v", r)
+	}
+	if r := run(func(k *types.JWK) { k.Exp = "2020-01-01T00:00:00Z" }); r.ErrorCode != types.ErrKeyExpired {
+		t.Fatalf("past exp: %+v", r)
+	}
+	if r := run(func(k *types.JWK) { k.Use = "enc" }); r.ErrorCode != types.ErrKeyNotFound {
+		t.Fatalf("use=enc: %+v", r)
+	}
+	if r := run(func(k *types.JWK) { k.KeyOps = []string{"sign"} }); r.ErrorCode != types.ErrKeyNotFound {
+		t.Fatalf("key_ops without verify: %+v", r)
+	}
+	if r := run(func(k *types.JWK) { k.Exp = "2099-01-01T00:00:00Z" }); !r.Valid {
+		t.Fatalf("future exp should pass: %+v", r)
+	}
+}
+
+// AP-21: admin:* is never accepted, and StrictCapabilities (default) rejects
+// custom actions that lack a reverse-domain prefix.
+func TestCapabilityTaxonomyEnforced(t *testing.T) {
+	f := setup(t)
+	issue := func(caps ...types.Capability) string {
+		j, _ := credential.IssueCredential(f.priv, "test-2026-01", "example.com", "urn:agentpin:example.com:agent",
+			"verifier.com", caps, nil, nil, 3600)
+		return j
+	}
+	admin := *f.discovery
+	admin.Agents = []types.AgentDeclaration{f.discovery.Agents[0]}
+	admin.Agents[0].Capabilities = []types.Capability{"admin:*"}
+	lax := f.cfg
+	lax.StrictCapabilities = false
+	for _, cfg := range []VerifierConfig{f.cfg, lax} {
+		if r := VerifyCredentialOffline(issue("admin:*"), &admin, nil, pinning.NewKeyPinStore(), "verifier.com", cfg); r.ErrorCode != types.ErrCapabilityExceeded {
+			t.Fatalf("admin:* accepted: %+v", r)
+		}
+	}
+	custom := *f.discovery
+	custom.Agents = []types.AgentDeclaration{f.discovery.Agents[0]}
+	custom.Agents[0].Capabilities = []types.Capability{"scan:target", "com.example.scan:target"}
+	if r := VerifyCredentialOffline(issue("scan:target"), &custom, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg); r.ErrorCode != types.ErrCapabilityExceeded {
+		t.Fatalf("strict mode should reject scan:target: %+v", r)
+	}
+	if r := VerifyCredentialOffline(issue("scan:target"), &custom, nil, pinning.NewKeyPinStore(), "verifier.com", lax); !r.Valid {
+		t.Fatalf("lax mode should accept scan:target: %+v", r)
+	}
+	custom.Agents[0].Capabilities = []types.Capability{"com.example.scan:target"}
+	if r := VerifyCredentialOffline(issue("com.example.scan:target"), &custom, nil, pinning.NewKeyPinStore(), "verifier.com", f.cfg); !r.Valid {
+		t.Fatalf("reverse-domain custom action should pass: %+v", r)
 	}
 }

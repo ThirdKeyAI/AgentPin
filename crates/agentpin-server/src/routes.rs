@@ -6,35 +6,32 @@ use axum::Json;
 
 use crate::state::AppState;
 
+/// Serialize `doc` as a JSON response, or answer 500 instead of a 200 with
+/// an empty body when serialization fails (AP-23).
+fn json_response<T: serde::Serialize>(doc: &T, cache_control: &'static str) -> Response {
+    match serde_json::to_string_pretty(doc) {
+        Ok(json) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, cache_control),
+            ],
+            json,
+        )
+            .into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
 pub async fn discovery(State(state): State<AppState>) -> Response {
     let doc = state.discovery.read().await;
-    let json = serde_json::to_string_pretty(&*doc).unwrap_or_default();
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/json"),
-            (header::CACHE_CONTROL, "public, max-age=3600"),
-        ],
-        json,
-    )
-        .into_response()
+    json_response(&*doc, "public, max-age=3600")
 }
 
 pub async fn revocations(State(state): State<AppState>) -> Response {
     let rev = state.revocation.read().await;
     match &*rev {
-        Some(doc) => {
-            let json = serde_json::to_string_pretty(doc).unwrap_or_default();
-            (
-                StatusCode::OK,
-                [
-                    (header::CONTENT_TYPE, "application/json"),
-                    (header::CACHE_CONTROL, "public, max-age=300"),
-                ],
-                json,
-            )
-                .into_response()
-        }
+        Some(doc) => json_response(doc, "public, max-age=300"),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -165,6 +162,8 @@ mod tests {
             revoked_agents: vec![],
             revoked_keys: vec![],
             updated_at: "2026-01-01T00:00:00Z".to_string(),
+            kid: None,
+            signature: None,
         };
         *state.revocation.write().await = Some(rev_doc);
 
@@ -185,6 +184,13 @@ mod tests {
             resp.headers().get(header::CACHE_CONTROL).unwrap(),
             "public, max-age=300"
         );
+    }
+
+    /// AP-23: HSTS is opt-in because the listener is plaintext.
+    #[test]
+    fn hsts_is_opt_in() {
+        assert_eq!(crate::middleware::security_headers(false).len(), 3);
+        assert_eq!(crate::middleware::security_headers(true).len(), 4);
     }
 
     #[tokio::test]

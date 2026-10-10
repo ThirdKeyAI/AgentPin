@@ -15,6 +15,9 @@ type DelegationAttestation struct {
 	AgentID     string         `json:"agent_id"`
 	Kid         string         `json:"kid"`
 	Attestation string         `json:"attestation"`
+	// Exp is an optional attestation expiry (Unix seconds), covered by the
+	// signature.
+	Exp *int64 `json:"exp,omitempty"`
 }
 
 // JWTHeader is the AgentPin credential JWT header.

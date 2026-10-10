@@ -1,40 +1,39 @@
 """End-to-end integration tests for AgentPin."""
 
-import json
 
 import pytest
 
 from agentpin import (
+    AgentPinError,
     KeyPinStore,
     PinningResult,
     VerifierConfig,
+    add_revoked_key,
+    apply_rotation,
     build_discovery_document,
     build_revocation_document,
-    add_revoked_key,
     check_pinning,
     check_revocation,
+    complete_rotation,
     create_challenge,
     create_response,
+    decode_jwt_unverified,
     generate_key_id,
     generate_key_pair,
-    issue_credential,
-    pem_to_jwk,
-    decode_jwt_unverified,
-    verify_jwt,
-    verify_credential_offline,
-    verify_response_with_nonce_store,
-    http_extract_credential,
-    http_format_authorization_header,
-    mcp_extract_credential,
-    mcp_format_meta_field,
-    ws_extract_credential,
-    ws_format_auth_message,
     grpc_extract_credential,
     grpc_format_metadata_value,
-    apply_rotation,
-    complete_rotation,
+    http_extract_credential,
+    http_format_authorization_header,
+    issue_credential,
+    mcp_extract_credential,
+    mcp_format_meta_field,
+    pem_to_jwk,
     prepare_rotation,
-    AgentPinError,
+    verify_credential_offline,
+    verify_jwt,
+    verify_response_with_nonce_store,
+    ws_extract_credential,
+    ws_format_auth_message,
 )
 from agentpin.nonce import InMemoryNonceStore
 

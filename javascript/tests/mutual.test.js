@@ -70,3 +70,57 @@ describe('challenge-response', () => {
         assert.strictEqual(challenge.verifier_credential, 'eyJ...test-jwt');
     });
 });
+
+describe('challenge-response hardening (AP-1, AP-19)', () => {
+    test('default nonce store rejects replay', () => {
+        const kp = generateKeyPair();
+        const challenge = createChallenge();
+        const response = createResponse(challenge, kp.privateKeyPem, 'k');
+        assert.ok(verifyResponse(response, challenge, kp.publicKeyPem));
+        assert.throws(() => verifyResponse(response, challenge, kp.publicKeyPem), /already been used/);
+    });
+
+    test('forged response does not consume the nonce', () => {
+        const kp = generateKeyPair();
+        const attacker = generateKeyPair();
+        const challenge = createChallenge();
+        const forged = createResponse(challenge, attacker.privateKeyPem, 'k');
+        assert.strictEqual(verifyResponse(forged, challenge, kp.publicKeyPem), false);
+        const genuine = createResponse(challenge, kp.privateKeyPem, 'k');
+        assert.ok(verifyResponse(genuine, challenge, kp.publicKeyPem));
+    });
+
+    test('malformed timestamp is treated as expired', () => {
+        const kp = generateKeyPair();
+        const challenge = createChallenge();
+        challenge.timestamp = 'not-a-timestamp';
+        const response = createResponse(challenge, kp.privateKeyPem, 'k');
+        assert.throws(() => verifyResponse(response, challenge, kp.publicKeyPem), /timestamp/i);
+    });
+
+    test('createResponse rejects a JWT-shaped or non-canonical nonce', () => {
+        const kp = generateKeyPair();
+        const challenge = createChallenge();
+        const header = Buffer.from('{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"k"}').toString('base64url');
+        const payload = Buffer.from('{"iss":"example.com"}').toString('base64url');
+        challenge.nonce = `${header}.${payload}`;
+        assert.throws(() => createResponse(challenge, kp.privateKeyPem, 'k'));
+        challenge.nonce = 'AAAAAAAAAAAAAAAAAAAAAA==';
+        assert.throws(() => createResponse(challenge, kp.privateKeyPem, 'k'));
+        challenge.nonce = 'AAAAAAAAAAAAAAAAAAAAAB';
+        assert.throws(() => createResponse(challenge, kp.privateKeyPem, 'k'));
+        challenge.nonce = 'AAAAAAAAAAAAAAAAAAAAAA';
+        assert.doesNotThrow(() => createResponse(challenge, kp.privateKeyPem, 'k'));
+    });
+
+    test('response signature is domain separated and bound to kid and verifier', async () => {
+        const { verifySignature } = await import('../src/crypto.js');
+        const kp = generateKeyPair();
+        const challenge = createChallenge('eyJ.verifier.jwt');
+        const response = createResponse(challenge, kp.privateKeyPem, 'k');
+        assert.strictEqual(verifySignature(kp.publicKeyPem, Buffer.from(challenge.nonce), response.signature), false);
+        assert.strictEqual(verifyResponse({ ...response, kid: 'other' }, challenge, kp.publicKeyPem), false);
+        const otherVerifier = { ...challenge, verifier_credential: 'eyJ.someone.else' };
+        assert.strictEqual(verifyResponse(response, otherVerifier, kp.publicKeyPem), false);
+    });
+});

@@ -42,4 +42,10 @@ type RevocationDocument struct {
 	RevokedCredentials []RevokedCredential `json:"revoked_credentials"`
 	RevokedAgents      []RevokedAgent      `json:"revoked_agents"`
 	RevokedKeys        []RevokedKey        `json:"revoked_keys"`
+	// Kid is the discovery-document key that signed this document
+	// (optional, design issue 3).
+	Kid string `json:"kid,omitempty"`
+	// Signature is a standard-base64 DER signature over the domain-separated
+	// canonical JSON of this document with Signature cleared (optional).
+	Signature string `json:"signature,omitempty"`
 }

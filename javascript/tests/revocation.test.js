@@ -61,3 +61,30 @@ describe('checkRevocation', () => {
         assert.throws(() => checkRevocation(doc, 'jti-1', 'agent-1', 'bad-key'), /bad-key/);
     });
 });
+
+describe('signed revocation documents (design issue 3)', () => {
+    test('signature verifies under the discovery key; tampering and foreign entities fail', async () => {
+        const { generateKeyPair } = await import('../src/crypto.js');
+        const { pemToJwk } = await import('../src/jwk.js');
+        const { buildDiscoveryDocument } = await import('../src/discovery.js');
+        const { signRevocationDocument, verifyRevocationDocument, addRevokedKey, buildRevocationDocument, checkRevocationFreshness } =
+            await import('../src/revocation.js');
+        const kp = generateKeyPair();
+        const discovery = buildDiscoveryDocument('example.com', 'maker', [pemToJwk(kp.publicKeyPem, 'k1')], [], 2, '2026-01-15T00:00:00Z');
+        const doc = buildRevocationDocument('example.com');
+        addRevokedKey(doc, 'old', 'superseded');
+        assert.doesNotThrow(() => verifyRevocationDocument(doc, discovery));
+        signRevocationDocument(doc, kp.privateKeyPem, 'k1');
+        assert.doesNotThrow(() => verifyRevocationDocument(doc, discovery));
+        assert.doesNotThrow(() => verifyRevocationDocument(JSON.parse(JSON.stringify(doc)), discovery));
+        assert.throws(() => verifyRevocationDocument({ ...doc, revoked_keys: [] }, discovery), /did not verify/);
+        assert.throws(() => verifyRevocationDocument({ ...doc, kid: 'other' }, discovery), /not found/);
+        assert.throws(() => verifyRevocationDocument(buildRevocationDocument('other.com'), discovery), /does not match/);
+        assert.doesNotThrow(() => verifyRevocationDocument(buildRevocationDocument('EXAMPLE.com.'), discovery));
+
+        const fresh = buildRevocationDocument('example.com');
+        assert.doesNotThrow(() => checkRevocationFreshness(fresh, 3600));
+        assert.throws(() => checkRevocationFreshness({ ...fresh, updated_at: new Date(Date.now() - 7200000).toISOString() }, 3600), /stale/);
+        assert.throws(() => checkRevocationFreshness({ ...fresh, updated_at: 'yesterday' }, 3600), /RFC 3339/);
+    });
+});

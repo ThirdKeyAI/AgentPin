@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -135,5 +136,40 @@ func TestBase64URLEncode(t *testing.T) {
 	dec, err := Base64URLDecode("aGVsbG8")
 	if err != nil || string(dec) != "hello" {
 		t.Fatalf("Base64URLDecode roundtrip failed: %v %s", err, dec)
+	}
+}
+
+func rawJWT(payload string) string {
+	header := Base64URLEncode([]byte(`{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"k"}`))
+	return header + "." + Base64URLEncode([]byte(payload)) + ".sig"
+}
+
+// AP-5 / AP-14 / AP-18: missing, mistyped, negative or inconsistent claims
+// are MalformedCredentialError, not silently zero-valued.
+func TestClaimValidation(t *testing.T) {
+	base := `"iss":"example.com","sub":"urn:agentpin:example.com:a","jti":"j","agentpin_version":"0.1","capabilities":[]`
+	cases := []string{
+		`{` + base + `,"iat":1}`,
+		`{` + base + `,"iat":1,"exp":"never"}`,
+		`{` + base + `,"iat":1,"exp":{}}`,
+		`{` + base + `,"iat":-9223372036854775808,"exp":4102444800}`,
+		`{` + base + `,"iat":10,"exp":10}`,
+		`{` + base + `,"iat":10,"exp":5}`,
+		`{` + base + `,"iat":1,"exp":2,"nbf":-1}`,
+		`{"iss":"","sub":"s","jti":"j","agentpin_version":"0.1","capabilities":[],"iat":1,"exp":2}`,
+		`{"iss":"example.com","sub":"s","jti":"j","agentpin_version":"0.2","capabilities":[],"iat":1,"exp":2}`,
+		`{"iss":"example.com","sub":"s","jti":"j","agentpin_version":"0.1","capabilities":"read:*","iat":1,"exp":2}`,
+		`null`,
+		`[]`,
+	}
+	for _, payload := range cases {
+		_, _, _, err := DecodeJWTUnverified(rawJWT(payload))
+		var mce *MalformedCredentialError
+		if err == nil || !errors.As(err, &mce) {
+			t.Errorf("payload %s: got %v, want MalformedCredentialError", payload, err)
+		}
+	}
+	if _, _, _, err := DecodeJWTUnverified(rawJWT(`{` + base + `,"iat":1,"exp":2}`)); err != nil {
+		t.Fatalf("valid payload rejected: %v", err)
 	}
 }

@@ -18,11 +18,10 @@ def _base64url_encode(data: bytes) -> str:
 
 
 def _base64url_decode(s: str) -> bytes:
-    """Base64url decode with padding restoration."""
-    padding = 4 - len(s) % 4
-    if padding != 4:
-        s += "=" * padding
-    return base64.urlsafe_b64decode(s)
+    """Strict base64url decode (no padding, canonical bits); see jwt.base64url_decode."""
+    from .jwt import base64url_decode
+
+    return base64url_decode(s)
 
 
 def pem_to_jwk(public_key_pem: str, kid: str) -> dict:

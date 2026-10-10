@@ -8,6 +8,8 @@ import (
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/a2a"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/crypto"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/discovery"
+	"github.com/ThirdKeyAi/agentpin/go/pkg/jwk"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
 )
 
@@ -59,7 +61,80 @@ func resolverFor(server *httptest.Server) *A2aAgentCardResolver {
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	return &A2aAgentCardResolver{Client: client}
+	return &A2aAgentCardResolver{Client: client, SkipDiscoveryBinding: true}
+}
+
+// resolverForBound is resolverFor with discovery binding enabled.
+func resolverForBound(server *httptest.Server) *A2aAgentCardResolver {
+	r := resolverFor(server)
+	r.SkipDiscoveryBinding = false
+	return r
+}
+
+// serveCardAndDiscovery serves the card at /.well-known/agent-card.json and
+// the discovery document at /.well-known/agent-identity.json.
+func serveCardAndDiscovery(card types.A2aAgentCard, doc *types.DiscoveryDocument) *httptest.Server {
+	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case A2aAgentCardPath:
+			_ = json.NewEncoder(w).Encode(card)
+		case "/.well-known/agent-identity.json":
+			if doc == nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(doc)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func signedCardWithKey(t *testing.T, domain string) (types.A2aAgentCard, *crypto.KeyPair) {
+	t.Helper()
+	kp, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decl := &types.AgentDeclaration{AgentID: "urn:agentpin:" + domain + ":test", Name: "Test Agent",
+		Capabilities: []types.Capability{"read:*"}, Status: types.AgentActive}
+	card, err := a2a.BuildAndSignAgentCard("https://"+domain+"/agent", decl, kp.PrivateKeyPEM, "kid-1",
+		"https://"+domain+"/.well-known/agent-identity.json", a2a.BuildOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return card, kp
+}
+
+// AP-4 / spec §4.10.4 step 5: with binding enabled the card key must be
+// published in the domain's discovery document.
+func TestA2aResolverDiscoveryBinding(t *testing.T) {
+	card, kp := signedCardWithKey(t, "example.com")
+	pub, _ := crypto.LoadPublicKey(kp.PublicKeyPEM)
+	published := discovery.BuildDiscoveryDocument("example.com", types.EntityBoth,
+		[]types.JWK{jwk.VerifyingKeyToJWK(pub, "kid-1")}, nil, 0, "2026-01-15T00:00:00Z")
+	srv := serveCardAndDiscovery(card, &published)
+	defer srv.Close()
+	if _, err := resolverForBound(srv).ResolveDiscovery("example.com"); err != nil {
+		t.Fatalf("published key should bind: %v", err)
+	}
+
+	otherKP, _ := crypto.GenerateKeyPair()
+	otherPub, _ := crypto.LoadPublicKey(otherKP.PublicKeyPEM)
+	unrelated := discovery.BuildDiscoveryDocument("example.com", types.EntityBoth,
+		[]types.JWK{jwk.VerifyingKeyToJWK(otherPub, "other")}, nil, 0, "2026-01-15T00:00:00Z")
+	srv2 := serveCardAndDiscovery(card, &unrelated)
+	defer srv2.Close()
+	if _, err := resolverForBound(srv2).ResolveDiscovery("example.com"); err == nil {
+		t.Fatal("card key not in discovery document must be rejected")
+	}
+
+	srv3 := serveCardAndDiscovery(card, nil)
+	defer srv3.Close()
+	if _, err := resolverForBound(srv3).ResolveDiscovery("example.com"); err == nil {
+		t.Fatal("missing discovery document must be rejected when binding is required")
+	}
 }
 
 // rewriteTransport rewrites the host of every request to the test server's

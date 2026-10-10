@@ -9,7 +9,7 @@
 //! Dependencies needed in your Cargo.toml:
 //!   axum = "0.7"
 //!   tokio = { version = "1", features = ["full"] }
-//!   agentpin = { version = "0.2", features = ["fetch"] }
+//!   agentpin = { version = "0.3", features = ["fetch"] }
 
 use axum::{
     async_trait,
@@ -37,9 +37,18 @@ impl<S: Send + Sync> FromRequestParts<S> for AgentPinCredential {
         let jwt = agentpin::transport::http::extract_credential(header)
             .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
 
-        // In production, you would verify the JWT here:
+        // In production, verify the JWT here. Online (fetches the issuer's
+        // discovery and revocation documents and any delegation attesters):
+        //   let config = agentpin::verification::VerifierConfig::default();
+        //   let result = agentpin::verification::verify_credential(
+        //       &jwt, &mut pin_store, Some("your-domain.example"), &config,
+        //   ).await;
+        // or with a resolver chain (trust bundle, local files, ...):
         //   let resolver = agentpin::resolver::ChainResolver::new(vec![...]);
-        //   let result = agentpin::verification::verify_credential(&jwt, &resolver, &config).await?;
+        //   let result = agentpin::verification::verify_credential_with_resolver(
+        //       &jwt, &resolver, &mut pin_store, Some("your-domain.example"), &config,
+        //   );
+        // and reject the request unless `result.valid`.
 
         Ok(AgentPinCredential(jwt))
     }

@@ -86,3 +86,17 @@ describe('JWT security', () => {
         assert.throws(() => decodeJwtUnverified('only-one-part'));
     });
 });
+
+describe('strict base64url (AP-23)', () => {
+    test('rejects padding, foreign alphabet, whitespace and non-canonical bits', async () => {
+        const { base64urlDecode, base64urlEncode, decodeJwtUnverified } = await import('../src/jwt.js');
+        assert.deepStrictEqual(base64urlDecode('AQID'), Buffer.from([1, 2, 3]));
+        assert.strictEqual(base64urlEncode(Buffer.from([1, 2, 3])), 'AQID');
+        for (const bad of ['AQ==', 'AQI=', 'AQ+D', 'AQ/D', 'AQ ID', 'AQIDA', 'AR', 'AQIE\n', '=']) {
+            assert.throws(() => base64urlDecode(bad), bad);
+        }
+        const header = Buffer.from('{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"k"}').toString('base64url');
+        const payload = Buffer.from('{"iss":"example.com"}').toString('base64url');
+        assert.throws(() => decodeJwtUnverified(`${header}=.${payload}.sig`));
+    });
+});

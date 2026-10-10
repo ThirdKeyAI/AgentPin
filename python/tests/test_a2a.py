@@ -132,3 +132,93 @@ def test_canonicalize_sorts_keys_and_drops_none():
 def test_canonicalize_recurses_into_arrays():
     out = canonicalize_for_signing([{"b": 1, "a": 2}])
     assert out == '[{"a":2,"b":1}]'
+
+
+def test_verify_fails_when_agentpin_endpoint_rewritten():
+    """AP-4: the signature covers agentpin_endpoint."""
+    private_pem, _ = generate_key_pair()
+    card = build_and_sign_agent_card(
+        "https://example.com/agent",
+        _declaration(["read:customers"]),
+        private_pem,
+        "kid-1",
+        "https://example.com/.well-known/agent-identity.json",
+    )
+    card["agentpin"]["agentpin_endpoint"] = "https://bank.example/.well-known/agent-identity.json"
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(card)
+
+
+def test_verify_fails_when_extension_jwk_kid_rewritten():
+    private_pem, _ = generate_key_pair()
+    card = build_and_sign_agent_card(
+        "https://example.com/agent",
+        _declaration(["read:customers"]),
+        private_pem,
+        "kid-1",
+        "https://example.com/.well-known/agent-identity.json",
+    )
+    card["agentpin"]["public_key_jwk"]["kid"] = "kid-2"
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(card)
+
+
+def test_card_signature_is_domain_separated():
+    """AP-1: not a raw signature over the canonical JSON; legacy format rejected."""
+    from agentpin import CTX_AGENTCARD, agent_card_signing_input, sign_data, verify_signature
+
+    private_pem, public_pem = generate_key_pair()
+    card = build_and_sign_agent_card(
+        "https://example.com/agent",
+        _declaration(["read:customers"]),
+        private_pem,
+        "kid-1",
+        "https://example.com/.well-known/agent-identity.json",
+    )
+    input_bytes = agent_card_signing_input(card)
+    assert input_bytes.startswith(CTX_AGENTCARD.encode() + b"\x00")
+    canonical = input_bytes[len(CTX_AGENTCARD) + 1 + 4 :]
+    assert not verify_signature(public_pem, canonical, card["agentpin"]["signature"])
+
+    legacy = canonicalize_for_signing({k: v for k, v in card.items() if k != "agentpin"})
+    forged = dict(card)
+    forged["agentpin"] = dict(card["agentpin"], signature=sign_data(private_pem, legacy.encode()))
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(forged)
+
+
+def test_allowed_domains_empty_list_round_trips_as_restricted():
+    """AP-6: allowed_domains: [] on a card is restricted to nothing, not unrestricted."""
+    from agentpin import AllowedDomains, derive_discovery_from_card
+
+    decl = dict(_declaration(["read:*"]), constraints={"allowed_domains": []})
+    card = build_unsigned_agent_card("https://example.com/agent", decl)
+    assert card["capabilities"]["allowed_domains"] == []
+    assert not AllowedDomains.is_unrestricted(json.loads(json.dumps(card))["capabilities"]["allowed_domains"])
+    private_pem, _ = generate_key_pair()
+    signed = build_and_sign_agent_card(
+        "https://example.com/agent", decl, private_pem, "k", "https://example.com/.well-known/agent-identity.json"
+    )
+    assert derive_discovery_from_card(signed)["agents"][0]["constraints"] == {"allowed_domains": []}
+
+
+
+def test_unknown_fields_are_covered_by_signature():
+    """AP-17: upstream fields are preserved and signed."""
+    private_pem, _ = generate_key_pair()
+    unsigned = dict(
+        build_unsigned_agent_card("https://example.com/agent", _declaration(["read:*"])),
+        provider={"organization": "Example"},
+        documentationUrl="https://example.com/docs",
+    )
+    card = sign_agent_card(unsigned, private_pem, "kid-1", "https://example.com/.well-known/agent-identity.json")
+    parsed = json.loads(json.dumps(card))
+    assert parsed["documentationUrl"] == "https://example.com/docs"
+    verify_agentpin_extension(parsed)
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(dict(parsed, documentationUrl="https://evil.example/docs"))
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(dict(parsed, securitySchemes={"x": 1}))
+    removed = {k: v for k, v in parsed.items() if k != "provider"}
+    with pytest.raises(Exception, match="did not verify"):
+        verify_agentpin_extension(removed)

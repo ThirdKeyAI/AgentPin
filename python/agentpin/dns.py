@@ -18,7 +18,6 @@ from typing import Optional
 from .jwk import jwk_thumbprint
 from .types import AgentPinError, ErrorCode
 
-
 VERSION = "agentpin1"
 FP_PREFIX = "sha256:"
 
@@ -126,8 +125,8 @@ def fetch_dns_txt(domain: str) -> Optional[dict]:
     contains ``v=agentpin1`` is used.
     """
     try:
-        import dns.resolver
         import dns.exception
+        import dns.resolver
     except ImportError as exc:  # pragma: no cover - optional dep
         raise AgentPinError(
             ErrorCode.DISCOVERY_FETCH_FAILED,

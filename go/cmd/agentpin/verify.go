@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ThirdKeyAi/agentpin/go/pkg/pinning"
@@ -15,7 +16,8 @@ import (
 
 func runVerify(args []string) error {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
-	credentialArg := fs.String("credential", "", "JWT credential string or file path (required)")
+	credentialArg := fs.String("credential", "", "JWT credential string (literal; use --credential-file to read from a file)")
+	credentialFile := fs.String("credential-file", "", "Path to a file containing the JWT credential")
 	discoveryPath := fs.String("discovery", "", "Path to discovery document JSON file (offline)")
 	revocationPath := fs.String("revocation", "", "Path to revocation document JSON file (offline)")
 	pinStorePath := fs.String("pin-store", "", "Path to pin store JSON file")
@@ -26,13 +28,15 @@ func runVerify(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *credentialArg == "" {
-		return fmt.Errorf("--credential is required")
+	// --credential is always literal and --credential-file always a path:
+	// the old "path if a file by that name exists" rule made the meaning of
+	// an argument depend on the filesystem (AP-23).
+	if (*credentialArg == "") == (*credentialFile == "") {
+		return fmt.Errorf("exactly one of --credential or --credential-file is required")
 	}
-
 	cred := *credentialArg
-	if _, err := os.Stat(cred); err == nil {
-		data, err := os.ReadFile(cred)
+	if *credentialFile != "" {
+		data, err := os.ReadFile(*credentialFile)
 		if err != nil {
 			return err
 		}
@@ -93,10 +97,15 @@ func runVerify(args []string) error {
 	}
 	fmt.Println(string(out))
 
+	// Persist the pin store atomically (temp file + rename) with restrictive
+	// permissions; a write failure is reported, not ignored (AP-16).
 	if *pinStorePath != "" {
 		data, err := pinStore.MarshalJSON()
-		if err == nil {
-			_ = os.WriteFile(*pinStorePath, data, 0o644)
+		if err != nil {
+			return fmt.Errorf("serialize pin store: %w", err)
+		}
+		if err := writeAtomic(*pinStorePath, data, 0o600); err != nil {
+			return fmt.Errorf("persist pin store: %w", err)
 		}
 	}
 
@@ -129,4 +138,39 @@ func buildResolver(trustBundlePath, discoveryDir string) (resolver.DiscoveryReso
 		return resolvers[0], nil
 	}
 	return resolver.NewChainResolver(resolvers), nil
+}
+
+// writeAtomic writes contents to path via a sibling temp file and rename.
+func writeAtomic(path string, contents []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if _, err := tmp.Write(contents); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
 }

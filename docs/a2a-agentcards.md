@@ -124,10 +124,10 @@ The output is a serialisable AgentCard you can drop straight into your A2A `.wel
 
 `verify_agentpin_extension(card)` (Python) / `verifyAgentpinExtension(card)` (JS) / `a2a.VerifyAgentpinExtension(&card)` (Go) / `agentpin::a2a::verify_agentpin_extension(&card)` (Rust) check:
 
-1. The card has an `agentpin` extension.
-2. The canonical bytes of the card-with-extension-cleared verify against `agentpin.public_key_jwk` and `agentpin.signature`.
+1. The card has an `agentpin` extension whose `agentpin_endpoint` is an `https://` URL with a domain host.
+2. The domain-separated canonical bytes of the card — every field including unknown upstream ones, with `agentpin` replaced by `{agentpin_endpoint, public_key_jwk}` and wrapped in the `agentpin-agentcard-v1` context — verify against `agentpin.public_key_jwk` and `agentpin.signature`. Re-pointing `agentpin_endpoint` at another domain therefore breaks the signature.
 
-**Verification of the extension alone is not enough to trust the card.** It only proves the card has not been tampered with relative to the key inside its own extension. The full trust chain requires also confirming that `agentpin.public_key_jwk` is one of the keys in the entity's AgentPin discovery document at `agentpin.agentpin_endpoint` (i.e. that the same key is published independently as part of the entity's `.well-known` identity). The two new resolvers below take care of this for you.
+**Verification of the extension alone is not enough to trust the card.** It only proves the card has not been tampered with relative to the key inside its own extension. The full trust chain requires also confirming that `agentpin.public_key_jwk` is one of the keys in the entity's AgentPin discovery document at `agentpin.agentpin_endpoint` (spec §4.10.4 step 5). The two resolvers below enforce this: `A2aAgentCardResolver` fetches the discovery document and checks the key by thumbprint, and `LocalAgentCardStore` requires a trust anchor at construction.
 
 ---
 
@@ -140,14 +140,21 @@ AgentPin v0.3 ships two new resolvers that turn an AgentCard into a usable `Disc
 For coordinators that receive AgentCard JSON *inline* (not by URL) — e.g. Symbiont's external-agent registration flow:
 
 ```python
-from agentpin import LocalAgentCardStore
+from agentpin import LocalAgentCardStore, extension_key_thumbprint
 
-store = LocalAgentCardStore()
-store.register(card)                                # verifies signature, derives discovery
+# Anchor the store on the key thumbprints the operator has verified out of band ...
+store = LocalAgentCardStore(trusted_thumbprints=[extension_key_thumbprint(card["agentpin"])])
+# ... or on a resolver whose discovery document for the domain must publish the card key:
+#     store = LocalAgentCardStore(resolver=bundle_resolver)
+# ... or opt out explicitly when the registration channel itself authenticates the registrant:
+#     store = LocalAgentCardStore(unanchored=True)
+
+store.register(card)                                # verifies signature + trust anchor, derives discovery
+store.register_for_domain(card, "tarnover.com")     # additionally binds the card to the authenticated domain
 doc = store.resolve_discovery("tarnover.com")       # returns the derived DiscoveryDocument
 ```
 
-The store verifies the extension signature at `register` time and pre-derives a `DiscoveryDocument` so the rest of the AgentPin verification stack (TOFU pinning, revocation, capability validation) runs unchanged. Re-registering the same domain replaces the prior entry, which makes key rotation a single `register` call.
+A store built with no arguments has an empty allowlist and refuses every registration until `trust_thumbprint(...)` is called — an AgentCard is self-certifying, so without an anchor anyone who could call `register` could assert any domain. The store verifies the extension signature at `register` time and pre-derives a `DiscoveryDocument` so the rest of the AgentPin verification stack (TOFU pinning, revocation, capability validation) runs unchanged. Re-registering the same domain replaces the prior entry, which makes key rotation a single `register` call.
 
 ### `A2aAgentCardResolver` — HTTPS pull
 
@@ -160,7 +167,7 @@ const resolver = new A2aAgentCardResolver();
 const doc = await resolver.resolveDiscovery('tarnover.com');
 ```
 
-This fetches `https://tarnover.com/.well-known/agent-card.json`, verifies the extension, cross-checks that the embedded `agentpin_endpoint` host matches the fetched domain, and returns a derived `DiscoveryDocument`. The original card is still accessible via `resolver.lastCard('tarnover.com')` if you need both shapes.
+This fetches `https://tarnover.com/.well-known/agent-card.json` (no redirects, 10 s timeout, 1 MiB cap), verifies the extension, cross-checks that the embedded `agentpin_endpoint` host matches the fetched domain, then fetches `https://tarnover.com/.well-known/agent-identity.json` and requires the card key to be published there by thumbprint (spec §4.10.4 step 5) before returning a derived `DiscoveryDocument`. Pass `{ requireDiscoveryBinding: false }` (JS), `require_discovery_binding=False` (Python), `SkipDiscoveryBinding: true` (Go) or `.with_discovery_binding(false)` (Rust) only when another channel establishes the card's provenance. The original card is still accessible via `resolver.lastCard('tarnover.com')` if you need both shapes.
 
 ### Composing with the standard resolver chain
 
@@ -194,7 +201,7 @@ The capability *taxonomy* itself (see [docs/cli-guide.md](cli-guide.md) and §10
 
 If your `AgentDeclaration.constraints.allowed_domains` is set, the builder copies it into `capabilities.allowed_domains` on the AgentCard. This is the same allow-list the AgentPin verifier already enforces at credential-verification time (§6.6); copying it onto the AgentCard makes it visible to A2A-native consumers and to the `AllowedDomains` intersection helper that SchemaPin v1.4 `A2aVerificationContext` calls into.
 
-The convention is: **empty `allowed_domains` means *unrestricted*** (all domains trusted). The builder follows this convention by *omitting* `allowed_domains` entirely from the emitted JSON when the agent is unrestricted — matching the Rust SDK's serde behaviour and keeping v0.2-style AgentCards (which never had this field) round-tripping unchanged.
+`allowed_domains` is a tri-state: an **absent** field means *unrestricted* (all domains trusted), a present list restricts the agent to the listed literals and `*.` patterns, and an **empty list** means *restricted to nothing*. The builder omits the field entirely when the agent is unrestricted (keeping v0.2-style AgentCards, which never had this field, round-tripping unchanged) and emits `[]` when the constraint is present but empty. The intersection of two disjoint allow-lists is `[]`, which allows nothing — it is never re-interpreted as unrestricted.
 
 ---
 

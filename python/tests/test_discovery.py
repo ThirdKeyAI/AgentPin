@@ -68,3 +68,47 @@ class TestFindAgentById:
     def test_not_found(self):
         doc = make_test_doc()
         assert find_agent_by_id(doc, "urn:agentpin:example.com:other") is None
+
+
+def _base_doc():
+    return {
+        "agentpin_version": "0.1",
+        "entity": "example.com",
+        "entity_type": "maker",
+        "public_keys": [{"kid": "k", "kty": "EC", "crv": "P-256", "x": "x", "y": "y", "use": "sig"}],
+        "agents": [],
+        "max_delegation_depth": 2,
+        "updated_at": "2026-01-15T00:00:00Z",
+    }
+
+
+def test_validate_entity_normalized():
+    """AP-3: entity comparison is case-insensitive and ignores a trailing dot."""
+    doc = dict(_base_doc(), entity="EXAMPLE.com.")
+    validate_discovery_document(doc, "example.com")
+    validate_discovery_document(doc, "Example.COM")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "http://169.254.169.254/latest/meta-data/",
+        "https://169.254.169.254/latest/meta-data/",
+        "https://other.com/.well-known/agent-identity-revocations.json",
+        "http://example.com/.well-known/agent-identity-revocations.json",
+        "https://example.com:8443/revocations.json",
+        "https://user@example.com/revocations.json",
+    ],
+)
+def test_validate_rejects_foreign_or_plaintext_endpoints(bad):
+    """AP-12: revocation_endpoint / a2a_endpoint must be https on the entity's own host."""
+    with pytest.raises(AgentPinError):
+        validate_discovery_document(dict(_base_doc(), revocation_endpoint=bad), "example.com")
+    with pytest.raises(AgentPinError):
+        validate_discovery_document(dict(_base_doc(), a2a_endpoint=bad), "example.com")
+
+
+def test_validate_accepts_same_host_a2a_endpoint():
+    validate_discovery_document(
+        dict(_base_doc(), a2a_endpoint="https://EXAMPLE.com/.well-known/agent-card.json"), "example.com"
+    )

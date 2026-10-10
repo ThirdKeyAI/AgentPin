@@ -7,13 +7,16 @@
  * public key in JWK form, and a detached ECDSA P-256 signature over the
  * canonical bytes of the rest of the AgentCard.
  *
- * Canonicalisation: the signing input is the AgentCard with its `agentpin`
- * field cleared, serialised as JSON with object keys sorted alphabetically
- * (matches the Rust `serde_json::to_value` + `BTreeMap` trick).
+ * Canonicalization: the signing input is the AgentCard with its `agentpin`
+ * field replaced by `{ agentpin_endpoint, public_key_jwk }` (signature
+ * cleared), serialized as sorted-key compact JSON and wrapped in the
+ * `agentpin-agentcard-v1` signing context. The endpoint and key are
+ * therefore covered by the signature (AP-4) and card signatures are disjoint
+ * from every other AgentPin signature (AP-1).
  */
 
 import { createPublicKey } from 'crypto';
-import { signData, verifySignature } from './crypto.js';
+import { signData, verifySignature, domainSeparatedInput, CTX_AGENTCARD } from './crypto.js';
 import { pemToJwk, jwkToPem, jwkThumbprint } from './jwk.js';
 import { AllowedDomains } from './discovery.js';
 import { AgentPinError, ErrorCode } from './types.js';
@@ -93,12 +96,12 @@ export function signAgentCard(unsignedCard, privateKeyPem, kid, agentpinEndpoint
             'signAgentCard requires agentpinEndpoint'
         );
     }
-    const canonical = canonicalizeForSigning({ ...unsignedCard, agentpin: undefined });
-    const signature = signData(privateKeyPem, Buffer.from(canonical, 'utf8'));
-
     const publicKeyPem = createPublicKey(privateKeyPem)
         .export({ type: 'spki', format: 'pem' });
     const publicKeyJwk = pemToJwk(publicKeyPem, kid);
+
+    const input = agentCardSigningInputFor(unsignedCard, agentpinEndpoint, publicKeyJwk);
+    const signature = signData(privateKeyPem, input);
 
     return {
         ...unsignedCard,
@@ -147,10 +150,9 @@ export function verifyAgentpinExtension(card) {
             'AgentCard has no agentpin extension'
         );
     }
-    const withoutExt = { ...card, agentpin: undefined };
-    const canonical = canonicalizeForSigning(withoutExt);
+    const input = agentCardSigningInput(card);
     const publicKeyPem = jwkToPem(ext.public_key_jwk);
-    const ok = verifySignature(publicKeyPem, Buffer.from(canonical, 'utf8'), ext.signature);
+    const ok = verifySignature(publicKeyPem, input, ext.signature);
     if (!ok) {
         throw new AgentPinError(
             ErrorCode.DISCOVERY_INVALID,
@@ -172,8 +174,31 @@ export function extensionKeyThumbprint(extension) {
 }
 
 // ---------------------------------------------------------------------------
-// Canonicalisation
+// Canonicalization
 // ---------------------------------------------------------------------------
+
+/**
+ * The domain-separated bytes that `card.agentpin.signature` must verify
+ * against, using the endpoint and JWK from the card's own extension.
+ * @param {object} card
+ * @returns {Buffer}
+ */
+export function agentCardSigningInput(card) {
+    const ext = card && card.agentpin;
+    if (!ext) {
+        throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, 'AgentCard has no agentpin extension');
+    }
+    return agentCardSigningInputFor(card, ext.agentpin_endpoint, ext.public_key_jwk);
+}
+
+function agentCardSigningInputFor(card, agentpinEndpoint, publicKeyJwk) {
+    const forSigning = {
+        ...card,
+        agentpin: { agentpin_endpoint: agentpinEndpoint, public_key_jwk: publicKeyJwk },
+    };
+    const canonical = canonicalizeForSigning(forSigning);
+    return domainSeparatedInput(CTX_AGENTCARD, [Buffer.from(canonical, 'utf8')]);
+}
 
 /**
  * Canonicalise a JSON-able value with object keys sorted alphabetically and

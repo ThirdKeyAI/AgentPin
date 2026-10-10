@@ -118,9 +118,64 @@ func LoadPublicKey(pemStr string) (*ecdsa.PublicKey, error) {
 	return ec, nil
 }
 
+// Domain-separated signing (protocol v0.4).
+//
+// Every object AgentPin signs other than the credential JWT goes through
+// DomainSeparatedInput, which prefixes a fixed context label and
+// length-prefixes each field. The JWT keeps the RFC 7515 "header.payload"
+// signing input, whose alphabet (base64url plus '.') never contains the NUL
+// byte that terminates every context label, so no signature produced for
+// one object type can be replayed as another.
+const (
+	// CtxResponse is the context label for challenge responses.
+	CtxResponse = "agentpin-response-v1"
+	// CtxAttestation is the context label for delegation attestations.
+	CtxAttestation = "agentpin-attestation-v1"
+	// CtxAgentCard is the context label for A2A AgentCard signatures.
+	CtxAgentCard = "agentpin-agentcard-v1"
+	// CtxRevocation is the context label for signed revocation documents.
+	CtxRevocation = "agentpin-revocation-v1"
+	// CtxBundle is the context label for signed trust bundles.
+	CtxBundle = "agentpin-bundle-v1"
+)
+
+// DomainSeparatedInput builds the signing input for context over fields:
+// context || 0x00 || (u32_be(len(field)) || field)*. Byte-identical to the
+// Rust, JavaScript and Python SDKs.
+func DomainSeparatedInput(context string, fields ...[]byte) []byte {
+	total := len(context) + 1
+	for _, f := range fields {
+		total += 4 + len(f)
+	}
+	out := make([]byte, 0, total)
+	out = append(out, context...)
+	out = append(out, 0)
+	for _, f := range fields {
+		n := uint32(len(f))
+		out = append(out, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+		out = append(out, f...)
+	}
+	return out
+}
+
+// SignWithContext signs fields under context with priv. Returns the
+// standard-base64 DER signature.
+func SignWithContext(priv *ecdsa.PrivateKey, context string, fields ...[]byte) (string, error) {
+	return SignBytes(priv, DomainSeparatedInput(context, fields...))
+}
+
+// VerifyWithContext verifies a signature produced by SignWithContext.
+func VerifyWithContext(pub *ecdsa.PublicKey, context string, sigB64 string, fields ...[]byte) (bool, error) {
+	return VerifyBytes(pub, DomainSeparatedInput(context, fields...), sigB64)
+}
+
 // SignBytes signs raw bytes with priv and returns the DER-encoded signature
 // base64-encoded (standard, padded — matches the Rust `sign_data`/`sign_bytes`
 // helpers).
+//
+// This is a low-level primitive. Protocol objects MUST be signed through
+// SignWithContext (or the JWT encoder) so signatures over different object
+// types can never be confused; never pass caller-supplied bytes here.
 func SignBytes(priv *ecdsa.PrivateKey, data []byte) (string, error) {
 	der, err := ecdsa.SignASN1(rand.Reader, priv, hash(data))
 	if err != nil {

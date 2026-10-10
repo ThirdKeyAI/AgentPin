@@ -71,6 +71,7 @@ class ErrorCode(str, Enum):
     AUDIENCE_MISMATCH = "AUDIENCE_MISMATCH"
     ALGORITHM_REJECTED = "ALGORITHM_REJECTED"
     KEY_PIN_MISMATCH = "KEY_PIN_MISMATCH"
+    MALFORMED_CREDENTIAL = "MALFORMED_CREDENTIAL"
 
 
 class AgentPinError(Exception):
@@ -231,3 +232,18 @@ class VerificationResult:
 class VerifierConfig:
     clock_skew_secs: int = 60
     max_ttl_secs: int = 86400
+    #: Reject unsigned revocation documents (signed ones are always verified).
+    require_signed_revocation: bool = False
+    #: When set, reject revocation documents older than this many seconds.
+    revocation_max_age_secs: Optional[int] = None
+    #: When True (default), a credential carrying a delegation_chain is
+    #: rejected with DELEGATION_INVALID unless every attestation was verified
+    #: against the attester's discovery document (spec §6.1 step 10). Set to
+    #: False only to accept unverified chains, which are then reported with
+    #: delegation_verified=False and a warning (AP-2).
+    require_delegation_verification: bool = True
+    #: When True (default), every capability in the credential and in the
+    #: matched agent declaration must satisfy the spec §10 taxonomy
+    #: (action:resource, core actions or reverse-domain custom actions).
+    #: admin:* is rejected regardless of this setting (spec §10.3).
+    strict_capabilities: bool = True

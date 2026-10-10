@@ -34,6 +34,7 @@ const (
 	ErrAudienceMismatch        ErrorCode = "AUDIENCE_MISMATCH"
 	ErrAlgorithmRejected       ErrorCode = "ALGORITHM_REJECTED"
 	ErrKeyPinMismatch          ErrorCode = "KEY_PIN_MISMATCH"
+	ErrMalformedCredential     ErrorCode = "MALFORMED_CREDENTIAL"
 )
 
 // VerificationError is returned by verification helpers that need to surface

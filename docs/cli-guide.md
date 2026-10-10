@@ -120,6 +120,8 @@ curl -H "Authorization: Bearer $CREDENTIAL" https://api.verifier.com/endpoint
 
 # Or verify it immediately
 agentpin verify --credential "$CREDENTIAL" --discovery ./agent-identity.json
+# or read the JWT from a file (the --credential value is always taken literally):
+agentpin verify --credential-file ./credential.jwt --discovery ./agent-identity.json
 ```
 
 ---
@@ -162,9 +164,9 @@ agentpin verify --credential <jwt>
   "agent_id": "urn:agentpin:example.com:scout",
   "issuer": "example.com",
   "capabilities": ["read:data", "write:reports"],
-  "key_pinning": "first_use",
-  "delegation_chain_valid": true,
-  "expires_at": "2026-02-15T13:00:00Z"
+  "constraints": { "allowed_domains": ["*.client-corp.com"] },
+  "key_pinning": { "status": "first_use", "first_seen": "2026-02-15T12:00:00Z" },
+  "warnings": []
 }
 ```
 
@@ -173,8 +175,9 @@ agentpin verify --credential <jwt>
 ```json
 {
   "valid": false,
-  "error_code": "expired",
-  "error_message": "Credential expired at 2026-02-15T12:00:00Z"
+  "error_code": "CREDENTIAL_EXPIRED",
+  "error_message": "Credential has expired",
+  "warnings": []
 }
 ```
 

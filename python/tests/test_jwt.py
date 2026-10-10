@@ -79,3 +79,23 @@ class TestJwtSecurity:
             decode_jwt_unverified("not.a.jwt.token")
         with pytest.raises(ValueError):
             decode_jwt_unverified("only-one-part")
+
+
+def test_strict_base64url():
+    """AP-23: padding, foreign alphabet, whitespace and non-canonical bits are rejected."""
+    import base64
+
+    import pytest
+
+    from agentpin.jwt import base64url_decode, base64url_encode, decode_jwt_unverified
+
+    assert base64url_decode("AQID") == b"\x01\x02\x03"
+    assert base64url_encode(b"\x01\x02\x03") == "AQID"
+    for bad in ["AQ==", "AQI=", "AQ+D", "AQ/D", "AQ ID", "AQIDA", "AR", "AQIE\n", "="]:
+        with pytest.raises(ValueError):
+            base64url_decode(bad)
+    header_json = b'{"alg":"ES256","typ":"agentpin-credential+jwt","kid":"k"}'
+    header = base64.urlsafe_b64encode(header_json).rstrip(b"=").decode()
+    payload = base64.urlsafe_b64encode(b'{"iss":"example.com"}').rstrip(b"=").decode()
+    with pytest.raises(ValueError):
+        decode_jwt_unverified(f"{header}=.{payload}.sig")

@@ -1,3 +1,4 @@
+use crate::domain::{normalize_domain, validate_https_url_for_domain};
 use crate::error::Error;
 use crate::jwk::Jwk;
 use crate::types::discovery::{AgentDeclaration, DiscoveryDocument, EntityType};
@@ -40,7 +41,11 @@ pub fn validate_discovery_document(
             doc.agentpin_version
         )));
     }
-    if doc.entity != expected_entity {
+    // Compare entity and the expected domain in normalized form (AP-3).
+    let expected = normalize_domain(expected_entity)?;
+    let entity = normalize_domain(&doc.entity)
+        .map_err(|e| Error::Discovery(format!("Invalid entity: {}", e)))?;
+    if entity != expected {
         return Err(Error::Verification {
             code: crate::error::ErrorCode::DomainMismatch,
             message: format!(
@@ -48,6 +53,16 @@ pub fn validate_discovery_document(
                 doc.entity, expected_entity
             ),
         });
+    }
+    // Endpoints the verifier may fetch must be https on the entity's own
+    // host (AP-12; spec §17 for a2a_endpoint).
+    if let Some(ref endpoint) = doc.revocation_endpoint {
+        validate_https_url_for_domain(endpoint, &entity)
+            .map_err(|e| Error::Discovery(format!("Invalid revocation_endpoint: {}", e)))?;
+    }
+    if let Some(ref endpoint) = doc.a2a_endpoint {
+        validate_https_url_for_domain(endpoint, &entity)
+            .map_err(|e| Error::Discovery(format!("Invalid a2a_endpoint: {}", e)))?;
     }
     if doc.public_keys.is_empty() {
         return Err(Error::Discovery(
@@ -76,42 +91,29 @@ pub fn find_agent_by_id<'a>(
 }
 
 /// Fetch a discovery document from a domain over HTTPS.
+///
+/// No redirects, 10 s timeout, 1 MiB body cap, JSON content type required
+/// (see [`crate::net`]).
 #[cfg(feature = "fetch")]
 pub async fn fetch_discovery_document(domain: &str) -> Result<DiscoveryDocument, Error> {
+    fetch_discovery_document_with(domain, &crate::net::FetchOptions::default()).await
+}
+
+/// [`fetch_discovery_document`] with explicit fetch options.
+#[cfg(feature = "fetch")]
+pub async fn fetch_discovery_document_with(
+    domain: &str,
+    opts: &crate::net::FetchOptions,
+) -> Result<DiscoveryDocument, Error> {
+    let domain = normalize_domain(domain)?;
     let url = format!("https://{}/.well-known/agent-identity.json", domain);
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| Error::Discovery(e.to_string()))?;
-
-    let resp = client
-        .get(&url)
-        .send()
+    let body = crate::net::fetch_json_bounded(&url, opts)
         .await
-        .map_err(|e| Error::Discovery(format!("Failed to fetch {}: {}", url, e)))?;
-
-    if resp.status().is_redirection() {
-        return Err(Error::Discovery(format!(
-            "Redirect detected fetching {} (status {}). Redirects are not allowed.",
-            url,
-            resp.status()
-        )));
-    }
-
-    if !resp.status().is_success() {
-        return Err(Error::Discovery(format!(
-            "HTTP {} fetching {}",
-            resp.status(),
-            url
-        )));
-    }
-
-    let doc: DiscoveryDocument = resp
-        .json()
-        .await
-        .map_err(|e| Error::Discovery(format!("Invalid JSON from {}: {}", url, e)))?;
-
-    validate_discovery_document(&doc, domain)?;
+        .map_err(|e| Error::Discovery(e.to_string()))?
+        .ok_or_else(|| Error::Discovery(format!("HTTP 404 fetching {}", url)))?;
+    let doc: DiscoveryDocument = serde_json::from_slice(&body)
+        .map_err(|_| Error::Discovery(format!("Invalid JSON from {}", url)))?;
+    validate_discovery_document(&doc, &domain)?;
     Ok(doc)
 }
 
@@ -163,6 +165,47 @@ mod tests {
     fn test_validate_domain_mismatch() {
         let doc = make_test_doc();
         assert!(validate_discovery_document(&doc, "other.com").is_err());
+    }
+
+    /// AP-3: entity comparison is case-insensitive and ignores a trailing dot.
+    #[test]
+    fn test_validate_entity_normalized() {
+        let mut doc = make_test_doc();
+        doc.entity = "EXAMPLE.com.".to_string();
+        assert!(validate_discovery_document(&doc, "example.com").is_ok());
+        assert!(validate_discovery_document(&doc, "Example.COM").is_ok());
+    }
+
+    /// AP-12: revocation_endpoint / a2a_endpoint must be https on the
+    /// entity's own host.
+    #[test]
+    fn test_validate_rejects_foreign_or_plaintext_endpoints() {
+        for bad in [
+            "http://169.254.169.254/latest/meta-data/",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://other.com/.well-known/agent-identity-revocations.json",
+            "http://example.com/.well-known/agent-identity-revocations.json",
+            "https://example.com:8443/revocations.json",
+            "https://user@example.com/revocations.json",
+        ] {
+            let mut doc = make_test_doc();
+            doc.revocation_endpoint = Some(bad.to_string());
+            assert!(
+                validate_discovery_document(&doc, "example.com").is_err(),
+                "revocation_endpoint {:?} should be rejected",
+                bad
+            );
+            let mut doc = make_test_doc();
+            doc.a2a_endpoint = Some(bad.to_string());
+            assert!(
+                validate_discovery_document(&doc, "example.com").is_err(),
+                "a2a_endpoint {:?} should be rejected",
+                bad
+            );
+        }
+        let mut doc = make_test_doc();
+        doc.a2a_endpoint = Some("https://EXAMPLE.com/.well-known/agent-card.json".to_string());
+        assert!(validate_discovery_document(&doc, "example.com").is_ok());
     }
 
     #[test]

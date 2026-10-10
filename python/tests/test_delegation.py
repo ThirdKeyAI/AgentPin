@@ -62,3 +62,55 @@ class TestVerifyChainDepth:
     def test_exceeding_depth(self):
         with pytest.raises(AgentPinError, match="exceeds"):
             verify_chain_depth(3, [2, 3])
+
+
+class TestAttestationBinding:
+    """Design issue 7 / AP-1 regression tests."""
+
+    def test_bound_to_kid(self):
+        priv, pub = generate_key_pair()
+        caps = [Capability("read:data")]
+        att = create_attestation(priv, "kid-1", "maker.com", DelegationRole.MAKER, "a", "deployer.com", "da", caps)
+        att["kid"] = "kid-2"
+        with pytest.raises(AgentPinError, match="failed"):
+            verify_attestation(att, pub, "deployer.com", "da", caps)
+
+    def test_expiry_enforced_and_signed(self):
+        import time
+
+        priv, pub = generate_key_pair()
+        caps = [Capability("read:data")]
+        now = int(time.time())
+        fresh = create_attestation(
+            priv, "k", "maker.com", DelegationRole.MAKER, "a", "deployer.com", "da", caps, exp=now + 3600
+        )
+        verify_attestation(fresh, pub, "deployer.com", "da", caps)
+        expired = create_attestation(
+            priv, "k", "maker.com", DelegationRole.MAKER, "a", "deployer.com", "da", caps, exp=now - 10
+        )
+        with pytest.raises(AgentPinError, match="expired"):
+            verify_attestation(expired, pub, "deployer.com", "da", caps)
+        stripped = {k: v for k, v in fresh.items() if k != "exp"}
+        with pytest.raises(AgentPinError, match="failed"):
+            verify_attestation(stripped, pub, "deployer.com", "da", caps)
+
+    def test_legacy_pipe_format_rejected(self):
+        from agentpin.capability import capabilities_hash
+        from agentpin.crypto import sign_data
+
+        priv, pub = generate_key_pair()
+        caps = [Capability("read:data")]
+        legacy = f"maker.com|maker|a|deployer.com|da|{capabilities_hash(caps)}"
+        att = {
+            "domain": "maker.com",
+            "role": "maker",
+            "agent_id": "a",
+            "kid": "k",
+            "attestation": sign_data(priv, legacy.encode()),
+        }
+        with pytest.raises(AgentPinError, match="failed"):
+            verify_attestation(att, pub, "deployer.com", "da", caps)
+
+    def test_chain_depth_empty_list_is_zero(self):
+        with pytest.raises(AgentPinError, match="exceeds"):
+            verify_chain_depth(1, [])

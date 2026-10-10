@@ -48,6 +48,27 @@ describe('AllowedDomains', () => {
     it('fromConstraints returns unrestricted for missing fields', () => {
         assert.ok(AllowedDomains.isUnrestricted(AllowedDomains.fromConstraints({})));
         assert.ok(AllowedDomains.isUnrestricted(AllowedDomains.fromConstraints(null)));
+        // AP-6: a present-but-empty list is restricted to nothing.
+        assert.ok(!AllowedDomains.isUnrestricted(AllowedDomains.fromConstraints({ allowed_domains: [] })));
+    });
+
+    // AP-6: disjoint allow-lists intersect to "restricted to nothing".
+    it('intersect of disjoint lists allows nothing', () => {
+        const inter = AllowedDomains.intersect(['a.com'], ['b.com']);
+        assert.deepEqual(inter, []);
+        assert.ok(!AllowedDomains.isUnrestricted(inter));
+        assert.ok(!AllowedDomains.allows(inter, 'a.com'));
+        assert.ok(!AllowedDomains.allows(inter, 'anything.com'));
+        assert.ok(!AllowedDomains.allows([], 'x.com'));
+    });
+
+    // AP-6: allows and intersect use the §5.5 pattern rules.
+    it('matches patterns', () => {
+        assert.ok(AllowedDomains.allows(['*.corp.com'], 'api.corp.com'));
+        assert.ok(!AllowedDomains.allows(['*.corp.com'], 'corp.com'));
+        assert.ok(!AllowedDomains.allows(['*.corp.com'], 'evil-corp.com'));
+        assert.deepEqual(AllowedDomains.intersect(['*.corp.com'], ['api.corp.com']), ['api.corp.com']);
+        assert.deepEqual(AllowedDomains.intersect(['api.corp.com'], ['*.corp.com']), ['api.corp.com']);
     });
 });
 

@@ -74,3 +74,29 @@ describe('findAgentById', () => {
         assert.strictEqual(findAgentById(doc, 'urn:agentpin:example.com:other'), null);
     });
 });
+
+describe('discovery validation hardening (AP-3, AP-12)', () => {
+    const base = () => ({
+        agentpin_version: '0.1', entity: 'example.com', entity_type: 'maker',
+        public_keys: [{ kid: 'k', kty: 'EC', crv: 'P-256', x: 'x', y: 'y', use: 'sig' }],
+        agents: [], max_delegation_depth: 2, updated_at: '2026-01-15T00:00:00Z',
+    });
+    test('entity comparison is normalized', () => {
+        const doc = { ...base(), entity: 'EXAMPLE.com.' };
+        assert.doesNotThrow(() => validateDiscoveryDocument(doc, 'example.com'));
+        assert.doesNotThrow(() => validateDiscoveryDocument(doc, 'Example.COM'));
+    });
+    test('foreign or plaintext endpoints are rejected', () => {
+        const bad = [
+            'http://169.254.169.254/latest/meta-data/', 'https://169.254.169.254/latest/meta-data/',
+            'https://other.com/.well-known/agent-identity-revocations.json',
+            'http://example.com/.well-known/agent-identity-revocations.json',
+            'https://example.com:8443/revocations.json', 'https://user@example.com/revocations.json',
+        ];
+        for (const b of bad) {
+            assert.throws(() => validateDiscoveryDocument({ ...base(), revocation_endpoint: b }, 'example.com'), b);
+            assert.throws(() => validateDiscoveryDocument({ ...base(), a2a_endpoint: b }, 'example.com'), b);
+        }
+        assert.doesNotThrow(() => validateDiscoveryDocument({ ...base(), a2a_endpoint: 'https://EXAMPLE.com/.well-known/agent-card.json' }, 'example.com'));
+    });
+});

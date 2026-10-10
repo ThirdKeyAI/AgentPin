@@ -4,7 +4,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { KeyPinStore, PinningResult, checkPinning } from '../src/pinning.js';
+import { KeyPinStore, PinningResult, checkPinning, checkPinningSet } from '../src/pinning.js';
 
 function makeTestJwk(kid, x) {
     return {
@@ -83,5 +83,53 @@ describe('checkPinning', () => {
 
         const jwk2 = makeTestJwk('key-2', 'x-value-2');
         assert.throws(() => checkPinning(store, 'example.com', jwk2), /changed/i);
+    });
+});
+
+describe('pin key normalization (AP-3)', () => {
+    test('case variants share one pin set', async () => {
+        const { KeyPinStore, PinningResult } = await import('../src/pinning.js');
+        const store = new KeyPinStore();
+        const j1 = { kid: 'k1', kty: 'EC', crv: 'P-256', x: 'x1', y: 'y' };
+        const j2 = { kid: 'k2', kty: 'EC', crv: 'P-256', x: 'x2', y: 'y' };
+        assert.strictEqual(store.checkAndPin('example.com', j1), PinningResult.FIRST_USE);
+        assert.strictEqual(store.checkAndPin('EXAMPLE.COM', j1), PinningResult.MATCHED);
+        assert.strictEqual(store.checkAndPin('Example.Com.', j2), PinningResult.CHANGED);
+        assert.ok(store.getDomain('EXAMPLE.COM'));
+        const loaded = KeyPinStore.fromJson(JSON.stringify([
+            { domain: 'EXAMPLE.COM', pinned_keys: [{ kid: 'k', public_key_hash: 'h1', first_seen: 't', last_seen: 't', trust_level: 'tofu' }] },
+            { domain: 'example.com', pinned_keys: [{ kid: 'k2', public_key_hash: 'h2', first_seen: 't', last_seen: 't', trust_level: 'tofu' }] },
+        ]));
+        assert.strictEqual(loaded.getDomain('example.com').pinned_keys.length, 2);
+    });
+});
+
+describe('key set pinning and rotation continuity', () => {
+    test('first use pins the whole key set', () => {
+        const store = new KeyPinStore();
+        const k1 = makeTestJwk('k1', 'x1');
+        const k2 = makeTestJwk('k2', 'x2');
+        assert.strictEqual(store.checkAndPinSet('example.com', k1, [k1, k2]), PinningResult.FIRST_USE);
+        assert.strictEqual(store.getDomain('example.com').pinned_keys.length, 2);
+        assert.strictEqual(store.checkAndPin('example.com', k2), PinningResult.MATCHED);
+    });
+
+    test('rotation with continuity pins the new key', () => {
+        const store = new KeyPinStore();
+        const old = makeTestJwk('old', 'x-old');
+        const fresh = makeTestJwk('new', 'x-new');
+        store.checkAndPin('example.com', old);
+        assert.strictEqual(store.checkAndPinSet('example.com', fresh, [old, fresh]), PinningResult.ROTATED);
+        assert.strictEqual(store.checkAndPin('example.com', fresh), PinningResult.MATCHED);
+    });
+
+    test('rotation without continuity is a pin mismatch', () => {
+        const store = new KeyPinStore();
+        const old = makeTestJwk('old', 'x-old');
+        const evil = makeTestJwk('evil', 'x-evil');
+        store.checkAndPin('example.com', old);
+        assert.strictEqual(store.checkAndPinSet('example.com', evil, [evil]), PinningResult.CHANGED);
+        assert.strictEqual(store.getDomain('example.com').pinned_keys.length, 1);
+        assert.throws(() => checkPinningSet(store, 'example.com', evil, [evil]), /changed since last pinned/);
     });
 });

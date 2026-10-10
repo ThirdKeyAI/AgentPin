@@ -1,11 +1,26 @@
 # AgentPin Technical Specification
 
-**Protocol Version:** 0.3.0
+**Protocol Version:** 0.4.0
 **Status:** Stable
 **Author:** Jascha Wanger / [ThirdKey.ai](https://thirdkey.ai)
-**Date:** 2026-05-14
+**Date:** 2026-10-09
 **License:** MIT
 
+> **What's new in 0.4.0 (security hardening; NOT wire-compatible for
+> three signed objects):** Every non-JWT signature is now computed over a
+> domain-separated input (§14.7). Challenge responses (§9), delegation
+> attestations (§5.6) and AgentCards (§4.10.3) therefore change on the
+> wire; JWT credentials, discovery documents and unsigned revocation
+> documents are unchanged and the document `agentpin_version` stays
+> `"0.1"`. AgentCard signatures now cover `agentpin_endpoint` and
+> `public_key_jwk`, and §4.10.4 step 5 is mandatory. `allowed_domains` is a
+> tri-state (§4.11). Delegation chains MUST be verified (§6.4, §17).
+> Attestations gain `kid` binding and optional `exp`. TOFU pins the whole
+> key set with rotation continuity (§7.3). Revocation documents fall back
+> to the default URL, MAY be signed, and are checked for structure and
+> freshness (§8). New error code `MALFORMED_CREDENTIAL` (§6.7). Network
+> fetches have mandatory limits (§14.6).
+>
 > **What's new in 0.3.0 (additive, wire-compatible with 0.2):**
 > §4.8.3 DNS TXT cross-verification at `_agentpin.{domain}` is now
 > normative (not "Reserved"). §4.9 adds the optional `a2a_endpoint`
@@ -13,7 +28,7 @@
 > extension** (signed AgentCards published at
 > `.well-known/agent-card.json`, AgentPin extension payload, sorted-key
 > canonical signing input). New §4.11 specifies the `AllowedDomains`
-> typed wrapper (empty-list = unrestricted; intersection semantics for
+> typed wrapper (empty-list = unrestricted, superseded by the 0.4.0 tri-state; intersection semantics for
 > cross-protocol scoping with SchemaPin v1.4
 > `A2aVerificationContext`). §4.8 gains two new resolver entries
 > (LocalAgentCardStore, A2aAgentCardResolver). The wire protocol
@@ -105,7 +120,8 @@
   - [14.4 Capability Confusion](#144-capability-confusion)
   - [14.5 Prompt Injection and Behavioral Integrity](#145-prompt-injection-and-behavioral-integrity)
   - [14.6 Denial of Service](#146-denial-of-service)
-  - [14.7 Cryptographic Agility](#147-cryptographic-agility)
+  - [14.7 Signature Domain Separation](#147-signature-domain-separation)
+  - [14.8 Cryptographic Agility](#148-cryptographic-agility)
 - [15. Privacy Considerations](#15-privacy-considerations)
 - [16. IANA Considerations](#16-iana-considerations)
 - [17. Conformance Requirements](#17-conformance-requirements)
@@ -358,7 +374,7 @@ Public keys are represented as JWK (JSON Web Key) objects per [RFC 7517](https:/
 | `key_ops` | array | RECOMMENDED | Permitted operations. SHOULD be `["verify"]`. |
 | `exp` | string | RECOMMENDED | Key expiration datetime in ISO 8601 format. |
 
-**Cryptographic algorithm choice:** AgentPin v0.1 mandates ECDSA with P-256 (secp256r1), matching SchemaPin's cryptographic choices for interoperability. Future versions MAY support Ed25519 (EdDSA) as an additional option (see §14.7).
+**Cryptographic algorithm choice:** AgentPin v0.1 mandates ECDSA with P-256 (secp256r1), matching SchemaPin's cryptographic choices for interoperability. Future versions MAY support Ed25519 (EdDSA) as an additional option (see §14.8).
 
 ### 4.5 Agent Declaration Format
 
@@ -541,6 +557,8 @@ A trust bundle is a JSON file containing a collection of discovery and revocatio
 - Bundles SHOULD be signed or distributed over authenticated channels.
 - Verifiers MUST validate documents from bundles identically to `.well-known`-fetched documents.
 - The `created_at` timestamp indicates bundle generation time; verifiers MAY use it to enforce freshness policies.
+- (0.4.0) A bundle MAY carry `expires_at` (ISO 8601); verifiers MUST reject an expired bundle.
+- (0.4.0) A bundle MAY be signed: it carries `kid` and `signature`, a standard-base64 DER ECDSA signature over a domain-separated input (§14.7) with context `agentpin-bundle-v1` whose single field is the sorted-key compact JSON of the bundle without `signature`. The verifier checks it against a bundle-operator key it already trusts.
 
 #### 4.8.3 DNS TXT Cross-Verification (v0.3)
 
@@ -708,22 +726,28 @@ The `agentpin` field carries three sub-fields:
 |-------|------|----------|-------------|
 | `agentpin_endpoint` | string | REQUIRED | URL of the entity's AgentPin discovery document (typically `https://{domain}/.well-known/agent-identity.json`). |
 | `public_key_jwk` | object | REQUIRED | The public key used to sign this AgentCard, in JWK form (§4.4). The verifier uses this key to verify `signature`. |
-| `signature` | string | REQUIRED | Detached ECDSA P-256 signature over the canonical bytes of the AgentCard with the `agentpin` field cleared. Standard-base64-encoded DER bytes (matches the JWT signature encoding used elsewhere in AgentPin). |
+| `signature` | string | REQUIRED | Detached ECDSA P-256 signature over the signing input of §4.10.3. Standard-base64-encoded DER bytes. |
 
 #### 4.10.3 Canonical Signing Input
 
-The signature in `agentpin.signature` is computed over the canonical JSON serialization of the AgentCard with the `agentpin` field set to `null`/absent. The canonicalisation rules are:
+The signature in `agentpin.signature` covers the whole card, including the
+extension's `agentpin_endpoint` and `public_key_jwk` (only `signature` is
+excluded), so neither can be swapped without invalidating the card:
 
-1. Take the AgentCard you intend to publish.
-2. Remove (or set to `null`) its `agentpin` field.
+1. Take the AgentCard you intend to publish, including every field the
+   implementation does not model (unknown top-level and nested fields MUST be
+   preserved, §4.10.1).
+2. Replace its `agentpin` field with
+   `{"agentpin_endpoint": <endpoint>, "public_key_jwk": <jwk>}`.
 3. Recursively serialize as JSON with:
    - Object keys sorted alphabetically at every depth.
    - Compact separators (no whitespace between tokens).
    - Fields whose value is `null`/`undefined` dropped from objects.
    - UTF-8 string encoding (no `\uXXXX` escapes for non-ASCII).
-4. Sign the resulting byte sequence with ECDSA P-256 using SHA-256 as the message hash. Encode the DER signature with standard base64.
-
-This canonicalisation pattern is intentionally identical in spirit to SchemaPin's schema canonicalisation, so implementations can share the same `canonicalize()` helper.
+4. Wrap the resulting bytes as the single field of a domain-separated input
+   with context `agentpin-agentcard-v1` (§14.7).
+5. Sign with ECDSA P-256 / SHA-256 and encode the DER signature with standard
+   base64.
 
 **Implementation note.** All four AgentPin SDKs (Rust, JavaScript, Python, Go) MUST produce byte-identical canonical bytes for the same input AgentCard. Conformance is verified end-to-end: a card signed in any SDK MUST verify in the other three.
 
@@ -732,15 +756,18 @@ This canonicalisation pattern is intentionally identical in spirit to SchemaPin'
 A verifier presented with an AgentCard `card` performs:
 
 1. Reject if `card.agentpin` is absent.
-2. Recompute the canonical signing input by canonicalising `card` with the `agentpin` field cleared (§4.10.3).
+2. Recompute the signing input of §4.10.3 from `card`, its `agentpin_endpoint` and its `public_key_jwk`.
 3. Decode `card.agentpin.public_key_jwk` into a P-256 public key.
 4. Verify `card.agentpin.signature` against the canonical bytes using that key. A failure MUST surface as `DISCOVERY_INVALID`.
 
 Verification of the AgentCard signature alone proves only that the card has not been tampered with relative to the key inside its own extension. To chain the card back to a *trusted* AgentPin identity, the verifier MUST then:
 
-5. Verify that `card.agentpin.public_key_jwk` is also present in the entity's AgentPin discovery document at `card.agentpin.agentpin_endpoint`, by JWK thumbprint (§4.4). This step is what binds an A2A AgentCard to the rest of the AgentPin trust chain.
+5. Verify that `card.agentpin.public_key_jwk` is also present in the entity's AgentPin discovery document at `card.agentpin.agentpin_endpoint`, by JWK thumbprint (§4.4). The endpoint MUST be an `https://` URL on the domain being resolved (no port, userinfo, query or fragment), fetched under the limits of §14.6. This step is what binds an A2A AgentCard to the rest of the AgentPin trust chain.
 
-Implementations MAY skip step 5 when the card was supplied through a channel that already establishes its provenance (e.g., a `LocalAgentCardStore` that was populated from an out-of-band, authenticated source — §4.8.4). When skipping step 5, implementations MUST document the substitute provenance check.
+Step 5 is the default in every SDK resolver. Implementations MAY skip it only when the card was supplied through a channel that already establishes its provenance, and MUST document the substitute check. The reference SDKs provide exactly these opt-outs:
+
+- `LocalAgentCardStore` requires a trust anchor at construction: a JWK-thumbprint allowlist (empty by default, so nothing is trusted) or a discovery resolver used to perform step 5. An explicitly named "unanchored" constructor exists for tests and fully trusted local input.
+- `A2aAgentCardResolver` exposes an explicit flag to skip the discovery binding, for callers that pin card keys out of band.
 
 #### 4.10.5 Capability Mapping
 
@@ -788,13 +815,20 @@ The `skills` array on the AgentCard is derived from `AgentDeclaration.capabiliti
 
 #### 4.11.1 Semantics
 
-An `AllowedDomains` value is an ordered list of strings, each of which is either a literal domain or a pattern using the wildcard rules from §5.5 (e.g., `"*.client-corp.com"`).
+`AllowedDomains` is a tri-state. On the wire:
 
-The list has a single *convention* that v0.3 implementations MUST honour:
+- **Field absent** (`allowed_domains` omitted or `null`) means *unrestricted*.
+- **Field present** (any array, including `[]`) means *restricted to the
+  listed entries*; `[]` therefore allows nothing.
 
-> **An empty `AllowedDomains` list means *unrestricted* (all domains trusted).**
+Each entry is either a literal domain or a pattern using the wildcard rules
+from §5.5 (e.g., `"*.client-corp.com"`). Domains are compared after
+normalization (lowercase, single trailing dot removed, IDNA A-labels).
 
-This is the opposite of the naïve set-theoretic interpretation (where an empty set allows nothing), but it matches the existing v0.2 behaviour where an *omitted* `allowed_domains` field allowed all domains. The convention lets `AllowedDomains` be the unified type at API boundaries regardless of whether the upstream constraint was absent or explicitly empty.
+> **Change in 0.4.0.** v0.3 treated an empty list as unrestricted, so two
+> disjoint allow-lists intersected to "unrestricted" — a fail-open. The wire
+> form is backward compatible for every document that omitted the field or
+> listed at least one entry; only an explicit `[]` changes meaning.
 
 #### 4.11.2 Operations
 
@@ -802,12 +836,12 @@ Implementations MUST expose the following operations:
 
 | Operation | Semantics |
 |-----------|-----------|
-| `unrestricted()`               | Returns an empty allow-list, i.e. "no restriction". |
-| `from_domains(list)`           | Constructs from any iterable of strings. |
-| `is_unrestricted(list)`        | Returns true iff the list is empty. |
-| `allows(list, domain)`         | Returns true iff `is_unrestricted(list)` OR `domain` is in `list` (pattern match per §5.5). |
-| `intersect(lhs, rhs)`          | Returns the intersection following these rules: `unrestricted ∩ X = X`; `X ∩ unrestricted = X`; otherwise the set intersection of `lhs` and `rhs`. |
-| `from_constraints(constraints)` | Returns `unrestricted()` when `constraints == null` or `constraints.allowed_domains` is absent; otherwise returns the literal list. |
+| `unrestricted()`               | Returns the unrestricted value (serializes as an absent field). |
+| `from_domains(list)`           | Constructs a restricted value from any iterable of strings (an empty iterable restricts to nothing). |
+| `is_unrestricted(value)`       | Returns true iff the value is unrestricted. |
+| `allows(value, domain)`        | Returns true iff the value is unrestricted OR `domain` matches an entry by the pattern rules of §5.5. |
+| `intersect(lhs, rhs)`          | `unrestricted ∩ X = X`; `X ∩ unrestricted = X`; otherwise a restricted value holding every entry of either side that the other side allows (pattern-aware). Two disjoint lists intersect to `[]`, which allows nothing. |
+| `from_constraints(constraints)` | Returns `unrestricted()` when `constraints == null` or `constraints.allowed_domains` is absent; otherwise the restricted list (including `[]`). |
 
 #### 4.11.3 Cross-Protocol Use
 
@@ -819,11 +853,12 @@ provider_allowed = AllowedDomains.from_constraints(provider_agent.constraints)
 effective_scope  = AllowedDomains.intersect(caller_allowed, provider_allowed)
 ```
 
-If `is_unrestricted(effective_scope)` is true at this point, the cross-protocol context places no domain restriction; otherwise the resulting set is the maximal domain allow-list the bridged interaction may operate on.
+If `is_unrestricted(effective_scope)` is true at this point, the cross-protocol context places no domain restriction; otherwise the resulting value is the maximal domain allow-list the bridged interaction may operate on (possibly `[]`, i.e. nothing).
 
 #### 4.11.4 Edge Case: Intersection That Becomes Empty
 
-Two non-empty allow-lists with no overlap intersect to the empty list. Under the v0.3 convention this is *re-interpreted as "unrestricted"*, which is the same outcome as having no allow-list at all. This is documented behaviour — callers that need to distinguish "intentionally restricted to nothing" from "no restriction" MUST track that distinction outside the `AllowedDomains` value (e.g., with an out-of-band sentinel). The AgentPin SDKs deliberately do not encode this distinction in `AllowedDomains` because the existing v0.2 deployment surface does not encode it either.
+Two restricted allow-lists with no overlap intersect to `[]`, which allows
+nothing. Implementations MUST NOT re-interpret this result as unrestricted.
 
 ---
 
@@ -838,6 +873,23 @@ A credential is a compact-serialization JWT consisting of three Base64url-encode
 ```
 <header>.<payload>.<signature>
 ```
+
+**Signature encoding (deliberate deviation).** The signature part is the
+base64url encoding of the **ASN.1 DER** ECDSA signature, not the fixed-length
+raw `r || s` form that RFC 7515/7518 specify for ES256. Off-the-shelf JWT
+libraries therefore cannot verify AgentPin credentials, and AgentPin verifiers
+reject JWS objects produced by them. This is intentional: together with the
+custom `typ` (`agentpin-credential+jwt`) and the hard-coded algorithm it keeps
+AgentPin credentials out of generic JWT tooling and removes the
+algorithm-confusion surface. Interoperability with RFC 7515 JWS is a
+non-goal.
+
+Payload claims are validated structurally before any other check: `iss`,
+`sub` and `jti` MUST be non-empty strings, `iat` and `exp` MUST be
+non-negative integers with `exp > iat`, `nbf` (when present) a non-negative
+integer, `capabilities` an array of strings, and `agentpin_version` MUST equal
+`"0.1"`. A credential that fails these checks MUST be rejected with
+`MALFORMED_CREDENTIAL`.
 
 ### 5.2 JWT Header
 
@@ -965,14 +1017,30 @@ Each entry in the delegation chain contains:
 | `role` | string | REQUIRED | Role of the attesting entity: `"maker"` or `"deployer"`. |
 | `agent_id` | string | REQUIRED | The agent URN as known to the attesting entity. |
 | `kid` | string | REQUIRED | Key identifier used for the attestation. |
-| `attestation` | string | REQUIRED | Base64url-encoded ECDSA signature over the canonical form of: `{domain}|{role}|{agent_id}|{delegatee_domain}|{delegatee_agent_id}|{capabilities_hash}` |
+| `exp` | integer | OPTIONAL | Unix time after which the attestation MUST be rejected. |
+| `attestation` | string | REQUIRED | Standard-base64-encoded DER ECDSA signature over the attestation signing input below. |
+
+The attestation signing input is a domain-separated input (§14.7) with
+context `agentpin-attestation-v1` over the fields, in order:
+
+1. `domain` (normalized)
+2. `role`
+3. `agent_id`
+4. `delegatee_domain` (normalized)
+5. `delegatee_agent_id`
+6. `capabilities_hash`
+7. `kid`
+8. `exp` as a decimal string, or the empty string when absent
+
+Length-prefixing removes the delimiter ambiguity of the v0.3 `|`-joined form,
+and binding `kid` and `exp` prevents replay across key rotations and forever.
 
 The `capabilities_hash` is the SHA-256 hash of the sorted, JSON-serialized capabilities array, ensuring the Maker attested to a specific set of capabilities.
 
 ### 5.7 Credential Lifetime
 
 - Credentials MUST have an `exp` (expiration) claim.
-- The lifetime (`exp - iat`) MUST NOT exceed the `credential_ttl_max` declared in the discovery document for the corresponding agent.
+- The lifetime (`exp - iat`) MUST NOT exceed the `credential_ttl_max` declared in the discovery document for the corresponding agent. When the agent declares none, verifiers apply a default of 86400 seconds. The subtraction MUST be overflow-safe.
 - Short-lived credentials (≤ 1 hour) are RECOMMENDED for automated agent-to-agent interactions.
 - Longer-lived credentials (≤ 24 hours) MAY be used for human-supervised agents where frequent renewal is impractical.
 - Verifiers SHOULD reject credentials with lifetimes exceeding 24 hours regardless of the declared `credential_ttl_max`.
@@ -1122,10 +1190,17 @@ For each entry in the `delegation_chain` array, ordered from outermost (Maker) t
 
 1. Fetch the discovery document from the entry's `domain`.
 2. Resolve the `kid` to a public key.
-3. Reconstruct the canonical attestation input: `{domain}|{role}|{agent_id}|{delegatee_domain}|{delegatee_agent_id}|{capabilities_hash}`
-4. Verify the `attestation` signature over the canonical input using the resolved public key.
-5. Verify the `capabilities_hash` matches the SHA-256 of the sorted, JSON-serialized capabilities in the credential.
+3. Check the key is usable: not expired (an unparseable `exp` counts as expired, `KEY_EXPIRED`), `use` is `sig`, and `key_ops` (when present) contains `verify`.
+4. Reconstruct the attestation signing input of §5.6 and verify the `attestation` signature with the resolved key. Reject an attestation whose `exp` has passed.
+5. Verify the `capabilities_hash` matches the SHA-256 of the sorted, JSON-serialized capabilities in the credential, and that each link only narrows the scope of the previous one.
 6. Verify the chain depth does not exceed any entity's `max_delegation_depth`.
+
+Delegation verification is mandatory. A verifier that receives a credential
+with a `delegation_chain` but cannot verify it (for example, no resolver is
+available for the attesting domains) MUST reject it with
+`DELEGATION_INVALID`. Implementations MAY offer an explicit opt-out for
+offline use; when it is enabled the result MUST report
+`delegation_verified: false` and carry a warning.
 
 ### 6.5 Capability Validation
 
@@ -1203,6 +1278,11 @@ On failure:
 | `AUDIENCE_MISMATCH` | `aud` does not match verifier's domain. |
 | `ALGORITHM_REJECTED` | JWT `alg` is not `ES256`. |
 | `KEY_PIN_MISMATCH` | Key for domain changed since TOFU pin. |
+| `MALFORMED_CREDENTIAL` | Credential claims fail structural validation (§5.1): missing or mistyped `iat`/`exp`/`iss`/`sub`/`jti`, `exp <= iat`, non-array `capabilities`, unsupported `agentpin_version`. |
+
+`valid: true` means every security feature present in the credential was
+verified. `key_pinning.status` is one of `first_use`, `pinned` or `rotated`
+(§7.3).
 
 ---
 
@@ -1239,9 +1319,12 @@ Discovery documents SHOULD reduce their `Cache-Control: max-age` during rotation
 
 AgentPin uses Trust-On-First-Use (TOFU) key pinning, consistent with SchemaPin's pinning model:
 
-1. **First encounter:** When a verifier first sees a credential from a domain, it fetches the discovery document and pins the public key(s) associated with that domain.
+Pins are keyed by the normalized domain (lowercase, trailing dot removed, IDNA A-labels), so case or trailing-dot variants of `iss` share one pin set.
+
+1. **First encounter:** When a verifier first sees a credential from a domain, it validates the discovery document and pins **every** public key it lists.
 2. **Subsequent encounters:** The verifier checks that the key used to sign the credential matches a pinned key for that domain.
-3. **Key change detected:** If the key has changed, the verifier MUST flag this as a warning. In interactive contexts, the verifier SHOULD prompt the user. In automated contexts, the verifier SHOULD reject the credential unless explicit key rotation policy allows it.
+3. **Rotation continuity:** If the signing key is not pinned but the validated discovery document also lists at least one key that *is* pinned, the verifier pins the new key and accepts the credential, reporting `key_pinning.status: "rotated"` and a warning. This is the §7.2 overlap period.
+4. **Key change detected:** If the signing key is not pinned and no other key in the document is pinned, the verifier MUST reject the credential with `KEY_PIN_MISMATCH` (automated contexts) or prompt the user (interactive contexts), and MUST NOT modify the pin set.
 
 ### 7.4 Key Pinning Storage
 
@@ -1278,7 +1361,9 @@ The `public_key_hash` is the SHA-256 hash of the canonical JSON serialization of
 
 ### 8.1 Revocation Endpoint
 
-The revocation document MUST be served at the URL specified in the discovery document's `revocation_endpoint` field. If not specified, verifiers SHOULD assume `https://{domain}/.well-known/agent-identity-revocations.json`.
+The revocation document MUST be served at the URL specified in the discovery document's `revocation_endpoint` field. That URL MUST be `https://` on the entity's own domain (no port, userinfo, query or fragment); a discovery document whose `revocation_endpoint` violates this is `DISCOVERY_INVALID`. If the field is absent, verifiers MUST fetch `https://{domain}/.well-known/agent-identity-revocations.json`; a `404` there means "no revocations", any other failure is a fetch failure (fail closed).
+
+**Signed revocation documents (optional).** An entity MAY sign its revocation document. It adds `kid` (a key in its discovery document) and `signature`: a standard-base64 DER ECDSA signature over a domain-separated input (§14.7) with context `agentpin-revocation-v1` whose single field is the sorted-key compact JSON of the document without `signature`. When `signature` is present verifiers MUST verify it; verifiers MAY be configured to require it.
 
 ### 8.2 Revocation Document Schema
 
@@ -1326,7 +1411,7 @@ The revocation document MUST be served at the URL specified in the discovery doc
 
 Verifiers MUST check revocation status as part of credential verification:
 
-1. Fetch the revocation document.
+1. Fetch the revocation document and validate it: `entity` MUST match the discovery entity (normalized), every `revoked_credentials` entry MUST carry `jti`, every `revoked_agents` entry `agent_id`, and every `revoked_keys` entry `kid`; otherwise reject with `DISCOVERY_INVALID` (a document using the wrong field names MUST NOT be silently ignored). Verifiers MAY enforce a maximum age on `updated_at`; an `updated_at` in the future (beyond clock skew) is invalid.
 2. Check if the credential's `jti` appears in `revoked_credentials`.
 3. Check if the credential's `sub` (agent URN) appears in `revoked_agents`.
 4. Check if the credential's `kid` appears in `revoked_keys`.
@@ -1356,15 +1441,15 @@ For agent-to-agent interactions where both parties need to verify each other, Ag
 1. Agent A sends its credential to Agent B.
 2. Agent B verifies Agent A's credential (per §6).
 3. Agent B generates a random nonce and includes it in a challenge.
-4. Agent A creates a new credential (or signs the nonce) with its private key and returns it.
+4. Agent A signs the response signing input (below) with its private key and returns it. A responder MUST NOT sign caller-supplied bytes verbatim.
 5. Agent B verifies the response, confirming Agent A possesses the private key corresponding to its claimed identity.
 6. The process repeats in reverse for Agent B to prove its identity to Agent A.
 
 ### 9.2 Nonce Requirements
 
-- Nonces MUST be at least 128 bits of cryptographically random data, encoded as base64url.
-- Nonces MUST be single-use. Verifiers MUST reject previously seen nonces.
-- Nonces MUST expire within 60 seconds.
+- Nonces MUST be exactly 128 bits of cryptographically random data, encoded as canonical unpadded base64url (22 characters). Any other form MUST be rejected.
+- Nonces MUST be single-use. Verifiers MUST reject previously seen nonces. The reference SDKs enforce this with a process-wide nonce store by default; a nonce is recorded only after the response signature verifies.
+- Nonces MUST expire within 60 seconds. An unparseable challenge `timestamp` MUST be rejected.
 
 ### 9.3 Mutual Verification Flow
 
@@ -1404,10 +1489,17 @@ The challenge and response are encoded as:
 {
   "type": "agentpin-response",
   "nonce": "<echoed nonce>",
-  "signature": "<base64url ECDSA signature over nonce>",
+  "signature": "<standard-base64 DER ECDSA signature over the response signing input>",
   "kid": "<key used to sign>"
 }
 ```
+
+The response signing input is a domain-separated input (§14.7) with context
+`agentpin-response-v1` over the fields `nonce`, `timestamp` (from the
+challenge), `kid`, and the lowercase hex SHA-256 of the challenge's
+`verifier_credential` (the empty string when the challenge carries none). This
+binds the response to the challenge, the responder's key and the verifier
+that issued the challenge, so it cannot be replayed to a different peer.
 
 ---
 
@@ -1757,9 +1849,36 @@ Attackers could target the verification flow:
 
 1. **Discovery document unavailability:** Verifiers SHOULD cache discovery documents and use the cached version if the endpoint is temporarily unavailable, with a time limit.
 2. **Revocation endpoint unavailability:** Verifiers SHOULD fail closed (reject credentials) if the revocation endpoint is unreachable, not fail open.
-3. **Expensive verification:** Delegation chain verification requires multiple HTTP fetches. Implementations SHOULD parallelize chain verification and enforce timeouts.
+3. **Expensive verification:** Delegation chain verification requires multiple HTTP fetches. Implementations SHOULD parallelize chain verification.
+4. **Fetch limits:** Every network fetch (discovery, revocation, AgentCard, chain documents) MUST use HTTPS, MUST NOT follow redirects, MUST time out (reference SDKs: 10 seconds), MUST cap the response body (reference SDKs: 1 MiB, enforced on `Content-Length` and while streaming), MUST require a JSON `Content-Type`, and SHOULD return generic error messages that do not echo response bodies.
 
-### 14.7 Cryptographic Agility
+### 14.7 Signature Domain Separation
+
+The same key signs credentials, attestations, AgentCards, revocation
+documents, trust bundles and challenge responses. To make a signature valid
+for exactly one object type, every non-JWT signature is computed over:
+
+```
+context || 0x00 || ( u32_be(len(field)) || field )*
+```
+
+`context` is an ASCII label, `0x00` a single NUL byte, and each field is
+prefixed with its length as a 4-byte big-endian unsigned integer. JWT
+credentials keep the RFC 7515 `header.payload` signing input; the base64url
+alphabet never contains NUL, so the two input spaces are disjoint.
+
+| Object | Context | Fields |
+|--------|---------|--------|
+| Challenge response (§9) | `agentpin-response-v1` | nonce, timestamp, kid, hex SHA-256 of verifier credential or `""` |
+| Delegation attestation (§5.6) | `agentpin-attestation-v1` | domain, role, agent_id, delegatee_domain, delegatee_agent_id, capabilities_hash, kid, exp or `""` |
+| AgentCard (§4.10.3) | `agentpin-agentcard-v1` | canonical card JSON |
+| Revocation document (§8.1) | `agentpin-revocation-v1` | canonical document JSON without `signature` |
+| Trust bundle (§4.8.2) | `agentpin-bundle-v1` | canonical bundle JSON without `signature` |
+
+Implementations MUST NOT expose an API that signs caller-supplied bytes with
+an identity key without one of these contexts.
+
+### 14.8 Cryptographic Agility
 
 AgentPin v0.1 mandates ECDSA P-256. Future versions MAY add support for:
 
@@ -1808,8 +1927,14 @@ This specification would register the following if submitted as an RFC:
 - Reject credentials with `alg` other than `ES256`.
 - Check credential expiration with ≤ 60 seconds clock skew tolerance.
 - Check revocation status before accepting a credential.
-- Validate that credential capabilities match the discovery document.
-- Implement TOFU key pinning.
+- Validate that credential capabilities match the discovery document, and never grant `admin` capabilities through a wildcard (§10.3).
+- Implement TOFU key pinning over normalized domains (§7.3).
+- Verify the full delegation chain when present, and reject the credential when it cannot be verified (§6.4).
+- Reject structurally malformed credentials with `MALFORMED_CREDENTIAL` (§5.1).
+- Enforce `credential_ttl_max` (§5.7).
+- Validate revocation document structure and fall back to the default revocation URL (§8).
+- Apply the fetch limits of §14.6.
+- Use the domain-separated signing inputs of §14.7 for every non-JWT signature.
 
 ### Verifiers MAY:
 - Implement alternative discovery mechanisms (§4.8) including local file discovery, pre-shared trust bundles, the `LocalAgentCardStore` (§4.8.4), the `A2aAgentCardResolver` (§4.8.5), and resolver chains (§4.8.7).
@@ -1818,12 +1943,11 @@ This specification would register the following if submitted as an RFC:
 - (v0.3) Accept A2A AgentCards (§4.10) as discovery input, provided they have been verified per §4.10.4 (extension-signature verification AND key thumbprint matched against the AgentPin discovery document, unless an out-of-band provenance check is documented).
 
 ### Verifiers SHOULD:
-- Validate the full delegation chain when present.
 - Enforce credential constraints (domain, rate limit, data classification).
 - Cache discovery documents per HTTP cache headers.
 - Fail closed when revocation endpoints are unreachable.
 - (v0.3) When a discovery document's `a2a_endpoint` host disagrees with its `entity` field, fail with `DISCOVERY_INVALID`.
-- (v0.3) When composing `AllowedDomains` with a cross-protocol context (e.g., SchemaPin v1.4 `A2aVerificationContext`), use the intersection helper documented in §4.11.2 rather than reimplementing set logic — the empty-list-equals-unrestricted convention is part of the protocol.
+- (v0.3) When composing `AllowedDomains` with a cross-protocol context (e.g., SchemaPin v1.4 `A2aVerificationContext`), use the intersection helper documented in §4.11.2 rather than reimplementing set logic — the absent-versus-`[]` tri-state is part of the protocol.
 
 ---
 

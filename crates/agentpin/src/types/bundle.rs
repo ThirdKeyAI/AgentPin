@@ -15,6 +15,17 @@ pub struct TrustBundle {
     pub documents: Vec<DiscoveryDocument>,
     #[serde(default)]
     pub revocations: Vec<RevocationDocument>,
+    /// Optional expiry (RFC 3339). A bundle past its expiry is rejected by
+    /// [`crate::bundle::verify_trust_bundle`] (design issue 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// Optional `kid` of the key that signed this bundle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    /// Optional standard-base64 DER signature over the domain-separated
+    /// canonical JSON of the bundle with `signature` cleared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 impl TrustBundle {
@@ -25,18 +36,31 @@ impl TrustBundle {
             created_at: created_at.to_string(),
             documents: vec![],
             revocations: vec![],
+            expires_at: None,
+            kid: None,
+            signature: None,
         }
     }
 
-    /// Find a discovery document by domain (entity field).
+    /// Find a discovery document by domain (entity field), compared in
+    /// normalized form.
     pub fn find_discovery(&self, domain: &str) -> Option<&DiscoveryDocument> {
-        self.documents.iter().find(|d| d.entity == domain)
+        let key = bundle_key(domain);
+        self.documents.iter().find(|d| bundle_key(&d.entity) == key)
     }
 
-    /// Find a revocation document by domain (entity field).
+    /// Find a revocation document by domain (entity field), compared in
+    /// normalized form.
     pub fn find_revocation(&self, domain: &str) -> Option<&RevocationDocument> {
-        self.revocations.iter().find(|r| r.entity == domain)
+        let key = bundle_key(domain);
+        self.revocations
+            .iter()
+            .find(|r| bundle_key(&r.entity) == key)
     }
+}
+
+fn bundle_key(entity: &str) -> String {
+    crate::domain::normalize_domain(entity).unwrap_or_else(|_| entity.to_string())
 }
 
 #[cfg(test)]
@@ -77,6 +101,9 @@ mod tests {
             created_at: "2026-02-10T00:00:00Z".to_string(),
             documents: vec![doc],
             revocations: vec![],
+            expires_at: None,
+            kid: None,
+            signature: None,
         }
     }
 
