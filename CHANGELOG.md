@@ -27,6 +27,8 @@ document `agentpin_version` stays `"0.1"`.
 
 ### Supported runtimes
 
+- Python package builds and CI use setuptools 83.0.0 or later to include its
+  security fixes.
 - Python now requires 3.10 or later; patched runtime dependencies require
   cryptography 50.0.0 and requests 2.33.0 or later.
 - All Rust crates now require Rust 1.89 or later, matching the current dependency
