@@ -44,6 +44,8 @@ agentpin verify --credential <jwt>
 
 ### Rust
 
+Requires Rust 1.89 or later.
+
 ```toml
 [dependencies]
 agentpin = { version = "0.3", features = ["fetch"] }
@@ -56,6 +58,8 @@ npm install agentpin
 ```
 
 ### Python
+
+Requires Python 3.10 or later.
 
 ```bash
 pip install agentpin

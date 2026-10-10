@@ -25,6 +25,13 @@ document `agentpin_version` stays `"0.1"`.
 - `allowed_domains: []` now means "restricted to nothing" (absent still means
   unrestricted).
 
+### Supported runtimes
+
+- Python now requires 3.10 or later; patched runtime dependencies require
+  cryptography 50.0.0 and requests 2.33.0 or later.
+- All Rust crates now require Rust 1.89 or later, matching the current dependency
+  graph. CI tests both declared minimums alongside newer runtimes.
+
 ### New defaults
 
 - `require_delegation_verification` (Go: `AllowUnverifiedDelegation` false):

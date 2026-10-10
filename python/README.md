@@ -2,7 +2,7 @@
 
 Domain-anchored cryptographic identity for AI agents. Part of the [ThirdKey](https://thirdkey.ai) trust stack ([SchemaPin](https://schemapin.org) → **[AgentPin](https://agentpin.org)** → [Symbiont](https://symbiont.dev)).
 
-Requires Python >= 3.8.
+Requires Python >= 3.10.
 
 ## Install
 

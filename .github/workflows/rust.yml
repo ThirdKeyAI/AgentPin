@@ -2,16 +2,17 @@ name: Rust CI
 on:
   push:
     branches: [main]
-    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock']
+    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/rust.yml']
   pull_request:
-    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock']
+    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/rust.yml']
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        rust: [stable, '1.86']
+        rust: [stable, '1.89']
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
