@@ -40,7 +40,8 @@ document `agentpin_version` stays `"0.1"`.
   a new key when the document still lists a pinned one
   (`key_pinning.status: "rotated"`).
 - Server: HSTS is opt-in (`--hsts`).
-- Go module now requires Go 1.26 (floor of the patched `golang.org/x/net`).
+- Go module now requires Go 1.26 (floor of the patched `golang.org/x/net`),
+  with Go 1.26.9 selected for its standard-library security fixes.
 
 ### Fixed
 
