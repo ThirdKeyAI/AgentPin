@@ -1,0 +1,37 @@
+{
+  "attestation": {
+    "agent_id": "urn:agentpin:example.com:maker",
+    "attestation": "MEUCIFT5A7dibJA3BUch8jAbSusOCTRheGWTToK1nRr/KRseAiEA+FOspZnO5E6GS1cDlcRklGHWrobyTRGHJ0vrBMNMl94=",
+    "domain": "example.com",
+    "kid": "legacy-key",
+    "role": "maker"
+  },
+  "jwk": {
+    "crv": "P-256",
+    "key_ops": [
+      "verify"
+    ],
+    "kid": "legacy-key",
+    "kty": "EC",
+    "use": "sig",
+    "x": "FNB7ookKIfJ_V6gdBshjT3sVXVvNACTYjFL6WPJ2PkM",
+    "y": "BoIGv8P-XUN2wWzp_PyH254FKZwpnVtR3Yf1T2M3_iE"
+  },
+  "jwt": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImFnZW50cGluLWNyZWRlbnRpYWwrand0Iiwia2lkIjoibGVnYWN5LWtleSJ9.eyJpc3MiOiJleGFtcGxlLmNvbSIsInN1YiI6InVybjphZ2VudHBpbjpleGFtcGxlLmNvbTphZ2VudCIsImF1ZCI6InNjYW5uZXIuZXhhbXBsZSIsImlhdCI6MTc2NzIyNTYwMCwiZXhwIjoxNzY3MjI5MjAwLCJqdGkiOiJsZWdhY3ktdmVjdG9yIiwiYWdlbnRwaW5fdmVyc2lvbiI6IjAuMSIsImNhcGFiaWxpdGllcyI6WyJyZWFkOmRhdGEiXX0.MEYCIQCD5WjE3_2WC47mq_DOMEBLpv-cQQ2rjnUZT7ajkRqsOgIhAM8KmzPl94epp6lOB-p3BlNuHZ6S9WmzTcnIrkKb49Jr",
+  "key_id": "d32d750cee69fed770c11e82aa4a313036d5e9cd62eac06fd8ff325b6657196d",
+  "pins": [
+    {
+      "domain": "example.com",
+      "pinned_keys": [
+        {
+          "first_seen": "2026-10-29T04:04:37.980125013+00:00",
+          "kid": "legacy-key",
+          "last_seen": "2026-10-29T04:04:37.980125013+00:00",
+          "public_key_hash": "0f2a1007dde6ab61fb6dcc93e6e8dc162e1996cbaaeb4b43b6c07e9a25171045",
+          "trust_level": "tofu"
+        }
+      ]
+    }
+  ],
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEFNB7ookKIfJ/V6gdBshjT3sVXVvN\nACTYjFL6WPJ2PkMGgga/w/5dQ3bBbOn8/IfbngUpnCmdW1Hdh/VPYzf+IQ==\n-----END PUBLIC KEY-----\n"
+}

@@ -16,9 +16,11 @@ fetch = ["reqwest", "tokio", "async-trait"]
 dns = ["hickory-resolver", "tokio", "async-trait"]
 
 [dependencies]
-p256 = { version = "0.13", features = ["ecdsa", "pem", "jwk"] }
-# OS randomness via the rand_core line p256 already depends on; the `rand`
-# 0.8 facade is not needed and carries an unsoundness advisory (AP-22).
+p256 = { version = "0.14", features = ["ecdsa", "pem"] }
+# Keep consumers' fresh resolutions above RUSTSEC-2026-0387's patched floor.
+crypto-bigint = "0.7.6"
+# OS randomness for mutual-authentication challenges, without the rand facade.
+# Key generation uses p256's fallible built-in OS randomness API.
 rand_core = { version = "0.6", features = ["getrandom"] }
 sha2 = "0.10"
 base64 = "0.21"
