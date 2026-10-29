@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rust: [stable, '1.86']
+        rust: [stable, '1.89']
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -24,3 +24,4 @@ jobs:
         if: matrix.rust == 'stable'
       - run: cargo test --workspace -j2
       - run: cargo test --workspace -j2 --features fetch
+      - run: cargo test -p agentpin -j2 --features dns
