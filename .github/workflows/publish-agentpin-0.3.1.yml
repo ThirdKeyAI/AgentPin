@@ -86,9 +86,58 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ needs.validate.outputs.artifact_id }}
-          path: .
+          path: ${{ runner.temp }}/agentpin-lock-artifact
           merge-multiple: true
           digest-mismatch: error
+          skip-decompress: true
+      - name: Accept only the tested regular lockfile from the untrusted archive
+        env:
+          LOCK_SHA256: ${{ needs.validate.outputs.lock_hash }}
+          LOCK_ARTIFACT_DIR: ${{ runner.temp }}/agentpin-lock-artifact
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import re
+          import stat
+          import zipfile
+
+          def reject(message):
+              raise SystemExit(message)
+
+          expected = os.environ["LOCK_SHA256"]
+          if re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+              reject("Invalid lockfile digest")
+          entries = list(Path(os.environ["LOCK_ARTIFACT_DIR"]).iterdir())
+          if len(entries) != 1 or not stat.S_ISREG(entries[0].lstat().st_mode):
+              reject("Expected exactly one regular archive")
+          if entries[0].stat().st_size > 2 * 1024 * 1024:
+              reject("Archive exceeds size limit")
+          with zipfile.ZipFile(entries[0]) as archive:
+              members = archive.infolist()
+              if len(members) != 1:
+                  reject("Archive must contain only Cargo.lock")
+              member = members[0]
+              file_type = stat.S_IFMT(member.external_attr >> 16)
+              if member.filename != "Cargo.lock" or member.is_dir():
+                  reject("Unexpected archive path")
+              if file_type not in (0, stat.S_IFREG):
+                  reject("Lockfile must be a regular file")
+              if member.file_size > 1024 * 1024:
+                  reject("Lockfile exceeds size limit")
+              if member.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                  reject("Unsupported archive compression")
+              with archive.open(member) as stream:
+                  data = stream.read(1024 * 1024 + 1)
+              if len(data) != member.file_size or len(data) > 1024 * 1024:
+                  reject("Invalid lockfile size")
+          if hashlib.sha256(data).hexdigest() != expected:
+              reject("Lockfile digest mismatch")
+          # Never extract archive paths or configuration into the clean checkout.
+          with open("Cargo.lock", "xb") as destination:
+              destination.write(data)
+          PY
       - name: Check exact source, package, and tested lockfile
         env:
           LOCK_SHA256: ${{ needs.validate.outputs.lock_hash }}
