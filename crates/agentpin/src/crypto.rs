@@ -1,10 +1,10 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use p256::{
     ecdsa::{signature::Signer, signature::Verifier, Signature, SigningKey, VerifyingKey},
+    elliptic_curve::Generate,
     pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey},
     SecretKey,
 };
-use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 
 use crate::error::Error;
@@ -17,7 +17,7 @@ pub struct KeyPair {
 
 /// Generate a new ECDSA P-256 keypair.
 pub fn generate_key_pair() -> Result<KeyPair, Error> {
-    let secret_key = SecretKey::random(&mut OsRng);
+    let secret_key = SecretKey::try_generate().map_err(|e| Error::Ecdsa(e.to_string()))?;
     let signing_key = SigningKey::from(&secret_key);
     let verifying_key = signing_key.verifying_key();
 

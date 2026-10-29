@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.1] — Rust-only cryptography security backport
+
+- Upgrade to p256 0.14 and require crypto-bigint >= 0.7.6 to address
+  RUSTSEC-2026-0387. Key generation uses fallible OS randomness; remove rand 0.8
+  from the default dependency graph.
+- Preserve the 0.3.0 wire protocol, including DER credential/delegation
+  signatures, PEM/JWK encodings, key IDs, and persisted TOFU pins. Regression
+  vectors were generated with the unmodified 0.3.0 SDK.
+- Rust callers that name public P-256 key types must also use p256 0.14.
+- Update optional DNS support to hickory-resolver >= 0.26.1 to address
+  RUSTSEC-2026-0119, retaining the 0.3 resolver selection. Rust 1.89 is now required.
+- This is a Rust crate backport only; other SDK versions are unchanged. It does
+  not include main's unreleased protocol-v0.4 security/behavior changes.
+
 All notable changes to the AgentPin project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),

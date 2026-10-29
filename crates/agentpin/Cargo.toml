@@ -1,8 +1,8 @@
 [package]
 name = "agentpin"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
-rust-version = "1.86"
+rust-version = "1.89"
 description = "Domain-anchored cryptographic identity protocol for AI agents"
 license = "MIT"
 authors = ["Jascha Wanger <jascha@thirdkey.ai>"]
@@ -16,8 +16,10 @@ fetch = ["reqwest", "tokio", "async-trait"]
 dns = ["hickory-resolver", "tokio", "async-trait"]
 
 [dependencies]
-p256 = { version = "0.13", features = ["ecdsa", "pem", "jwk"] }
-rand = "0.8"
+p256 = { version = "0.14", features = ["ecdsa", "pem"] }
+# Keep consumers' fresh resolutions above RUSTSEC-2026-0387's patched floor.
+crypto-bigint = "0.7.6"
+rand_core = { version = "0.6", features = ["getrandom"] }
 sha2 = "0.10"
 base64 = "0.21"
 hex = "0.4"
@@ -33,7 +35,7 @@ tokio = { version = "1.0", optional = true }
 tempfile = { version = "3.0", optional = true }
 
 # Optional dependency for DNS TXT cross-verification (v0.3.0)
-hickory-resolver = { version = "0.24", optional = true }
+hickory-resolver = { version = "0.26.1", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"

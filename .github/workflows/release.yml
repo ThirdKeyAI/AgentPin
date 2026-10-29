@@ -19,8 +19,9 @@ jobs:
           echo "Python: $PY_VER"
           echo "JavaScript: $JS_VER"
           echo "Go: $GO_VER"
-          if [ "$RUST_VER" != "$PY_VER" ] || [ "$RUST_VER" != "$JS_VER" ] || [ "$RUST_VER" != "$GO_VER" ]; then
-            echo "::error::Version mismatch! Rust=$RUST_VER Python=$PY_VER JavaScript=$JS_VER Go=$GO_VER"
+          # Maintenance branch: this release patches the Rust SDK only.
+          if [ "$RUST_VER" != "0.3.1" ] || [ "$PY_VER" != "0.3.0" ] || [ "$JS_VER" != "0.3.0" ] || [ "$GO_VER" != "0.3.0" ]; then
+            echo "::error::Unexpected version for the Rust-only 0.3.1 security backport"
             exit 1
           fi
-          echo "All versions match: $RUST_VER"
+          echo "Rust security backport: $RUST_VER; other SDKs remain 0.3.0"
