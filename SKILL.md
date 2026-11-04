@@ -225,6 +225,9 @@ Serves:
 | `mutual` | Challenge-response mutual authentication (128-bit nonces) |
 | `jwk` | JWK handling and thumbprint computation |
 | `resolver` | Pluggable discovery resolution |
+| `httpsig` | RFC 9421 HTTP message signatures (Ed25519) |
+| `wba` | Web Bot Auth: request signing/verification, key directories, AgentPin binding |
+| `resolver_wba` | Web Bot Auth directory fetching and caching (`fetch`) |
 
 ### Language API Reference
 
@@ -251,6 +254,8 @@ Serves:
 ### ES256 Only
 
 AgentPin exclusively uses ES256 (ECDSA P-256). All other algorithms are rejected. This is enforced inline without an external JWT crate.
+
+The one exception is Web Bot Auth (`agentpin::wba`, Rust only): HTTP requests are signed with separate Ed25519 keys per RFC 9421. A credential can name its agent's WBA key in `cnf.jkt`, binding the two identities. Credentials themselves are still ES256 only. See `docs/web-bot-auth.md`.
 
 ### 12-Step Verification
 

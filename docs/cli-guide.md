@@ -192,6 +192,32 @@ agentpin verify \
 
 ---
 
+### `agentpin wba` — Web Bot Auth
+
+Ed25519 keys, key directories and request signing for
+[Web Bot Auth](web-bot-auth.md).
+
+```bash
+# Generate a key; prints its keyid (JWK thumbprint)
+agentpin wba keygen --name crawler-2026-11 --output-dir ./keys
+
+# Print the key directory (JWK Set)
+agentpin wba directory --key ./keys/crawler-2026-11.ed25519.pem
+
+# Sign a request; prints Signature-Agent, Signature-Input and Signature
+agentpin wba sign \
+  --key ./keys/crawler-2026-11.ed25519.pem \
+  --signature-agent https://example.com/.well-known/http-message-signatures-directory \
+  --url https://shop.example/products \
+  [--method GET] [--header "Authorization: AgentPin <jwt>"] [--validity 300] \
+  [--legacy-signature-agent]
+```
+
+Headers passed with `--header` are sent and covered by the signature. To
+bind a credential to the key, issue it with `agentpin issue --wba-jkt <keyid>`.
+
+---
+
 ### `agentpin-server` — Serve Discovery Endpoints
 
 The `agentpin-server` binary serves `.well-known` discovery and revocation endpoints over HTTP.
@@ -211,6 +237,8 @@ agentpin-server \
 | `--revocation` | No | — | Path to revocation document JSON |
 | `--port` | No | `8080` | HTTP listening port |
 | `--host` | No | `0.0.0.0` | Bind address |
+| `--wba-key` | No | — | Ed25519 PEM to publish in the Web Bot Auth key directory (repeatable) |
+| `--wba-authority` | No | — | Extra host the key directory is served for (the discovery entity is always allowed) |
 
 **Endpoints served:**
 
@@ -218,6 +246,7 @@ agentpin-server \
 |------|---------------|-------------|
 | `GET /.well-known/agent-identity.json` | `max-age=3600` | Discovery document |
 | `GET /.well-known/agent-identity-revocations.json` | `max-age=300` | Revocation document |
+| `GET /.well-known/http-message-signatures-directory` | `max-age=3600` | Signed Web Bot Auth key directory (only with `--wba-key`) |
 | `GET /health` | — | Health check (returns `200 OK`) |
 
 **Production deployment behind a reverse proxy:**

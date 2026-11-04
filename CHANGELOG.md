@@ -22,6 +22,30 @@ Security release addressing the AP-1 through AP-23 review findings in all
 four SDKs (Rust, Go, JavaScript, Python). Specification bumped to 0.4.0; the
 document `agentpin_version` stays `"0.1"`.
 
+### Added: Web Bot Auth (Rust)
+
+- RFC 9421 HTTP Message Signatures (`agentpin::httpsig`): signature base
+  construction, `Signature-Input`/`Signature` parsing, Ed25519 signing and
+  strict verification, `Content-Digest`.
+- Web Bot Auth profile (`agentpin::wba`), following
+  draft-ietf-webbotauth-httpsig-protocol-01: Ed25519 keys with RFC 8037
+  thumbprint `keyid`, request signing with a Dictionary `Signature-Agent`
+  (legacy String form opt-in), verification with verified / invalid /
+  unverified outcomes and key lookup keyed on (URL, keyid), and signed key
+  directory responses. Reproduces the draft's Ed25519 test vectors.
+- `agentpin::resolver_wba` (`fetch` feature): directory fetching with SSRF
+  limits (https only, no redirects, non-public addresses refused, size, key
+  count and time caps) and a cache that a failed refetch never evicts.
+  `net::fetch_bounded` and `net::is_non_public` back it.
+- AgentPin binding (spec §18): optional `cnf.jkt` credential claim
+  (`credential::issue_bound_credential`), optional `web_bot_auth` discovery
+  field, and `wba::verify_bound_request` / `wba::check_binding`.
+- `agentpin-server --wba-key` serves a signed
+  `/.well-known/http-message-signatures-directory`, only for its own hosts.
+- CLI: `agentpin wba keygen | directory | sign` and `agentpin issue --wba-jkt`.
+- The ES256 credential profile is unchanged. The new fields are optional,
+  so documents and credentials without them verify as before.
+
 ### Breaking wire changes
 
 - **Challenge responses, delegation attestations and AgentCards are signed

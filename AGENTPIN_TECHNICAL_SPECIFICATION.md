@@ -125,7 +125,8 @@
 - [15. Privacy Considerations](#15-privacy-considerations)
 - [16. IANA Considerations](#16-iana-considerations)
 - [17. Conformance Requirements](#17-conformance-requirements)
-- [18. Future Work](#18-future-work)
+- [18. Web Bot Auth Binding (v0.4)](#18-web-bot-auth-binding-v04)
+- [19. Future Work](#19-future-work)
 - [Appendix A: JSON Schema Definitions](#appendix-a-json-schema-definitions)
 - [Appendix B: Example Implementations](#appendix-b-example-implementations)
 - [Appendix C: Relationship to Existing Standards](#appendix-c-relationship-to-existing-standards)
@@ -343,6 +344,7 @@ The discovery document is a JSON object with the following top-level structure:
 | `policy_url` | string | OPTIONAL | URL of a human-readable policy document describing the entity's agent governance. |
 | `schemapin_endpoint` | string | OPTIONAL | URL of the entity's SchemaPin discovery document, if any. Enables cross-protocol discovery. |
 | `a2a_endpoint` | string | OPTIONAL | (v0.3) URL of the entity's A2A AgentCard endpoint (typically `https://{domain}/.well-known/agent-card.json`). Enables cross-protocol discovery from AgentPin into A2A. See §4.9, §4.10. |
+| `web_bot_auth` | object | OPTIONAL | (v0.4) `{"signature_agents": ["https://…"]}`: the Web Bot Auth key directories this entity vouches for. See §18. |
 | `max_delegation_depth` | integer | REQUIRED | Maximum delegation depth this entity permits. MUST be between 0 and 3 inclusive. |
 | `updated_at` | string | REQUIRED | ISO 8601 datetime of the last update to this document. |
 
@@ -942,6 +944,7 @@ integer, `capabilities` an array of strings, and `agentpin_version` MUST equal
 | `constraints` | object | OPTIONAL | Operational constraints (see §5.5). |
 | `delegation_chain` | array | OPTIONAL | Delegation attestations (see §5.6). |
 | `nonce` | string | OPTIONAL | Challenge nonce for mutual verification (see §9). |
+| `cnf` | object | OPTIONAL | (v0.4) Key confirmation binding the credential to a Web Bot Auth key: `{"jkt": "<base64url SHA-256 JWK thumbprint>"}` (see §18). |
 
 ### 5.4 Capability Claims
 
@@ -1942,6 +1945,8 @@ This specification would register the following if submitted as an RFC:
 - (v0.3) Perform DNS TXT cross-verification at `_agentpin.{domain}` (§4.8.3) as a second-channel trust signal. When implemented, the verifier MUST treat a mismatching record as a hard `DISCOVERY_INVALID` failure and an absent record as a no-op.
 - (v0.3) Accept A2A AgentCards (§4.10) as discovery input, provided they have been verified per §4.10.4 (extension-signature verification AND key thumbprint matched against the AgentPin discovery document, unless an out-of-band provenance check is documented).
 
+- (v0.4) Accept Web Bot Auth signed requests and bind them to AgentPin credentials (§18). When implemented, all of §18.4 MUST be applied.
+
 ### Verifiers SHOULD:
 - Enforce credential constraints (domain, rate limit, data classification).
 - Cache discovery documents per HTTP cache headers.
@@ -1951,7 +1956,102 @@ This specification would register the following if submitted as an RFC:
 
 ---
 
-## 18. Future Work
+## 18. Web Bot Auth Binding (v0.4)
+
+Web Bot Auth (WBA, draft-ietf-webbotauth-httpsig-protocol) lets an automated
+client sign HTTP requests with RFC 9421 HTTP Message Signatures so that
+origins and edge providers can recognize it. A WBA signature identifies an
+agent by the HTTPS URL of its key directory. AgentPin identifies an agent by
+a domain-anchored credential. This section binds the two, so that a request
+recognized at the edge by its WBA signature can also be attributed to a
+specific AgentPin agent with its capabilities and constraints.
+
+WBA keys are Ed25519 and separate from the ES256 keys of §7. The ES256
+credential profile (§5) is unchanged, and an ES256 credential key MUST NOT
+be used to sign HTTP messages.
+
+### 18.1 Signing Requests
+
+An agent signs requests per the WBA draft:
+
+- `alg="ed25519"`; `keyid` is the RFC 8037 Appendix A.3 JWK SHA-256
+  thumbprint of the Ed25519 key, base64url without padding.
+- `tag="web-bot-auth"`; `created` and `expires` are REQUIRED, and
+  `expires - created` SHOULD NOT exceed 24 hours.
+- The covered components MUST include `@authority` (or `@target-uri`) and
+  the `Signature-Agent` member naming the agent's key directory
+  (`"signature-agent";key="<label>"`). They SHOULD include `@method` and
+  `@path`.
+- `Signature-Agent` MUST be sent as a Dictionary
+  (`sig1="https://example.com/.well-known/http-message-signatures-directory"`).
+  Implementations MAY offer the legacy bare-String form for verifiers that
+  predate the Dictionary form.
+
+### 18.2 Key Directory
+
+The agent's operator publishes its Ed25519 keys as a JWK Set at the
+`Signature-Agent` URL, normally
+`https://{domain}/.well-known/http-message-signatures-directory`, served
+with media type `application/http-message-signatures-directory+json`. Each
+JWK's `kid`, when present, MUST be its thumbprint.
+
+The directory response SHOULD carry one possession-proof signature per key
+(WBA Appendix B.1): covered components `"@authority";req` and
+`content-digest`, `tag="http-message-signatures-directory"`, and `created`,
+`expires` and `keyid`. Because the proof covers the request authority, a
+server MUST NOT sign directory responses for hosts other than its own.
+
+### 18.3 Credential Binding
+
+To bind an agent's credential to its WBA key, the issuer sets the `cnf`
+claim (§5.3) to `{"jkt": "<thumbprint>"}`, where `<thumbprint>` is the WBA
+`keyid`. A `cnf.jkt` that is not a base64url SHA-256 thumbprint (43
+characters, 32 bytes) is `MALFORMED_CREDENTIAL`.
+
+The issuer's discovery document vouches for key directory URLs through
+`web_bot_auth.signature_agents`, a list of 1 to 16 `https` URLs. A
+directory may be hosted by a provider rather than on the entity's domain.
+When the field is absent, only
+`https://{entity}/.well-known/http-message-signatures-directory` is vouched
+for. When it is present, it replaces that default.
+
+The agent sends its credential as `Authorization: AgentPin <jwt>` (§13) and
+covers `authorization` in its WBA signature.
+
+### 18.4 Verification
+
+A verifier accepting a WBA-bound request MUST:
+
+1. Verify the WBA signature per the draft. Key lookup is keyed on the
+   `(Signature-Agent URL, keyid)` pair, never on `keyid` alone. The
+   Signature-Agent URL is the member the signature covers, normalized by
+   dropping its query and fragment.
+2. Verify the credential per §6.
+3. Confirm the signature covers `authorization`.
+4. Confirm the credential's `cnf.jkt` equals the signature's `keyid`.
+5. Confirm the Signature-Agent URL is vouched for by the credential
+   issuer's discovery document (§18.3).
+
+Steps 1 and 2 have the outcomes of their own protocols. A WBA signature that
+cannot be checked because its directory is unavailable, or the directory
+lacks the key, is *unverified*, not invalid (WBA Appendix C.1). Failing step
+3, 4 or 5 means the WBA identity and the AgentPin identity are not bound,
+and the request MUST NOT be attributed to the AgentPin agent.
+
+### 18.5 Directory Fetching
+
+The `Signature-Agent` URL is chosen by the client, so fetching it is a
+server-side request forgery risk (WBA §6.7). Verifiers that fetch
+directories MUST use `https`, MUST NOT follow redirects, MUST treat any
+status other than 200 as a discovery failure, and SHOULD refuse hosts that
+are or resolve to loopback, private, link-local or other non-public
+addresses. They SHOULD bound response size, key count and fetch time. A
+failed fetch MUST NOT evict a cached directory; a directory that resolves
+without a key does replace the cached copy (WBA §6.10).
+
+---
+
+## 19. Future Work
 
 1. **Transparency logging.** A CT-log style system for agent identity documents, allowing public auditability of all published discovery documents.
 
