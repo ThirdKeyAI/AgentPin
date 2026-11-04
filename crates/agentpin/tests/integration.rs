@@ -46,6 +46,7 @@ fn make_test_setup() -> (String, String, String, String, DiscoveryDocument) {
         policy_url: None,
         schemapin_endpoint: None,
         a2a_endpoint: None,
+        web_bot_auth: None,
         max_delegation_depth: 2,
         updated_at: "2026-01-01T00:00:00Z".to_string(),
     };
@@ -247,6 +248,7 @@ fn test_key_rotation_lifecycle() {
         policy_url: None,
         schemapin_endpoint: None,
         a2a_endpoint: None,
+        web_bot_auth: None,
         max_delegation_depth: 2,
         updated_at: "2026-01-01T00:00:00Z".to_string(),
     };

@@ -373,6 +373,7 @@ pub(crate) fn derive_discovery_from_card(card: &A2aAgentCard) -> Result<Discover
         policy_url: None,
         schemapin_endpoint: None,
         a2a_endpoint: Some(extension.agentpin_endpoint.clone()),
+        web_bot_auth: None,
         max_delegation_depth: 0,
         updated_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     })

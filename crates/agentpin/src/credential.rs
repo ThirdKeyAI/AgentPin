@@ -6,7 +6,7 @@ use crate::error::Error;
 use crate::jwt;
 use crate::types::capability::Capability;
 use crate::types::constraint::Constraints;
-use crate::types::credential::{DelegationAttestation, JwtHeader, JwtPayload};
+use crate::types::credential::{Confirmation, DelegationAttestation, JwtHeader, JwtPayload};
 
 /// Issue a new agent credential JWT.
 #[allow(clippy::too_many_arguments)]
@@ -20,6 +20,65 @@ pub fn issue_credential(
     constraints: Option<Constraints>,
     delegation_chain: Option<Vec<DelegationAttestation>>,
     ttl_secs: u64,
+) -> Result<String, Error> {
+    issue(
+        signing_key,
+        kid,
+        issuer,
+        agent_id,
+        audience,
+        capabilities,
+        constraints,
+        delegation_chain,
+        ttl_secs,
+        None,
+    )
+}
+
+/// Issue a credential bound to the agent's Web Bot Auth Ed25519 key:
+/// `wba_jkt` (its JWK thumbprint, see [`crate::wba::thumbprint`]) is
+/// carried as `cnf.jkt` (spec §18).
+#[allow(clippy::too_many_arguments)]
+pub fn issue_bound_credential(
+    signing_key: &SigningKey,
+    kid: &str,
+    issuer: &str,
+    agent_id: &str,
+    audience: Option<&str>,
+    capabilities: Vec<Capability>,
+    constraints: Option<Constraints>,
+    delegation_chain: Option<Vec<DelegationAttestation>>,
+    ttl_secs: u64,
+    wba_jkt: &str,
+) -> Result<String, Error> {
+    issue(
+        signing_key,
+        kid,
+        issuer,
+        agent_id,
+        audience,
+        capabilities,
+        constraints,
+        delegation_chain,
+        ttl_secs,
+        Some(Confirmation {
+            jkt: wba_jkt.to_string(),
+        }),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn issue(
+    signing_key: &SigningKey,
+    kid: &str,
+    issuer: &str,
+    agent_id: &str,
+    audience: Option<&str>,
+    capabilities: Vec<Capability>,
+    constraints: Option<Constraints>,
+    delegation_chain: Option<Vec<DelegationAttestation>>,
+    ttl_secs: u64,
+    cnf: Option<Confirmation>,
 ) -> Result<String, Error> {
     let now = Utc::now().timestamp();
 
@@ -42,7 +101,9 @@ pub fn issue_credential(
         constraints,
         delegation_chain,
         nonce: None,
+        cnf,
     };
+    jwt::validate_claims(&payload)?;
 
     jwt::encode_jwt(&header, &payload, signing_key)
 }
