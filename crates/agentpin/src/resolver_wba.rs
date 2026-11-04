@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::httpsig::PublicKey;
 use chrono::Utc;
-use ed25519_dalek::VerifyingKey;
 
 use crate::error::Error;
 use crate::httpsig::HttpRequest;
@@ -126,11 +126,7 @@ pub async fn fetch_directory(
 #[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait AsyncKeyLookup: Send + Sync {
-    async fn lookup(
-        &self,
-        signature_agent: &str,
-        keyid: &str,
-    ) -> Result<Option<VerifyingKey>, Error>;
+    async fn lookup(&self, signature_agent: &str, keyid: &str) -> Result<Option<PublicKey>, Error>;
 }
 
 struct Cached {
@@ -167,11 +163,7 @@ impl Default for CachingDirectoryResolver {
 
 #[async_trait::async_trait]
 impl AsyncKeyLookup for CachingDirectoryResolver {
-    async fn lookup(
-        &self,
-        signature_agent: &str,
-        keyid: &str,
-    ) -> Result<Option<VerifyingKey>, Error> {
+    async fn lookup(&self, signature_agent: &str, keyid: &str) -> Result<Option<PublicKey>, Error> {
         // Verified requests always pass a normalized https URL; plain URLs
         // are only reachable with `require_https` off (tests).
         let url = if self.opts.require_https {
@@ -223,7 +215,7 @@ pub async fn verify_request_async(
     let mut result = invalid.map(WbaOutcome::Invalid);
     for c in candidates {
         let key = keys.lookup(c.signature_agent(), c.keyid()).await;
-        match finish(req, c, key) {
+        match finish(req, c, key, opts, now) {
             v @ WbaOutcome::Verified(_) => return v,
             failure => result = worse(result, failure),
         }
@@ -239,6 +231,10 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    fn gen() -> crate::httpsig::PrivateKey {
+        generate_signing_key().into()
+    }
 
     /// HTTP/1.1 server; `respond` builds the canned response from the
     /// directory URL. Counts connections.
@@ -294,10 +290,8 @@ mod tests {
 
     #[tokio::test]
     async fn fetches_signed_directory_and_caches_it() {
-        let key = generate_signing_key();
-        let body = Directory::from_keys([&key.verifying_key()])
-            .to_json()
-            .unwrap();
+        let key = gen();
+        let body = Directory::from_keys([&key.public_key()]).to_json().unwrap();
         let (url, hits) = serve_with(|url| {
             let u = url::Url::parse(url).unwrap();
             let authority = format!("{}:{}", u.host_str().unwrap(), u.port().unwrap());
@@ -323,39 +317,39 @@ mod tests {
         assert_eq!(ttl, Duration::from_secs(600));
 
         let resolver = CachingDirectoryResolver::new(local_opts());
-        let tp = wba::thumbprint(&key.verifying_key());
+        let tp = wba::thumbprint(&key.public_key());
         hits.store(0, Ordering::SeqCst);
         assert_eq!(
             resolver.lookup(&url, &tp).await.unwrap(),
-            Some(key.verifying_key())
+            Some(key.public_key())
         );
         assert_eq!(
             resolver.lookup(&url, &tp).await.unwrap(),
-            Some(key.verifying_key())
+            Some(key.public_key())
         );
         assert_eq!(hits.load(Ordering::SeqCst), 1, "second lookup is cached");
         // A key the directory does not publish: resolved, not found.
-        let other = wba::thumbprint(&generate_signing_key().verifying_key());
+        let other = wba::thumbprint(&gen().public_key());
         assert_eq!(resolver.lookup(&url, &other).await.unwrap(), None);
     }
 
     /// A failed refetch keeps the cached directory instead of evicting it.
     #[tokio::test]
     async fn failed_fetch_keeps_cached_directory() {
-        let key = generate_signing_key();
-        let tp = wba::thumbprint(&key.verifying_key());
+        let key = gen();
+        let tp = wba::thumbprint(&key.public_key());
         let resolver = CachingDirectoryResolver::new(local_opts());
         let url = "http://127.0.0.1:9/.well-known/http-message-signatures-directory";
         resolver.cache.lock().unwrap().insert(
             url.to_string(),
             Cached {
-                directory: Directory::from_keys([&key.verifying_key()]),
+                directory: Directory::from_keys([&key.public_key()]),
                 fresh_until: Instant::now(),
             },
         );
         assert_eq!(
             resolver.lookup(url, &tp).await.unwrap(),
-            Some(key.verifying_key())
+            Some(key.public_key())
         );
         let empty = CachingDirectoryResolver::new(local_opts());
         assert!(empty.lookup(url, &tp).await.is_err());
@@ -387,10 +381,8 @@ mod tests {
         assert_eq!(hits.load(Ordering::SeqCst), 0);
 
         // require_proof drops unsigned keys.
-        let key = generate_signing_key();
-        let body = Directory::from_keys([&key.verifying_key()])
-            .to_json()
-            .unwrap();
+        let key = gen();
+        let body = Directory::from_keys([&key.public_key()]).to_json().unwrap();
         let (url, _) = serve(http(
             "200 OK",
             &[(
@@ -411,18 +403,18 @@ mod tests {
             .is_empty());
     }
 
-    struct Fixed(Option<VerifyingKey>);
+    struct Fixed(Option<PublicKey>);
 
     #[async_trait::async_trait]
     impl AsyncKeyLookup for Fixed {
-        async fn lookup(&self, _: &str, _: &str) -> Result<Option<VerifyingKey>, Error> {
-            Ok(self.0)
+        async fn lookup(&self, _: &str, _: &str) -> Result<Option<PublicKey>, Error> {
+            Ok(self.0.clone())
         }
     }
 
     #[tokio::test]
     async fn async_verify_matches_sync_outcomes() {
-        let key = generate_signing_key();
+        let key = gen();
         let mut req = HttpRequest::new("GET", "https://origin.example/").unwrap();
         sign_request(
             &req,
@@ -434,7 +426,7 @@ mod tests {
         .apply(&mut req);
         let opts = VerifyOptions::default();
         assert!(matches!(
-            verify_request_async(&req, &Fixed(Some(key.verifying_key())), &opts).await,
+            verify_request_async(&req, &Fixed(Some(key.public_key())), &opts).await,
             WbaOutcome::Verified(_)
         ));
         assert!(matches!(
@@ -442,12 +434,7 @@ mod tests {
             WbaOutcome::Unverified(_)
         ));
         assert!(matches!(
-            verify_request_async(
-                &req,
-                &Fixed(Some(generate_signing_key().verifying_key())),
-                &opts
-            )
-            .await,
+            verify_request_async(&req, &Fixed(Some(gen().public_key())), &opts).await,
             WbaOutcome::Invalid(_)
         ));
     }

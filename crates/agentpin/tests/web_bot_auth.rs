@@ -110,7 +110,7 @@ fn credential(s: &Setup, jkt: Option<&str>) -> String {
 /// A signed request; `cover_auth` controls whether the signature covers
 /// the Authorization field carrying the credential.
 fn request(
-    wba_key: &ed25519_dalek::SigningKey,
+    wba_key: &wba::PrivateKey,
     signature_agent: &str,
     jwt: &str,
     cover_auth: bool,
@@ -144,9 +144,9 @@ fn verify(
     )
 }
 
-fn keys(url: &str, key: &ed25519_dalek::SigningKey) -> DirectoryKeyStore {
+fn keys(url: &str, key: &wba::PrivateKey) -> DirectoryKeyStore {
     let mut k = DirectoryKeyStore::new();
-    k.insert(url, Directory::from_keys([&key.verifying_key()]))
+    k.insert(url, Directory::from_keys([&key.public_key()]))
         .unwrap();
     k
 }
@@ -154,9 +154,9 @@ fn keys(url: &str, key: &ed25519_dalek::SigningKey) -> DirectoryKeyStore {
 #[test]
 fn bound_request_verifies_with_well_known_directory() {
     let s = setup(None);
-    let wba_key = generate_signing_key();
+    let wba_key = wba::PrivateKey::from(generate_signing_key());
     let url = well_known_directory("example.com");
-    let jwt = credential(&s, Some(&wba::thumbprint(&wba_key.verifying_key())));
+    let jwt = credential(&s, Some(&wba::thumbprint(&wba_key.public_key())));
     let req = request(&wba_key, &url, &jwt, true);
 
     let bound = verify(&s, &req, &keys(&url, &wba_key)).expect("bound request verifies");
@@ -170,8 +170,8 @@ fn discovery_can_vouch_for_a_hosted_directory() {
     let s = setup(Some(WebBotAuth {
         signature_agents: vec![hosted.to_string()],
     }));
-    let wba_key = generate_signing_key();
-    let jwt = credential(&s, Some(&wba::thumbprint(&wba_key.verifying_key())));
+    let wba_key = wba::PrivateKey::from(generate_signing_key());
+    let jwt = credential(&s, Some(&wba::thumbprint(&wba_key.public_key())));
     let req = request(&wba_key, hosted, &jwt, true);
     assert!(verify(&s, &req, &keys(hosted, &wba_key)).is_ok());
 
@@ -187,10 +187,10 @@ fn discovery_can_vouch_for_a_hosted_directory() {
 #[test]
 fn binding_failures() {
     let s = setup(None);
-    let wba_key = generate_signing_key();
+    let wba_key = wba::PrivateKey::from(generate_signing_key());
     let url = well_known_directory("example.com");
     let store = keys(&url, &wba_key);
-    let tp = wba::thumbprint(&wba_key.verifying_key());
+    let tp = wba::thumbprint(&wba_key.public_key());
 
     // Credential without cnf.
     let req = request(&wba_key, &url, &credential(&s, None), true);
@@ -200,7 +200,7 @@ fn binding_failures() {
     ));
 
     // cnf names a different key.
-    let other = wba::thumbprint(&generate_signing_key().verifying_key());
+    let other = wba::thumbprint(&wba::PrivateKey::from(generate_signing_key()).public_key());
     let req = request(&wba_key, &url, &credential(&s, Some(&other)), true);
     assert!(matches!(
         verify(&s, &req, &store),

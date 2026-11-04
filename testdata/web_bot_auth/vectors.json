@@ -1,0 +1,191 @@
+{
+  "description": "Web Bot Auth vectors from draft-ietf-webbotauth-httpsig-protocol-01 Appendix E, keys from RFC 9421 Appendix B.1.2 (RSA, re-encoded as rsaEncryption PKCS#8) and B.1.4 (Ed25519). Verify at now=1735689700 with no validity ceiling.",
+  "keys": {
+    "ed25519": {
+      "private_pem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ+DYvh6SEqVTm50DFtMDoQikTmiCqirVv9mWG9qfSnF\n-----END PRIVATE KEY-----\n",
+      "keyid": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U",
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs"
+      }
+    },
+    "rsa": {
+      "private_pem": "-----BEGIN PRIVATE KEY-----\nMIIEwAIBADANBgkqhkiG9w0BAQEFAASCBKowggSmAgEAAoIBAQCvi2abevbRZ389\nuq8/Wzb5AS2+m5FpXxirjSCNRHzLZGPFrp2kbYZcds9+8yzxy34uHUYfjnHbxHDd\nHLneab6gBePJDzo6cORnk3yVhuCAPg7fDozqkC8uSGT3kCd1OuJ9sgU81Tw88w7s\n7KsUAeqAOzOeM8WZM60IRw3ZnUWlaByHC5gs8v5aiSqW13XWeqrOL5sn1y9IoANh\n1QAA3lZS3N2mLLottOBLE/uhyJThOfSDkjpoNknsDwvOjQpLJligDjzmapw7QZUB\n1XD2Wrho5P2/p36dvhuc2RBWSUtDd9UC8mb7F0M6n0sI0I3jxXamcM6QVXr5T2dX\nmjJzpcjbAgMBAAECggEBAJQHyKn6QmKJlUoXwCp8H9pQ/SNMCo5B7ArWQon+JAJc\nEKqlujfrSC923TkflVn9ENWQSA7aTvdVKxu6Wp7MqzxEWza0SZT4mBMj0x5Ak9Zw\n/pdorLoshizQTZxaCnwYAOCgGzyWUGrRSFfQp9+CUh56Teftnoa3hgWB7ZMBxbZZ\ns3hd8ruW6kXKjocfJZGJgcwwBFBcsl45J1OflowE/Q87htDKTk5HFNRJ45yI8lQW\nS1AeS8ZvKbsqvIR/AfxOSzQvtaHPI/rQ8vfFL0U04mL2b7PO3BghcYNC4ozYYOwh\nN4PaYjageg8zIAPTB0jsHBJVbXynWH6OB9zh2V7EphECgYEA5V+6ISI5yEaCFXm+\nfk1EM2xwAWekePVCAyvr9QbTlFOCZwt9WwjUjhtKRusi5Uq+IYZ/tq2WRE4As4b/\nFHEMtp2AER43IcvmXPqKFBoUktVDS7dThIHrsnRi1U7dHqVdwiMEMe5jxKNgnsKL\npnq+4NyhoS6OeWu1SFozG9J9xQkCgYEAw+wIde17W5Y0Cphp3ZZ0uM8OUq1AkrV2\nIKauqYHaDxAT32EM4ci2MMER2nIUEo4g/42lW0zYouFFqONwv0+HyOsgPpdSqKRC\n5WLgn0VXabjaNcy6KhNPXeJ0AgtqdiDwPeJ2/L/eKwNWQ43RfdQBUquAwSd7SEmm\nQ8sViqB628MCgYEAotDolkxtJ7Sk8gmRJqZCGx6GAvlGznWJfibXPv6xgUAl+G83\ndD84YgcNGnoeMxRzEekfDtT5LVMRPF4/AoucsqPqHDyOdfb+dlGBYfOBVxj6w+xF\n5HE0lV/4J+HrI63Od9fTSn4lY5d1JjyCVJIcnBEAyiD6EUZbUBh23vDzRcECgYEA\niZE1S6CpqmBoQDxOsXGQmaeBdhoCqkDSJhEDuS/dLhBq88FQa0UkcE1QvOK3J2Q2\n1VnfDqGBx7SH1hOFOj+cpz45kNluB832ztxDvnHQ9AIA7h/HY/3VD6YPMNRVN4bf\nSYS3abdLR0Z7jsmInGJ9X0/fA0E2tkZIgXeas5EFU0MCgYEAjRAqfYi/tKCjhP9e\nM0N2XaRlNeoYCTx06GlSLD8d0zc4ZZuEePY10LMGWI6Y/JC0CvvvQYhNa9sAj4hF\njIVLsWeTplVVUezGO1ofLW4kYWVpnMpHgAY1pRM4kyzo1p3MKYY8DE1BA4KqhSOf\nhdGs6Ov3Dfj0migZeE7Fu7yc7Fc=\n-----END PRIVATE KEY-----\n\n",
+      "keyid": "oD0HwocPBSfpNy5W3bpJeyFGY_IQ_YpqxSjQ3Yd-CLA",
+      "jwk": {
+        "kty": "RSA",
+        "n": "r4tmm3r20Wd_PbqvP1s2-QEtvpuRaV8Yq40gjUR8y2Rjxa6dpG2GXHbPfvMs8ct-Lh1GH45x28Rw3Ry53mm-oAXjyQ86OnDkZ5N8lYbggD4O3w6M6pAvLkhk95AndTrifbIFPNU8PPMO7OyrFAHqgDsznjPFmTOtCEcN2Z1FpWgchwuYLPL-Wokqltd11nqqzi-bJ9cvSKADYdUAAN5WUtzdpiy6LbTgSxP7ociU4Tn0g5I6aDZJ7A8Lzo0KSyZYoA485mqcO0GVAdVw9lq4aOT9v6d-nb4bnNkQVklLQ3fVAvJm-xdDOp9LCNCN48V2pnDOkFV6-U9nV5oyc6XI2w",
+        "e": "AQAB"
+      }
+    }
+  },
+  "requests": [
+    {
+      "name": "E.1.1",
+      "key": "rsa",
+      "method": "GET",
+      "url": "https://example.com/",
+      "signature_agent_url": "https://signature-agent.test",
+      "headers": [
+        [
+          "Signature-Agent",
+          "sig2=\"https://signature-agent.test\""
+        ],
+        [
+          "Signature-Input",
+          "sig2=(\"@authority\" \"signature-agent\";key=\"sig2\");created=1735689600;keyid=\"oD0HwocPBSfpNy5W3bpJeyFGY_IQ_YpqxSjQ3Yd-CLA\";alg=\"rsa-pss-sha512\";expires=4889289600;nonce=\"wcfPQPh7SzkvrIVvhD00vNk9PkxJNY2NVbYl2PVBB4zmUoluSwE7W6bPtF60QA3k8g06FU7PPCD+J58YofY1zg==\";tag=\"web-bot-auth\""
+        ],
+        [
+          "Signature",
+          "sig2=:iOCCPgZeV5D5KlfZLXIFQOZR2njqFiCMZIrb5HRRLrFZR5Wtpsn7HwbKfWYHqW3dYU7HV/RohjNg7fuyQ1Mdy2J4mya9JnQCZtCcIcOK/LM9Yc6g6ZTw0onurllrzEzuNQIFFkBTgPJZlA3rHioFrmDmn+nnN7HaC+it/PA2iGfENHYq9D3Ud7ZeDICmF1s5bsMgc+y+MxTPFQHxOEyhbCDjZbT5yeSkGP1Czczg7Cpf0Fz/wuF3mJJ7TL1mzQk3PPizXFr/EnjdUWri1/W8M/f93d389BFF+qbkISzAvOHEk5TqOoyrzzotTn3xmYN6SCGTHG42fK4rA4Ei0qCnnA==:"
+        ]
+      ],
+      "reproducible": false
+    },
+    {
+      "name": "E.1.2",
+      "key": "rsa",
+      "method": "GET",
+      "url": "https://example.com/",
+      "signature_agent_url": "https://signature-agent.test",
+      "legacy": true,
+      "headers": [
+        [
+          "Signature-Agent",
+          "\"https://signature-agent.test\""
+        ],
+        [
+          "Signature-Input",
+          "sig2=(\"@authority\" \"signature-agent\");created=1735689600;keyid=\"oD0HwocPBSfpNy5W3bpJeyFGY_IQ_YpqxSjQ3Yd-CLA\";alg=\"rsa-pss-sha512\";expires=1735693200;nonce=\"XSHtZVCThSIAksXsH9WBs6AtxtXC0eQGiIcUGSoJstFs8lAWakjhrfwzLhyjtme5iXMZvmFWqDEs6cT3Jf+BbQ==\";tag=\"web-bot-auth\""
+        ],
+        [
+          "Signature",
+          "sig2=:I1QWNzGXdP1a4dSvOHLCVOOanEYHDk+ZsVxM9MLX/p4ko69ghKwR5EOtAD96g7g4GWP7lmpM/jFAf9q8EFRDTPLjUXySwMv4YPgabv2LQihTJG2y8a2m6IGltyruwQNiqSJVUuRaG9+b17CGmAMFZh30X6GXLdQJrCARpeTqPwp2DC+a8haDE/VE5EruqzjA5/2mKwvrkzkSqeW5tOVtFwWRRHIOidquf/8Je6kM9mhgkg4arudLA5SL4wyyYE1jURIgcOl8agrfdJ5Def23DIRtiOLRa8jT9cpTLFAuFHN+mrZA/LH9h0gSIg1cPb+0cMASee5uku1KjWcFer7jWA==:"
+        ]
+      ],
+      "reproducible": false
+    },
+    {
+      "name": "E.2.1",
+      "key": "ed25519",
+      "method": "GET",
+      "url": "https://example.com/",
+      "signature_agent_url": "https://signature-agent.test",
+      "headers": [
+        [
+          "Signature-Agent",
+          "agent2=\"https://signature-agent.test\""
+        ],
+        [
+          "Signature-Input",
+          "sig2=(\"@authority\" \"signature-agent\";key=\"agent2\");created=1735689600;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";expires=4889289600;nonce=\"n9p433xm+NJ3ph3upfBIGmsuwHw387YV7Q/F+6BSpGCVjYCqQw6rznNA8PVVLySrAWsv0hQtFioQb6E1YsauiA==\";tag=\"web-bot-auth\""
+        ],
+        [
+          "Signature",
+          "sig2=:RdNFx5Bj6au3YgAMQL/RzmUlZE8QZLIaXGRpw985hWnwPfMxT228NMk6ehRS1PSl4e8PhbNZACSanGdhEwYCCg==:"
+        ]
+      ],
+      "reproducible": true
+    },
+    {
+      "name": "E.2.2",
+      "key": "ed25519",
+      "method": "GET",
+      "url": "https://example.com/",
+      "signature_agent_url": "https://signature-agent.test",
+      "legacy": true,
+      "headers": [
+        [
+          "Signature-Agent",
+          "\"https://signature-agent.test\""
+        ],
+        [
+          "Signature-Input",
+          "sig2=(\"@authority\" \"signature-agent\");created=1735689600;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";expires=1735693200;nonce=\"e8N7S2MFd/qrd6T2R3tdfAuuANngKI7LFtKYI/vowzk4lAZYadIX6wW25MwG7DCT9RUKAJ0qVkU0mEeLElW1qg==\";tag=\"web-bot-auth\""
+        ],
+        [
+          "Signature",
+          "sig2=:jdq0SqOwHdyHr9+r5jw3iYZH6aNGKijYp/EstF4RQTQdi5N5YYKrD+mCT1HA1nZDsi6nJKuHxUi/5Syp3rLWBA==:"
+        ]
+      ],
+      "reproducible": true
+    }
+  ],
+  "directory": {
+    "name": "E.2.3",
+    "authority": "signature-agent.test",
+    "body": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\",\"x\":\"JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs\",\"use\":\"sig\"}]}",
+    "headers": [
+      [
+        "Content-Digest",
+        "sha-256=:CADMT2aBdV/rqQr/NIru64ERQkCobVvllA4V0fLFDu0=:"
+      ],
+      [
+        "Signature-Input",
+        "binding=(\"@authority\";req \"content-digest\");created=1735689600;expires=4889289600;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";tag=\"http-message-signatures-directory\""
+      ],
+      [
+        "Signature",
+        "binding=:l6P8R67tm3kujAxbHWio7ll01qrEZ0dKD/WWlGhNYEmTnFZM8Wt0VQ9zqGfvo7T/UMkBxsigzChM1Gpz7gOVBg==:"
+      ]
+    ]
+  },
+  "rfc9421_b26": {
+    "method": "POST",
+    "url": "https://example.com/foo?param=Value&Pet=dog",
+    "headers": [
+      [
+        "Host",
+        "example.com"
+      ],
+      [
+        "Date",
+        "Tue, 20 Apr 2021 02:07:55 GMT"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "Content-Length",
+        "18"
+      ]
+    ],
+    "signature_input": "sig-b26=(\"date\" \"@method\" \"@path\" \"@authority\" \"content-type\" \"content-length\");created=1618884473;keyid=\"test-key-ed25519\"",
+    "signature": "sig-b26=:wqcAqbmYJ2ji2glfAMaRy4gruYYnx2nEFN2HN6jrnDnQCK1u02Gb04v9EDgwUPiu4A0w6vuQv5lIp5WPpBKRCw==:"
+  },
+  "query_param": {
+    "url": "https://www.example.com/parameters?var=this%20is%20a%20big%0Amultiline%20value&bar=with+plus+whitespace&fa%C3%A7ade%22%3A%20=something&qux=&dup=1&dup=2",
+    "values": [
+      [
+        "var",
+        "var",
+        "this%20is%20a%20big%0Amultiline%20value"
+      ],
+      [
+        "bar",
+        "bar",
+        "with%20plus%20whitespace"
+      ],
+      [
+        "façade\": ",
+        "fa%C3%A7ade%22%3A%20",
+        "something"
+      ],
+      [
+        "qux",
+        "qux",
+        ""
+      ]
+    ],
+    "errors": [
+      "dup",
+      "missing"
+    ]
+  },
+  "content_digest": {
+    "body": "{\"hello\": \"world\"}\n",
+    "value": "sha-256=:RK/0qy18MlBSVnWgjwz6lZEWjP/lF5HF9bvEF8FabDg=:"
+  }
+}

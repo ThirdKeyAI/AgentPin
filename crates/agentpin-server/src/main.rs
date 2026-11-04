@@ -51,8 +51,8 @@ async fn main() -> anyhow::Result<()> {
                     .map_err(|e| anyhow::anyhow!("{}: {}", path, e))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        let body =
-            agentpin::wba::Directory::from_keys(keys.iter().map(|k| k.as_ref())).to_json()?;
+        let public: Vec<_> = keys.iter().map(|k| k.public_key()).collect();
+        let body = agentpin::wba::Directory::from_keys(&public).to_json()?;
         let mut authorities = vec![discovery.entity.to_ascii_lowercase()];
         authorities.extend(
             config

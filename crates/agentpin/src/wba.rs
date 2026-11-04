@@ -1,14 +1,14 @@
 //! Web Bot Auth (WBA) profile of RFC 9421 HTTP Message Signatures.
 //!
 //! Implements draft-ietf-webbotauth-httpsig-protocol: agents sign requests
-//! with Ed25519, name the HTTPS key directory that publishes the key in the
+//! with Ed25519 or RSASSA-PSS, name the HTTPS key directory that publishes the key in the
 //! `Signature-Agent` field, and verifiers resolve that directory and check
 //! the signature. This module also binds a WBA signature to an AgentPin
-//! identity (spec §18): the ES256 credential confirms the Ed25519 key with
+//! identity (spec §18): the ES256 credential confirms the WBA key with
 //! `cnf.jkt`, and the issuer's discovery document vouches for the
 //! `Signature-Agent` URL.
 //!
-//! WBA uses its own Ed25519 keys. The ES256 credential profile is
+//! WBA uses its own keys. The ES256 credential profile is
 //! unchanged, and credential keys are never used to sign HTTP messages.
 
 use std::collections::HashMap;
@@ -18,7 +18,7 @@ use base64::{
     Engine,
 };
 use chrono::Utc;
-use ed25519_dalek::pkcs8::{spki::der::pem::LineEnding, DecodePrivateKey, EncodePrivateKey};
+use ed25519_dalek::pkcs8::{spki::der::pem::LineEnding, EncodePrivateKey};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sfv::{FieldType, Item, ListEntry, Parser};
@@ -28,6 +28,8 @@ use zeroize::Zeroizing;
 use crate::domain::normalize_domain;
 use crate::error::Error;
 use crate::httpsig::{self, Component, HttpRequest, HttpResponse, Message, Param, ParsedSignature};
+pub use crate::httpsig::{PrivateKey, PublicKey, ALG_ED25519, ALG_RSA_PSS_SHA512};
+use crate::nonce::NonceStore;
 use crate::pinning::KeyPinStore;
 use crate::resolver::DiscoveryResolver;
 use crate::types::discovery::DiscoveryDocument;
@@ -41,8 +43,6 @@ pub const DIRECTORY_TAG: &str = "http-message-signatures-directory";
 pub const DIRECTORY_PATH: &str = "/.well-known/http-message-signatures-directory";
 /// Media type a well-known key directory is served with.
 pub const DIRECTORY_MEDIA_TYPE: &str = "application/http-message-signatures-directory+json";
-/// `alg` value for Ed25519.
-pub const ALG_ED25519: &str = "ed25519";
 /// Most keys accepted from one directory.
 pub const MAX_DIRECTORY_KEYS: usize = 64;
 /// Longest accepted `expires - created` window (24 hours, the draft's
@@ -54,7 +54,7 @@ fn wba_err(msg: impl Into<String>) -> Error {
 }
 
 // ---------------------------------------------------------------------------
-// Ed25519 keys and JWKs
+// Keys and JWKs
 // ---------------------------------------------------------------------------
 
 /// Generate a new Ed25519 signing key from OS randomness.
@@ -62,9 +62,9 @@ pub fn generate_signing_key() -> SigningKey {
     SigningKey::generate(&mut rand_core::OsRng)
 }
 
-/// Load an Ed25519 signing key from a PKCS#8 PEM.
-pub fn load_signing_key(pem: &str) -> Result<SigningKey, Error> {
-    SigningKey::from_pkcs8_pem(pem).map_err(|_| Error::InvalidKeyFormat)
+/// Load a signing key from PEM: Ed25519 or RSA (PKCS#8 or PKCS#1).
+pub fn load_signing_key(pem: &str) -> Result<PrivateKey, Error> {
+    PrivateKey::from_pem(pem)
 }
 
 /// Encode an Ed25519 signing key as a PKCS#8 PEM.
@@ -73,26 +73,39 @@ pub fn signing_key_to_pem(key: &SigningKey) -> Result<Zeroizing<String>, Error> 
         .map_err(|e| Error::Pkcs8(e.to_string()))
 }
 
-/// RFC 8037 Appendix A.3 JWK SHA-256 thumbprint of an Ed25519 key,
-/// base64url without padding. This is the WBA `keyid`.
-pub fn thumbprint(key: &VerifyingKey) -> String {
-    thumbprint_of_x(&BASE64URL.encode(key.as_bytes()))
-}
-
-fn thumbprint_of_x(x: &str) -> String {
+/// JWK SHA-256 thumbprint, base64url without padding: RFC 8037 for
+/// Ed25519, RFC 7638 for RSA. This is the WBA `keyid`.
+pub fn thumbprint(key: &PublicKey) -> String {
     use sha2::{Digest, Sha256};
-    let canonical = format!(r#"{{"crv":"Ed25519","kty":"OKP","x":"{}"}}"#, x);
+    let canonical = match key {
+        PublicKey::Ed25519(k) => format!(
+            r#"{{"crv":"Ed25519","kty":"OKP","x":"{}"}}"#,
+            BASE64URL.encode(k.as_bytes())
+        ),
+        PublicKey::RsaPss { n, e } => format!(
+            r#"{{"e":"{}","kty":"RSA","n":"{}"}}"#,
+            BASE64URL.encode(e),
+            BASE64URL.encode(n)
+        ),
+    };
     BASE64URL.encode(Sha256::digest(canonical.as_bytes()))
 }
 
-/// An Ed25519 public key as an OKP JWK (RFC 8037).
+/// A directory public key as a JWK: OKP/Ed25519 (RFC 8037) or RSA
+/// (RFC 7517).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct OkpJwk {
+pub struct Jwk {
     pub kty: String,
-    pub crv: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crv: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kid: Option<String>,
-    pub x: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e: Option<String>,
     #[serde(rename = "use", default, skip_serializing_if = "Option::is_none")]
     pub use_: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,37 +118,72 @@ pub struct OkpJwk {
     pub exp: Option<i64>,
 }
 
-impl OkpJwk {
+impl Jwk {
     /// JWK for `key`, with `kid` set to its thumbprint.
-    pub fn from_verifying_key(key: &VerifyingKey) -> Self {
-        Self {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            x: BASE64URL.encode(key.as_bytes()),
+    pub fn from_public_key(key: &PublicKey) -> Self {
+        let mut jwk = Self {
+            kty: String::new(),
+            crv: None,
             kid: Some(thumbprint(key)),
+            x: None,
+            n: None,
+            e: None,
             use_: Some("sig".to_string()),
             alg: None,
             nbf: None,
             exp: None,
+        };
+        match key {
+            PublicKey::Ed25519(k) => {
+                jwk.kty = "OKP".to_string();
+                jwk.crv = Some("Ed25519".to_string());
+                jwk.x = Some(BASE64URL.encode(k.as_bytes()));
+            }
+            PublicKey::RsaPss { n, e } => {
+                jwk.kty = "RSA".to_string();
+                jwk.n = Some(BASE64URL.encode(n));
+                jwk.e = Some(BASE64URL.encode(e));
+            }
         }
+        jwk
     }
 
-    /// Decode the public key. Rejects non-Ed25519 JWKs and malformed `x`.
-    pub fn verifying_key(&self) -> Result<VerifyingKey, Error> {
-        if self.kty != "OKP" || self.crv != "Ed25519" {
-            return Err(Error::InvalidKeyFormat);
+    /// Decode the public key. Accepts Ed25519 OKP keys and RSA keys of
+    /// 2048 to 8192 bits; rejects everything else and malformed values.
+    pub fn public_key(&self) -> Result<PublicKey, Error> {
+        let b64 = |v: &Option<String>| {
+            v.as_deref()
+                .and_then(|s| BASE64URL.decode(s).ok())
+                .ok_or(Error::InvalidKeyFormat)
+        };
+        match (self.kty.as_str(), self.crv.as_deref()) {
+            ("OKP", Some("Ed25519")) => {
+                let bytes: [u8; 32] = b64(&self.x)?
+                    .try_into()
+                    .map_err(|_| Error::InvalidKeyFormat)?;
+                VerifyingKey::from_bytes(&bytes)
+                    .map(PublicKey::Ed25519)
+                    .map_err(|_| Error::InvalidKeyFormat)
+            }
+            ("RSA", _) => {
+                let (n, e) = (b64(&self.n)?, b64(&self.e)?);
+                // Minimal encodings only (RFC 7518 §6.3.1), so the
+                // thumbprint is well defined.
+                let minimal = |v: &[u8]| v.first().is_some_and(|b| *b != 0);
+                let bits = n.len() * 8 - n.first().map_or(8, |b| b.leading_zeros() as usize);
+                if !minimal(&n) || !minimal(&e) || e.len() > 4 || !(2048..=8192).contains(&bits) {
+                    return Err(Error::InvalidKeyFormat);
+                }
+                Ok(PublicKey::RsaPss { n, e })
+            }
+            _ => Err(Error::InvalidKeyFormat),
         }
-        let bytes: [u8; 32] = BASE64URL
-            .decode(&self.x)
-            .map_err(|_| Error::InvalidKeyFormat)?
-            .try_into()
-            .map_err(|_| Error::InvalidKeyFormat)?;
-        VerifyingKey::from_bytes(&bytes).map_err(|_| Error::InvalidKeyFormat)
     }
 
     /// Thumbprint computed from the key material (never taken from `kid`).
-    pub fn thumbprint(&self) -> String {
-        thumbprint_of_x(&self.x)
+    /// `None` for keys [`Jwk::public_key`] rejects.
+    pub fn thumbprint(&self) -> Option<String> {
+        self.public_key().ok().map(|k| thumbprint(&k))
     }
 
     fn usable_at(&self, now: i64, skew: i64) -> bool {
@@ -143,22 +191,22 @@ impl OkpJwk {
     }
 }
 
-/// A key directory: a JWK Set of Ed25519 signing keys.
+/// A key directory: a JWK Set of signing keys.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Directory {
-    pub keys: Vec<OkpJwk>,
+    pub keys: Vec<Jwk>,
 }
 
 impl Directory {
     /// Directory publishing the given keys.
-    pub fn from_keys<'a>(keys: impl IntoIterator<Item = &'a VerifyingKey>) -> Self {
+    pub fn from_keys<'a>(keys: impl IntoIterator<Item = &'a PublicKey>) -> Self {
         Self {
-            keys: keys.into_iter().map(OkpJwk::from_verifying_key).collect(),
+            keys: keys.into_iter().map(Jwk::from_public_key).collect(),
         }
     }
 
-    /// Parse a JWK Set. Entries that are not well-formed Ed25519 OKP keys
-    /// (RSA, EC, bad `x`) are skipped; more than [`MAX_DIRECTORY_KEYS`]
+    /// Parse a JWK Set. Entries that are not well-formed Ed25519 or RSA
+    /// keys (EC, short RSA, bad values) are skipped; more than [`MAX_DIRECTORY_KEYS`]
     /// entries is an error.
     pub fn parse(json: &[u8]) -> Result<Self, Error> {
         #[derive(Deserialize)]
@@ -173,8 +221,8 @@ impl Directory {
         let keys = raw
             .keys
             .into_iter()
-            .filter_map(|v| serde_json::from_value::<OkpJwk>(v).ok())
-            .filter(|k| k.verifying_key().is_ok())
+            .filter_map(|v| serde_json::from_value::<Jwk>(v).ok())
+            .filter(|k| k.public_key().is_ok())
             .collect();
         Ok(Self { keys })
     }
@@ -317,7 +365,7 @@ impl SignedHeaders {
 /// `opts.components` must already be on `req`.
 pub fn sign_request(
     req: &HttpRequest,
-    signing_key: &SigningKey,
+    signing_key: &PrivateKey,
     signature_agent: &str,
     opts: &SignOptions,
 ) -> Result<SignedHeaders, Error> {
@@ -375,8 +423,8 @@ pub fn sign_request(
     let created = opts.created.unwrap_or_else(|| Utc::now().timestamp());
     let mut params = vec![
         Param::Created(created),
-        Param::KeyId(thumbprint(&signing_key.verifying_key())),
-        Param::Alg(ALG_ED25519.to_string()),
+        Param::KeyId(thumbprint(&signing_key.public_key())),
+        Param::Alg(signing_key.alg().to_string()),
         Param::Expires(created + opts.validity_secs),
     ];
     if opts.nonce {
@@ -388,7 +436,7 @@ pub fn sign_request(
     }
     params.push(Param::Tag(TAG.to_string()));
 
-    let fields = httpsig::sign_ed25519(
+    let fields = httpsig::sign(
         Message::Request(&to_sign),
         &opts.label,
         &components,
@@ -407,7 +455,7 @@ pub fn sign_request(
 // ---------------------------------------------------------------------------
 
 /// Options for [`verify_request`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VerifyOptions {
     /// Verification time; `None` uses the current time.
     pub now: Option<i64>,
@@ -420,6 +468,27 @@ pub struct VerifyOptions {
     /// Components every accepted signature must cover, in addition to the
     /// protocol's own requirements.
     pub required_components: Vec<Component>,
+    /// Replay protection: when set, a verified signature's `nonce` is
+    /// recorded per keyid until the signature expires, and a repeat is
+    /// invalid. Signatures without a nonce are invalid too. Checked only
+    /// after the signature verifies, so forged requests cannot fill it.
+    pub nonce_store: Option<std::sync::Arc<dyn NonceStore>>,
+}
+
+impl std::fmt::Debug for VerifyOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerifyOptions")
+            .field("now", &self.now)
+            .field("clock_skew_secs", &self.clock_skew_secs)
+            .field("max_validity_secs", &self.max_validity_secs)
+            .field(
+                "accept_legacy_signature_agent",
+                &self.accept_legacy_signature_agent,
+            )
+            .field("required_components", &self.required_components)
+            .field("nonce_store", &self.nonce_store.is_some())
+            .finish()
+    }
 }
 
 impl Default for VerifyOptions {
@@ -430,6 +499,7 @@ impl Default for VerifyOptions {
             max_validity_secs: MAX_VALIDITY_SECS,
             accept_legacy_signature_agent: true,
             required_components: Vec::new(),
+            nonce_store: None,
         }
     }
 }
@@ -474,7 +544,7 @@ pub trait KeyLookup {
     /// `Ok(Some)` when the directory at `signature_agent` provides
     /// `keyid`; `Ok(None)` when the directory resolved without it; `Err`
     /// when it could not be resolved.
-    fn lookup(&self, signature_agent: &str, keyid: &str) -> Result<Option<VerifyingKey>, Error>;
+    fn lookup(&self, signature_agent: &str, keyid: &str) -> Result<Option<PublicKey>, Error>;
 }
 
 /// In-memory key store built from directories the verifier resolved
@@ -508,16 +578,17 @@ impl DirectoryKeyStore {
 }
 
 /// Find `keyid` in `directory` by computed thumbprint, honoring `nbf`/`exp`.
-pub fn find_key(directory: &Directory, keyid: &str, now: i64, skew: i64) -> Option<VerifyingKey> {
+pub fn find_key(directory: &Directory, keyid: &str, now: i64, skew: i64) -> Option<PublicKey> {
     directory
         .keys
         .iter()
-        .find(|k| k.thumbprint() == keyid && k.usable_at(now, skew))
-        .and_then(|k| k.verifying_key().ok())
+        .filter(|k| k.usable_at(now, skew))
+        .filter_map(|k| k.public_key().ok())
+        .find(|k| thumbprint(k) == keyid)
 }
 
 impl KeyLookup for DirectoryKeyStore {
-    fn lookup(&self, signature_agent: &str, keyid: &str) -> Result<Option<VerifyingKey>, Error> {
+    fn lookup(&self, signature_agent: &str, keyid: &str) -> Result<Option<PublicKey>, Error> {
         let dir = self
             .directories
             .get(signature_agent)
@@ -562,7 +633,7 @@ fn check_signature(
     let expires = p.expires.ok_or("signature has no expires parameter")?;
     let keyid = p.keyid.clone().ok_or("signature has no keyid parameter")?;
     if let Some(ref alg) = p.alg {
-        if alg != ALG_ED25519 {
+        if alg != ALG_ED25519 && alg != ALG_RSA_PSS_SHA512 {
             return Err(format!("unsupported alg '{}'", alg));
         }
     }
@@ -644,7 +715,9 @@ pub(crate) fn candidates(
 pub(crate) fn finish(
     req: &HttpRequest,
     c: Candidate,
-    key: Result<Option<VerifyingKey>, Error>,
+    key: Result<Option<PublicKey>, Error>,
+    opts: &VerifyOptions,
+    now: i64,
 ) -> WbaOutcome {
     match key {
         Err(e) => WbaOutcome::Unverified(format!(
@@ -655,18 +728,50 @@ pub(crate) fn finish(
             "key directory {} does not provide keyid {}",
             c.signature_agent, c.keyid
         )),
-        Ok(Some(key)) => match httpsig::verify_ed25519(Message::Request(req), &c.sig, &key) {
-            Ok(()) => WbaOutcome::Verified(Box::new(VerifiedAgent {
-                label: c.sig.label,
-                signature_agent: c.signature_agent,
-                keyid: c.keyid,
-                created: c.sig.params.created.unwrap_or_default(),
-                expires: c.sig.params.expires.unwrap_or_default(),
-                nonce: c.sig.params.nonce,
-                components: c.sig.components,
-            })),
+        Ok(Some(key)) => match httpsig::verify(Message::Request(req), &c.sig, &key) {
+            Ok(()) => {
+                if let Err(reason) = check_nonce(&c, opts, now) {
+                    return WbaOutcome::Invalid(reason);
+                }
+                WbaOutcome::Verified(Box::new(VerifiedAgent {
+                    label: c.sig.label,
+                    signature_agent: c.signature_agent,
+                    keyid: c.keyid,
+                    created: c.sig.params.created.unwrap_or_default(),
+                    expires: c.sig.params.expires.unwrap_or_default(),
+                    nonce: c.sig.params.nonce,
+                    components: c.sig.components,
+                }))
+            }
             Err(_) => WbaOutcome::Invalid("signature verification failed".into()),
         },
+    }
+}
+
+/// Record the nonce of a verified signature in `opts.nonce_store`.
+fn check_nonce(c: &Candidate, opts: &VerifyOptions, now: i64) -> Result<(), String> {
+    let Some(store) = &opts.nonce_store else {
+        return Ok(());
+    };
+    let nonce = c
+        .sig
+        .params
+        .nonce
+        .as_deref()
+        .ok_or("signature has no nonce and replay protection is on")?;
+    // Keep the nonce until the signature can no longer pass the expiry check.
+    let expires = c.sig.params.expires.unwrap_or(now);
+    let ttl = (expires + opts.clock_skew_secs - now).max(1) as u64;
+    let fresh = store
+        .check_and_record(
+            &format!("{} {}", c.keyid, nonce),
+            std::time::Duration::from_secs(ttl),
+        )
+        .map_err(|e| format!("nonce store failed: {}", e))?;
+    if fresh {
+        Ok(())
+    } else {
+        Err("nonce replayed".into())
     }
 }
 
@@ -680,8 +785,8 @@ pub(crate) fn worse(current: Option<WbaOutcome>, next: WbaOutcome) -> Option<Wba
 
 /// Verify the Web Bot Auth signatures on `req`. Returns the first
 /// signature that verifies; otherwise `Invalid` if any signature failed a
-/// check, else `Unverified`. Replay detection (nonce tracking) is left to
-/// the caller (§5.2.3).
+/// check, else `Unverified`. Set [`VerifyOptions::nonce_store`] to reject
+/// replays (§5.2.3).
 pub fn verify_request(req: &HttpRequest, keys: &dyn KeyLookup, opts: &VerifyOptions) -> WbaOutcome {
     let now = opts.now.unwrap_or_else(|| Utc::now().timestamp());
     let (candidates, invalid) = match candidates(req, opts, now) {
@@ -691,7 +796,7 @@ pub fn verify_request(req: &HttpRequest, keys: &dyn KeyLookup, opts: &VerifyOpti
     let mut result = invalid.map(WbaOutcome::Invalid);
     for c in candidates {
         let key = keys.lookup(c.signature_agent(), c.keyid());
-        match finish(req, c, key) {
+        match finish(req, c, key, opts, now) {
             v @ WbaOutcome::Verified(_) => return v,
             failure => result = worse(result, failure),
         }
@@ -710,7 +815,7 @@ pub fn verify_request(req: &HttpRequest, keys: &dyn KeyLookup, opts: &VerifyOpti
 pub fn sign_directory_response(
     body: &[u8],
     authority: &str,
-    keys: &[SigningKey],
+    keys: &[PrivateKey],
     created: i64,
     validity_secs: i64,
 ) -> Result<Vec<(String, String)>, Error> {
@@ -736,10 +841,10 @@ pub fn sign_directory_response(
         let params = [
             Param::Created(created),
             Param::Expires(created + validity_secs),
-            Param::KeyId(thumbprint(&key.verifying_key())),
+            Param::KeyId(thumbprint(&key.public_key())),
             Param::Tag(DIRECTORY_TAG.to_string()),
         ];
-        let f = httpsig::sign_ed25519(msg, &format!("binding{}", i), &components, &params, key)?;
+        let f = httpsig::sign(msg, &format!("binding{}", i), &components, &params, key)?;
         out.push(("Signature-Input".to_string(), f.signature_input));
         out.push(("Signature".to_string(), f.signature));
     }
@@ -776,10 +881,10 @@ pub fn verify_directory_response(
         .keys
         .into_iter()
         .filter(|jwk| {
-            let Ok(vk) = jwk.verifying_key() else {
+            let Ok(pk) = jwk.public_key() else {
                 return false;
             };
-            let tp = jwk.thumbprint();
+            let tp = thumbprint(&pk);
             sigs.iter().any(|s| {
                 let p = &s.params;
                 p.tag.as_deref() == Some(DIRECTORY_TAG)
@@ -788,7 +893,7 @@ pub fn verify_directory_response(
                     && p.expires.is_some_and(|e| now - clock_skew_secs <= e)
                     && s.covers(&Component::of_request("@authority"))
                     && s.covers(&Component::new("content-digest"))
-                    && httpsig::verify_ed25519(msg, s, &vk).is_ok()
+                    && httpsig::verify(msg, s, &pk).is_ok()
             })
         })
         .collect();
@@ -917,7 +1022,7 @@ pub fn verify_bound_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::httpsig::{parse_signatures, verify_ed25519};
+    use crate::httpsig::parse_signatures;
 
     const RFC_ED25519_PEM: &str = "-----BEGIN PRIVATE KEY-----\n\
         MC4CAQAwBQYDK2VwBCIEIJ+DYvh6SEqVTm50DFtMDoQikTmiCqirVv9mWG9qfSnF\n\
@@ -926,18 +1031,22 @@ mod tests {
     const RFC_X: &str = "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs";
     const AGENT: &str = "https://signature-agent.test";
 
-    fn rfc_key() -> SigningKey {
+    fn rfc_key() -> PrivateKey {
         load_signing_key(RFC_ED25519_PEM).unwrap()
+    }
+
+    fn gen() -> PrivateKey {
+        generate_signing_key().into()
     }
 
     #[test]
     fn thumbprint_matches_draft_vector() {
-        let key = rfc_key().verifying_key();
+        let key = rfc_key().public_key();
         assert_eq!(thumbprint(&key), RFC_KEYID);
-        let jwk = OkpJwk::from_verifying_key(&key);
-        assert_eq!(jwk.x, RFC_X);
+        let jwk = Jwk::from_public_key(&key);
+        assert_eq!(jwk.x.as_deref(), Some(RFC_X));
         assert_eq!(jwk.kid.as_deref(), Some(RFC_KEYID));
-        assert_eq!(jwk.verifying_key().unwrap(), key);
+        assert_eq!(jwk.public_key().unwrap(), key);
     }
 
     /// draft-ietf-webbotauth-httpsig-protocol Appendix E.2.1: our signer
@@ -959,7 +1068,7 @@ mod tests {
             Param::Nonce("n9p433xm+NJ3ph3upfBIGmsuwHw387YV7Q/F+6BSpGCVjYCqQw6rznNA8PVVLySrAWsv0hQtFioQb6E1YsauiA==".into()),
             Param::Tag(TAG.into()),
         ];
-        let f = httpsig::sign_ed25519(
+        let f = httpsig::sign(
             Message::Request(&req),
             "sig2",
             &components,
@@ -974,7 +1083,7 @@ mod tests {
             .header("Signature", &f.signature);
         let mut store = DirectoryKeyStore::new();
         store
-            .insert(AGENT, Directory::from_keys([&rfc_key().verifying_key()]))
+            .insert(AGENT, Directory::from_keys([&rfc_key().public_key()]))
             .unwrap();
         let opts = VerifyOptions {
             now: Some(1735689700),
@@ -1010,7 +1119,7 @@ mod tests {
             .header("Signature", "sig2=:jdq0SqOwHdyHr9+r5jw3iYZH6aNGKijYp/EstF4RQTQdi5N5YYKrD+mCT1HA1nZDsi6nJKuHxUi/5Syp3rLWBA==:");
         let mut store = DirectoryKeyStore::new();
         store
-            .insert(AGENT, Directory::from_keys([&rfc_key().verifying_key()]))
+            .insert(AGENT, Directory::from_keys([&rfc_key().public_key()]))
             .unwrap();
         let opts = VerifyOptions {
             now: Some(1735689700),
@@ -1037,7 +1146,7 @@ mod tests {
             r#"{{"keys":[{{"kty":"OKP","crv":"Ed25519","kid":"{}","x":"{}","use":"sig"}}]}}"#,
             RFC_KEYID, RFC_X
         );
-        let dir = Directory::from_keys([&rfc_key().verifying_key()]);
+        let dir = Directory::from_keys([&rfc_key().public_key()]);
         assert_eq!(dir.to_json().unwrap(), body.as_bytes());
 
         let headers = sign_directory_response(
@@ -1105,7 +1214,7 @@ mod tests {
         .is_empty());
     }
 
-    fn signed_request(key: &SigningKey, opts: &SignOptions) -> HttpRequest {
+    fn signed_request(key: &PrivateKey, opts: &SignOptions) -> HttpRequest {
         let mut req = HttpRequest::new("GET", "https://origin.example/path?q=1").unwrap();
         sign_request(&req, key, AGENT, opts)
             .unwrap()
@@ -1113,22 +1222,22 @@ mod tests {
         req
     }
 
-    fn store_with(key: &SigningKey) -> DirectoryKeyStore {
+    fn store_with(key: &PrivateKey) -> DirectoryKeyStore {
         let mut store = DirectoryKeyStore::new();
         store
-            .insert(AGENT, Directory::from_keys([&key.verifying_key()]))
+            .insert(AGENT, Directory::from_keys([&key.public_key()]))
             .unwrap();
         store
     }
 
     #[test]
     fn sign_and_verify_roundtrip() {
-        let key = generate_signing_key();
+        let key = gen();
         let req = signed_request(&key, &SignOptions::default());
         let sigs = parse_signatures(&req.headers).unwrap();
         assert_eq!(sigs[0].params.tag.as_deref(), Some(TAG));
         assert!(sigs[0].params.nonce.is_some());
-        verify_ed25519(Message::Request(&req), &sigs[0], &key.verifying_key()).unwrap();
+        httpsig::verify(Message::Request(&req), &sigs[0], &key.public_key()).unwrap();
         match verify_request(&req, &store_with(&key), &VerifyOptions::default()) {
             WbaOutcome::Verified(a) => {
                 assert!(a.covers(&Component::new("@method")));
@@ -1141,7 +1250,7 @@ mod tests {
 
     #[test]
     fn outcomes_distinguish_invalid_and_unverified() {
-        let key = generate_signing_key();
+        let key = gen();
         let req = signed_request(&key, &SignOptions::default());
 
         // Unknown directory: unverified.
@@ -1151,11 +1260,7 @@ mod tests {
         ));
         // Directory resolved without the key: unverified.
         assert!(matches!(
-            verify_request(
-                &req,
-                &store_with(&generate_signing_key()),
-                &VerifyOptions::default()
-            ),
+            verify_request(&req, &store_with(&gen()), &VerifyOptions::default()),
             WbaOutcome::Unverified(_)
         ));
         // Unsigned request: unverified.
@@ -1189,7 +1294,7 @@ mod tests {
     /// does not verify a request that names another (§5.4).
     #[test]
     fn key_is_bound_to_its_directory() {
-        let key = generate_signing_key();
+        let key = gen();
         let mut req = HttpRequest::new("GET", "https://origin.example/").unwrap();
         sign_request(
             &req,
@@ -1208,7 +1313,7 @@ mod tests {
 
     #[test]
     fn rejects_signature_agent_problems() {
-        let key = generate_signing_key();
+        let key = gen();
         let store = store_with(&key);
         let opts = VerifyOptions::default();
 
@@ -1228,7 +1333,7 @@ mod tests {
         let mut both = store.clone();
         both.insert(
             "https://other.test",
-            Directory::from_keys([&key.verifying_key()]),
+            Directory::from_keys([&key.public_key()]),
         )
         .unwrap();
         assert!(matches!(
@@ -1243,7 +1348,7 @@ mod tests {
                 "Signature-Agent",
                 "a=\"https://a.test\", b=\"https://b.test\"",
             );
-        let f = httpsig::sign_ed25519(
+        let f = httpsig::sign(
             Message::Request(&two),
             "a",
             &[
@@ -1254,7 +1359,7 @@ mod tests {
             &[
                 Param::Created(Utc::now().timestamp()),
                 Param::Expires(Utc::now().timestamp() + 60),
-                Param::KeyId(thumbprint(&key.verifying_key())),
+                Param::KeyId(thumbprint(&key.public_key())),
                 Param::Tag(TAG.into()),
             ],
             &key,
@@ -1297,7 +1402,7 @@ mod tests {
 
     #[test]
     fn legacy_signing_roundtrip() {
-        let key = generate_signing_key();
+        let key = gen();
         let opts = SignOptions {
             legacy_signature_agent: true,
             ..Default::default()
@@ -1346,11 +1451,11 @@ mod tests {
 
     #[test]
     fn directory_parse_skips_foreign_keys_and_honors_validity() {
-        let key = generate_signing_key();
-        let jwk = OkpJwk {
+        let key = gen();
+        let jwk = Jwk {
             nbf: Some(100),
             exp: Some(200),
-            ..OkpJwk::from_verifying_key(&key.verifying_key())
+            ..Jwk::from_public_key(&key.public_key())
         };
         let json = serde_json::json!({"keys": [
             {"kty": "EC", "crv": "P-256", "x": "a", "y": "b"},
@@ -1359,7 +1464,7 @@ mod tests {
         ]});
         let dir = Directory::parse(json.to_string().as_bytes()).unwrap();
         assert_eq!(dir.keys.len(), 1);
-        let tp = thumbprint(&key.verifying_key());
+        let tp = thumbprint(&key.public_key());
         assert!(find_key(&dir, &tp, 150, 0).is_some());
         assert!(find_key(&dir, &tp, 50, 0).is_none());
         assert!(find_key(&dir, &tp, 250, 0).is_none());
@@ -1372,7 +1477,53 @@ mod tests {
     fn pem_roundtrip() {
         let key = generate_signing_key();
         let pem = signing_key_to_pem(&key).unwrap();
-        assert_eq!(load_signing_key(&pem).unwrap().to_bytes(), key.to_bytes());
+        assert_eq!(
+            load_signing_key(&pem).unwrap().public_key(),
+            PublicKey::Ed25519(key.verifying_key())
+        );
         assert!(load_signing_key("not a key").is_err());
+    }
+
+    #[test]
+    fn nonce_store_rejects_replays() {
+        let key = gen();
+        let store = store_with(&key);
+        let opts = VerifyOptions {
+            nonce_store: Some(std::sync::Arc::new(crate::nonce::InMemoryNonceStore::new())),
+            ..Default::default()
+        };
+        let req = signed_request(&key, &SignOptions::default());
+        assert!(matches!(
+            verify_request(&req, &store, &opts),
+            WbaOutcome::Verified(_)
+        ));
+        assert_eq!(
+            verify_request(&req, &store, &opts),
+            WbaOutcome::Invalid("nonce replayed".into())
+        );
+        // A fresh signature is fine; one without a nonce is not.
+        let again = signed_request(&key, &SignOptions::default());
+        assert!(matches!(
+            verify_request(&again, &store, &opts),
+            WbaOutcome::Verified(_)
+        ));
+        let no_nonce = signed_request(
+            &key,
+            &SignOptions {
+                nonce: false,
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            verify_request(&no_nonce, &store, &opts),
+            WbaOutcome::Invalid(_)
+        ));
+        // Forged signatures never reach the store.
+        let mut forged = signed_request(&key, &SignOptions::default());
+        forged.url = Url::parse("https://origin.example/elsewhere").unwrap();
+        assert!(matches!(
+            verify_request(&forged, &store, &opts),
+            WbaOutcome::Invalid(r) if r == "signature verification failed"
+        ));
     }
 }

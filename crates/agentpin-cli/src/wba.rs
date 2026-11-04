@@ -44,14 +44,15 @@ pub struct KeygenArgs {
 
 #[derive(Args)]
 pub struct DirectoryArgs {
-    /// Ed25519 private key PEM (repeat for rotation)
+    /// Ed25519 or RSA private key PEM (repeat for rotation)
     #[arg(long = "key", required = true)]
     pub keys: Vec<String>,
 }
 
 #[derive(Args)]
 pub struct SignArgs {
-    /// Ed25519 private key PEM
+    /// Ed25519 or RSA (2048-8192 bit, signs with rsa-pss-sha512) private
+    /// key PEM
     #[arg(long)]
     pub key: String,
 
@@ -71,6 +72,10 @@ pub struct SignArgs {
     #[arg(long = "header")]
     pub headers: Vec<String>,
 
+    /// Query parameter to cover with @query-param (repeatable)
+    #[arg(long = "query-param")]
+    pub query_params: Vec<String>,
+
     /// Signature lifetime in seconds (max 86400)
     #[arg(long, default_value = "300")]
     pub validity: i64,
@@ -81,7 +86,7 @@ pub struct SignArgs {
     pub legacy_signature_agent: bool,
 }
 
-fn load_key(path: &str) -> anyhow::Result<ed25519_dalek::SigningKey> {
+fn load_key(path: &str) -> anyhow::Result<wba::PrivateKey> {
     let pem = zeroize::Zeroizing::new(fs::read_to_string(path)?);
     wba::load_signing_key(&pem).map_err(|e| anyhow::anyhow!("{}: {}", path, e))
 }
@@ -104,7 +109,7 @@ pub fn run(args: WbaArgs) -> anyhow::Result<()> {
                 "Generated Ed25519 Web Bot Auth key: {} (mode 0600)",
                 path.display()
             );
-            println!("{}", wba::thumbprint(&key.verifying_key()));
+            println!("{}", wba::thumbprint(&key.verifying_key().into()));
         }
         WbaCommand::Directory(a) => {
             let keys = a
@@ -112,7 +117,8 @@ pub fn run(args: WbaArgs) -> anyhow::Result<()> {
                 .iter()
                 .map(|p| load_key(p))
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            let dir = Directory::from_keys(keys.iter().map(|k| k.as_ref()));
+            let public: Vec<_> = keys.iter().map(|k| k.public_key()).collect();
+            let dir = Directory::from_keys(&public);
             println!("{}", serde_json::to_string_pretty(&dir)?);
         }
         WbaCommand::Sign(a) => {
@@ -133,6 +139,9 @@ pub fn run(args: WbaArgs) -> anyhow::Result<()> {
                 if !opts.components.contains(&c) {
                     opts.components.push(c);
                 }
+            }
+            for q in &a.query_params {
+                opts.components.push(Component::query_param(q));
             }
             for (name, value) in wba::sign_request(&req, &key, &a.signature_agent, &opts)?.to_vec()
             {

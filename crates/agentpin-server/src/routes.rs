@@ -151,8 +151,8 @@ mod tests {
     fn wba_state(key: &ed25519_dalek::SigningKey) -> AppState {
         let mut state = test_state();
         state.wba = Some(Arc::new(crate::state::WbaDirectory {
-            keys: vec![key.clone()],
-            body: wba::Directory::from_keys([&key.verifying_key()])
+            keys: vec![key.clone().into()],
+            body: wba::Directory::from_keys([&key.verifying_key().into()])
                 .to_json()
                 .unwrap(),
             authorities: vec!["test.com".to_string()],
@@ -198,8 +198,8 @@ mod tests {
         .unwrap();
         assert_eq!(proven.keys.len(), 1);
         assert_eq!(
-            proven.keys[0].thumbprint(),
-            wba::thumbprint(&key.verifying_key())
+            proven.keys[0].thumbprint().unwrap(),
+            wba::thumbprint(&key.verifying_key().into())
         );
     }
 

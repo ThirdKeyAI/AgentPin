@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use agentpin::types::discovery::DiscoveryDocument;
 use agentpin::types::revocation::RevocationDocument;
-use ed25519_dalek::SigningKey;
+use agentpin::wba::PrivateKey;
 use tokio::sync::RwLock;
 
 #[derive(Clone)]
@@ -14,7 +14,7 @@ pub struct AppState {
 
 /// Web Bot Auth key directory served by this instance.
 pub struct WbaDirectory {
-    pub keys: Vec<SigningKey>,
+    pub keys: Vec<PrivateKey>,
     /// Serialized JWK Set, signed as served.
     pub body: Vec<u8>,
     /// Lowercase hosts (with non-default port) the directory is served for.

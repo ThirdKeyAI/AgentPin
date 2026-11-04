@@ -13,6 +13,7 @@
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ring::signature::{self as rsig, RsaKeyPair, RsaPublicKeyComponents};
 use sfv::{BareItem, Dictionary, FieldType, InnerList, Item, Key, ListEntry, Parameters, Parser};
 use url::Url;
 
@@ -131,6 +132,8 @@ pub struct Component {
     pub key: Option<String>,
     /// `req` parameter: resolve against the related request.
     pub req: bool,
+    /// `name` parameter of `@query-param`: the encoded parameter name.
+    pub query_name: Option<String>,
 }
 
 impl Component {
@@ -139,6 +142,7 @@ impl Component {
             name: name.to_string(),
             key: None,
             req: false,
+            query_name: None,
         }
     }
 
@@ -158,13 +162,25 @@ impl Component {
         }
     }
 
+    /// One named query parameter, e.g. `"@query-param";name="q"`. `name`
+    /// is percent-encoded as RFC 9421 §2.2.8 requires.
+    pub fn query_param(name: &str) -> Self {
+        Self {
+            query_name: Some(encode_query_part(name)),
+            ..Self::new("@query-param")
+        }
+    }
+
     fn to_item(&self) -> Result<Item, Error> {
         let mut params = Parameters::new();
+        if let Some(ref n) = self.query_name {
+            params.insert(key_of("name")?, BareItem::String(sf_string(n)?));
+        }
         if let Some(ref k) = self.key {
-            params.insert(key("key")?, BareItem::String(sf_string(k)?));
+            params.insert(key_of("key")?, BareItem::String(sf_string(k)?));
         }
         if self.req {
-            params.insert(key("req")?, BareItem::Boolean(true));
+            params.insert(key_of("req")?, BareItem::Boolean(true));
         }
         Ok(Item::with_params(
             BareItem::String(sf_string(&self.name)?),
@@ -203,6 +219,12 @@ impl Component {
                     }
                     c.req = true;
                 }
+                "name" if name == "@query-param" => {
+                    let s = v
+                        .as_string()
+                        .ok_or_else(|| err("name parameter must be a String"))?;
+                    c.query_name = Some(s.as_str().to_string());
+                }
                 other => {
                     return Err(err(format!(
                         "unsupported component parameter '{}' on '{}'",
@@ -210,6 +232,9 @@ impl Component {
                     )))
                 }
             }
+        }
+        if (name == "@query-param") != c.query_name.is_some() {
+            return Err(err("@query-param needs exactly one name parameter"));
         }
         Ok(c)
     }
@@ -219,12 +244,43 @@ impl Component {
     }
 }
 
-fn key(s: &str) -> Result<Key, Error> {
+fn key_of(s: &str) -> Result<Key, Error> {
     Key::from_string(s.to_string()).map_err(|_| err(format!("invalid key '{}'", s)))
 }
 
 fn sf_string(s: &str) -> Result<sfv::String, Error> {
     sfv::String::from_string(s.to_string()).map_err(|_| err("value is not a valid sf-string"))
+}
+
+/// "Percent-encode after encoding" with the application/x-www-form-urlencoded
+/// set, spaces as `%20` (RFC 9421 §2.2.8 and its examples).
+fn encode_query_part(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'*' | b'-' | b'.' | b'_') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
+}
+
+/// `@query-param` value: the single parameter whose encoded name is
+/// `name`. Absent or repeated parameters are errors.
+fn query_param_value(url: &Url, name: &str) -> Result<String, Error> {
+    let mut found = url
+        .query_pairs()
+        .filter(|(n, _)| encode_query_part(n) == name)
+        .map(|(_, v)| encode_query_part(&v));
+    match (found.next(), found.next()) {
+        (Some(v), None) => Ok(v),
+        (None, _) => Err(err(format!("query parameter '{}' is missing", name))),
+        _ => Err(err(format!(
+            "query parameter '{}' occurs more than once",
+            name
+        ))),
+    }
 }
 
 fn authority(url: &Url) -> Result<String, Error> {
@@ -276,6 +332,7 @@ fn component_value(msg: Message<'_>, c: &Component) -> Result<String, Error> {
                 url.path().to_string()
             }),
             "query" => Ok(format!("?{}", url.query().unwrap_or(""))),
+            "query-param" => query_param_value(url, c.query_name.as_deref().unwrap_or_default()),
             _ => Err(err(format!("unsupported derived component {}", c.name))),
         };
     }
@@ -341,7 +398,7 @@ fn build_inner_list(components: &[Component], params: &[Param]) -> Result<InnerL
             Param::Nonce(s) => ("nonce", BareItem::String(sf_string(s)?)),
             Param::Tag(s) => ("tag", BareItem::String(sf_string(s)?)),
         };
-        if p.insert(key(k)?, v).is_some() {
+        if p.insert(key_of(k)?, v).is_some() {
             return Err(err(format!("duplicate signature parameter '{}'", k)));
         }
     }
@@ -477,13 +534,130 @@ pub struct SignatureFields {
     pub signature: String,
 }
 
-/// Sign `msg` over `components` with Ed25519 under `label`.
-pub fn sign_ed25519(
+/// `alg` value for Ed25519.
+pub const ALG_ED25519: &str = "ed25519";
+/// `alg` value for RSASSA-PSS with SHA-512.
+pub const ALG_RSA_PSS_SHA512: &str = "rsa-pss-sha512";
+
+/// A public key that verifies HTTP message signatures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublicKey {
+    Ed25519(VerifyingKey),
+    /// RSA modulus and exponent, big-endian without leading zeros.
+    RsaPss {
+        n: Vec<u8>,
+        e: Vec<u8>,
+    },
+}
+
+impl PublicKey {
+    /// The RFC 9421 `alg` this key signs with.
+    pub fn alg(&self) -> &'static str {
+        match self {
+            PublicKey::Ed25519(_) => ALG_ED25519,
+            PublicKey::RsaPss { .. } => ALG_RSA_PSS_SHA512,
+        }
+    }
+
+    /// Verify `sig` over `data`. Ed25519 uses strict verification (rejects
+    /// non-canonical and small-order encodings); RSA keys must be 2048 to
+    /// 8192 bits.
+    pub fn verify(&self, data: &[u8], sig: &[u8]) -> Result<(), Error> {
+        match self {
+            PublicKey::Ed25519(k) => {
+                let bytes: [u8; 64] = sig.try_into().map_err(|_| Error::SignatureInvalid)?;
+                k.verify_strict(data, &Signature::from_bytes(&bytes))
+                    .map_err(|_| Error::SignatureInvalid)
+            }
+            PublicKey::RsaPss { n, e } => RsaPublicKeyComponents { n, e }
+                .verify(&rsig::RSA_PSS_2048_8192_SHA512, data, sig)
+                .map_err(|_| Error::SignatureInvalid),
+        }
+    }
+}
+
+impl From<VerifyingKey> for PublicKey {
+    fn from(k: VerifyingKey) -> Self {
+        PublicKey::Ed25519(k)
+    }
+}
+
+/// A private key that signs HTTP messages.
+#[derive(Debug)]
+pub enum PrivateKey {
+    Ed25519(Box<SigningKey>),
+    RsaPss(Box<RsaKeyPair>),
+}
+
+impl PrivateKey {
+    /// Load a PEM key: PKCS#8 (`PRIVATE KEY`) Ed25519 or RSA, or PKCS#1
+    /// (`RSA PRIVATE KEY`). RSA keys must be 2048 to 8192 bits.
+    pub fn from_pem(pem: &str) -> Result<Self, Error> {
+        use ed25519_dalek::pkcs8::{spki::der::pem, DecodePrivateKey};
+        if let Ok(k) = SigningKey::from_pkcs8_pem(pem) {
+            return Ok(PrivateKey::Ed25519(Box::new(k)));
+        }
+        let (label, der) =
+            pem::decode_vec(pem.trim().as_bytes()).map_err(|_| Error::InvalidKeyFormat)?;
+        let der = zeroize::Zeroizing::new(der);
+        let der: &[u8] = &der;
+        let kp = match label {
+            "PRIVATE KEY" => RsaKeyPair::from_pkcs8(der),
+            "RSA PRIVATE KEY" => RsaKeyPair::from_der(der),
+            _ => return Err(Error::InvalidKeyFormat),
+        }
+        .map_err(|_| Error::InvalidKeyFormat)?;
+        if !(256..=1024).contains(&kp.public().modulus_len()) {
+            return Err(Error::InvalidKeyFormat);
+        }
+        Ok(PrivateKey::RsaPss(Box::new(kp)))
+    }
+
+    pub fn alg(&self) -> &'static str {
+        self.public_key().alg()
+    }
+
+    pub fn public_key(&self) -> PublicKey {
+        match self {
+            PrivateKey::Ed25519(k) => PublicKey::Ed25519(k.verifying_key()),
+            PrivateKey::RsaPss(kp) => {
+                let c = RsaPublicKeyComponents::<Vec<u8>>::from(kp.public());
+                PublicKey::RsaPss { n: c.n, e: c.e }
+            }
+        }
+    }
+
+    pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, Error> {
+        match self {
+            PrivateKey::Ed25519(k) => Ok(k.sign(data).to_bytes().to_vec()),
+            PrivateKey::RsaPss(kp) => {
+                let mut sig = vec![0u8; kp.public().modulus_len()];
+                kp.sign(
+                    &rsig::RSA_PSS_SHA512,
+                    &ring::rand::SystemRandom::new(),
+                    data,
+                    &mut sig,
+                )
+                .map_err(|_| err("RSA signing failed"))?;
+                Ok(sig)
+            }
+        }
+    }
+}
+
+impl From<SigningKey> for PrivateKey {
+    fn from(k: SigningKey) -> Self {
+        PrivateKey::Ed25519(Box::new(k))
+    }
+}
+
+/// Sign `msg` over `components` under `label`.
+pub fn sign(
     msg: Message<'_>,
     label: &str,
     components: &[Component],
     params: &[Param],
-    signing_key: &SigningKey,
+    key: &PrivateKey,
 ) -> Result<SignatureFields, Error> {
     for (i, c) in components.iter().enumerate() {
         if components[..i].contains(c) {
@@ -492,15 +666,15 @@ pub fn sign_ed25519(
     }
     let inner = build_inner_list(components, params)?;
     let base = signature_base(msg, components, &inner)?;
-    let sig: Signature = signing_key.sign(base.as_bytes());
+    let sig = key.sign(base.as_bytes())?;
 
-    let label_key = key(label)?;
+    let label_key = key_of(label)?;
     let mut input = Dictionary::new();
     input.insert(label_key.clone(), ListEntry::InnerList(inner));
     let mut signature = Dictionary::new();
     signature.insert(
         label_key,
-        ListEntry::Item(Item::new(BareItem::ByteSequence(sig.to_bytes().to_vec()))),
+        ListEntry::Item(Item::new(BareItem::ByteSequence(sig))),
     );
     Ok(SignatureFields {
         signature_input: input.serialize().unwrap_or_default(),
@@ -508,22 +682,33 @@ pub fn sign_ed25519(
     })
 }
 
-/// Verify `sig` over `msg` with an Ed25519 key. Uses strict verification
-/// (rejects non-canonical and small-order encodings).
+/// Verify `sig` over `msg`. A present `alg` parameter must match the key.
+pub fn verify(msg: Message<'_>, sig: &ParsedSignature, key: &PublicKey) -> Result<(), Error> {
+    if sig.params.alg.as_deref().is_some_and(|a| a != key.alg()) {
+        return Err(Error::SignatureInvalid);
+    }
+    let base = sig.signature_base(msg)?;
+    key.verify(base.as_bytes(), &sig.signature)
+}
+
+/// [`sign`] with an Ed25519 key.
+pub fn sign_ed25519(
+    msg: Message<'_>,
+    label: &str,
+    components: &[Component],
+    params: &[Param],
+    signing_key: &SigningKey,
+) -> Result<SignatureFields, Error> {
+    sign(msg, label, components, params, &signing_key.clone().into())
+}
+
+/// [`verify`] with an Ed25519 key.
 pub fn verify_ed25519(
     msg: Message<'_>,
     sig: &ParsedSignature,
     verifying_key: &VerifyingKey,
 ) -> Result<(), Error> {
-    let bytes: [u8; 64] = sig
-        .signature
-        .as_slice()
-        .try_into()
-        .map_err(|_| Error::SignatureInvalid)?;
-    let base = sig.signature_base(msg)?;
-    verifying_key
-        .verify_strict(base.as_bytes(), &Signature::from_bytes(&bytes))
-        .map_err(|_| Error::SignatureInvalid)
+    verify(msg, sig, &PublicKey::Ed25519(*verifying_key))
 }
 
 /// `Content-Digest` value for `body` using SHA-256 (RFC 9530).
@@ -711,5 +896,83 @@ mod tests {
         assert!(content_digest_matches(&h, body));
         assert!(!content_digest_matches(&h, b"other"));
         assert!(!content_digest_matches(&[], body));
+    }
+
+    /// RFC 9421 §2.2.8 examples.
+    #[test]
+    fn query_param_values() {
+        let req = HttpRequest::new(
+            "GET",
+            "https://www.example.com/parameters?var=this%20is%20a%20big%0Amultiline%20value&bar=with+plus+whitespace&fa%C3%A7ade%22%3A%20=something&dup=1&dup=2&qux=",
+        )
+        .unwrap();
+        let m = Message::Request(&req);
+        let v = |n: &str| component_value(m, &Component::query_param(n));
+        assert_eq!(v("var").unwrap(), "this%20is%20a%20big%0Amultiline%20value");
+        assert_eq!(v("bar").unwrap(), "with%20plus%20whitespace");
+        assert_eq!(v("façade\": ").unwrap(), "something");
+        assert_eq!(v("qux").unwrap(), "");
+        assert!(v("dup").is_err());
+        assert!(v("missing").is_err());
+        assert_eq!(
+            Component::query_param("façade\": ").identifier().unwrap(),
+            "\"@query-param\";name=\"fa%C3%A7ade%22%3A%20\""
+        );
+
+        // Round trip through Signature-Input.
+        let fields = sign_ed25519(
+            m,
+            "s",
+            &[Component::query_param("var"), Component::new("@authority")],
+            &[Param::Created(1)],
+            &rfc_key(),
+        )
+        .unwrap();
+        let signed = req
+            .clone()
+            .header("Signature-Input", &fields.signature_input)
+            .header("Signature", &fields.signature);
+        let parsed = parse_signatures(&signed.headers).unwrap();
+        assert!(parsed[0].covers(&Component::query_param("var")));
+        verify_ed25519(
+            Message::Request(&signed),
+            &parsed[0],
+            &rfc_key().verifying_key(),
+        )
+        .unwrap();
+
+        for bad in [
+            "s=(\"@query-param\");created=1",
+            "s=(\"@method\";name=\"x\");created=1",
+        ] {
+            let h = vec![
+                ("Signature-Input".to_string(), bad.to_string()),
+                ("Signature".to_string(), "s=:AAAA:".to_string()),
+            ];
+            assert!(parse_signatures(&h).is_err(), "{}", bad);
+        }
+    }
+
+    #[test]
+    fn alg_parameter_must_match_key() {
+        let req = HttpRequest::new("GET", "https://example.com/").unwrap();
+        let fields = sign_ed25519(
+            Message::Request(&req),
+            "s",
+            &[Component::new("@authority")],
+            &[Param::Alg(ALG_RSA_PSS_SHA512.into())],
+            &rfc_key(),
+        )
+        .unwrap();
+        let signed = req
+            .header("Signature-Input", &fields.signature_input)
+            .header("Signature", &fields.signature);
+        let parsed = parse_signatures(&signed.headers).unwrap();
+        assert!(verify_ed25519(
+            Message::Request(&signed),
+            &parsed[0],
+            &rfc_key().verifying_key()
+        )
+        .is_err());
     }
 }
