@@ -41,4 +41,14 @@ type JWTPayload struct {
 	Constraints     *Constraints            `json:"constraints,omitempty"`
 	DelegationChain []DelegationAttestation `json:"delegation_chain,omitempty"`
 	Nonce           string                  `json:"nonce,omitempty"`
+	// Cnf (optional, v0.4.0) binds the credential to a Web Bot Auth signing
+	// key (spec §18).
+	Cnf *Confirmation `json:"cnf,omitempty"`
+}
+
+// Confirmation is the key confirmation claim (RFC 7800 cnf). Jkt is the
+// base64url SHA-256 JWK thumbprint of the agent's Web Bot Auth key, which
+// is also the keyid its HTTP message signatures carry.
+type Confirmation struct {
+	Jkt string `json:"jkt"`
 }

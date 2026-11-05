@@ -155,12 +155,24 @@ func ValidateClaims(p *types.JWTPayload) error {
 		return &MalformedCredentialError{Reason: "exp must be greater than iat"}
 	case p.Nbf != nil && *p.Nbf < 0:
 		return &MalformedCredentialError{Reason: "nbf must be non-negative"}
+	case p.Cnf != nil && !validJkt(p.Cnf.Jkt):
+		return &MalformedCredentialError{Reason: "cnf.jkt must be a base64url SHA-256 JWK thumbprint"}
 	case p.AgentpinVersion != CredentialVersion:
 		return &MalformedCredentialError{Reason: "unsupported agentpin_version '" + p.AgentpinVersion + "'"}
 	case p.Capabilities == nil:
 		return &MalformedCredentialError{Reason: "capabilities must be an array"}
 	}
 	return nil
+}
+
+// validJkt reports whether s is a base64url SHA-256 thumbprint: 43
+// characters decoding to 32 bytes.
+func validJkt(s string) bool {
+	if len(s) != 43 {
+		return false
+	}
+	b, err := Base64URLDecode(s)
+	return err == nil && len(b) == 32
 }
 
 // VerifyJWT verifies a JWT signature with pub. Returns the decoded header

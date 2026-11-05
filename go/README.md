@@ -114,6 +114,14 @@ agentpin verify \
 agentpin bundle \
   --discovery ./d1.json --discovery ./d2.json \
   --output trust-bundle.json
+
+# Web Bot Auth
+agentpin wba keygen --name crawler-2026-11 --output-dir ./keys   # prints the keyid
+agentpin wba directory --key ./keys/crawler-2026-11.ed25519.pem
+agentpin wba sign --key ./keys/crawler-2026-11.ed25519.pem \
+  --signature-agent https://example.com/.well-known/http-message-signatures-directory \
+  --url https://shop.example/products
+agentpin issue ... --wba-jkt <keyid>   # bind the credential to the WBA key (cnf.jkt)
 ```
 
 ## Language API reference
@@ -143,6 +151,12 @@ agentpin bundle \
 | `resolver.LocalAgentCardStore`                          | `resolver_local::LocalAgentCardStore`          | (v0.3) Push-registered AgentCard store |
 | `resolver.A2aAgentCardResolver`                         | `resolver_a2a::A2aAgentCardResolver`           | (v0.3) `.well-known/agent-card.json` fetcher |
 | `types.AllowedDomainsHelper`                            | `types::discovery::AllowedDomains`             | (v0.3) Cross-protocol allow-list helpers |
+| `httpsig.Sign` / `Verify` / `ParseSignatures`           | `httpsig::sign` / `verify` / `parse_signatures`| (v0.4) RFC 9421 HTTP Message Signatures |
+| `wba.SignRequest` / `VerifyRequest`                     | `wba::sign_request` / `verify_request`         | (v0.4) Web Bot Auth signing and verification |
+| `wba.CachingDirectoryResolver`                          | `resolver_wba::CachingDirectoryResolver`       | (v0.4) Hardened key directory fetching |
+| `wba.SignDirectoryResponse` / `VerifyDirectoryResponse` | `wba::sign_directory_response` / `verify_directory_response` | (v0.4) Signed key directories |
+| `wba.VerifyBoundRequest` / `CheckBinding`               | `wba::verify_bound_request` / `check_binding`  | (v0.4) Bind WBA to an AgentPin credential |
+| `credential.IssueBoundCredential`                       | `credential::issue_bound_credential`           | (v0.4) Credential with `cnf.jkt` |
 
 ## Security guarantees
 
@@ -196,6 +210,44 @@ _ = dns.VerifyDnsMatch(&doc, record)
 ```
 
 See [docs/a2a-agentcards.md](https://github.com/ThirdKeyAI/AgentPin/blob/main/docs/a2a-agentcards.md) for the full guide.
+
+## Web Bot Auth
+
+[Web Bot Auth](https://github.com/ThirdKeyAI/AgentPin/blob/main/docs/web-bot-auth.md)
+signs HTTP requests with RFC 9421 HTTP Message Signatures (Ed25519 or
+RSASSA-PSS SHA-512) and names the HTTPS key directory that publishes the
+key in `Signature-Agent`. Package `httpsig` implements RFC 9421 and package
+`wba` the WBA profile, directory fetching and the AgentPin binding (spec
+§18). Only the standard library is used for the cryptography. The shared
+vectors in `testdata/web_bot_auth/vectors.json` pass byte for byte.
+
+```go
+key, _ := wba.LoadSigningKey(pemString)
+req, _ := httpsig.NewRequest("GET", "https://shop.example/products")
+signed, _ := wba.SignRequest(req, key,
+    "https://example.com/.well-known/http-message-signatures-directory",
+    wba.DefaultSignOptions())
+signed.Apply(req) // or copy signed.Headers() onto an *http.Request
+
+// Origin side: fetch directories over https only, no redirects, no
+// private addresses, bounded size and time, cached by max-age.
+directories := wba.NewCachingDirectoryResolver(wba.DefaultDirectoryFetchOptions())
+opts := wba.DefaultVerifyOptions()
+opts.NonceStore = nonce.NewInMemoryStore() // optional replay protection
+incoming, _ := httpsig.RequestFromHTTP(r)
+switch o := wba.VerifyRequest(incoming, directories, opts); o.Kind {
+case wba.Verified:   // o.Agent.SignatureAgent, o.Agent.KeyID
+case wba.Invalid:    // reject: o.Reason
+case wba.Unverified: // no signature, or not enough information to decide
+}
+```
+
+To bind a request to an AgentPin identity, issue the credential with
+`credential.IssueBoundCredential` (or `agentpin issue --wba-jkt`), send it
+as `Authorization: AgentPin <jwt>`, add `authorization` to
+`SignOptions.Components`, and verify with `wba.VerifyBoundRequest`. A
+discovery document can vouch for a hosted directory with
+`web_bot_auth.signature_agents`.
 
 ## Development
 

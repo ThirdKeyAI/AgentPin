@@ -173,3 +173,37 @@ func TestClaimValidation(t *testing.T) {
 		t.Fatalf("valid payload rejected: %v", err)
 	}
 }
+
+func TestCnfJktValidation(t *testing.T) {
+	priv := makeKey(t)
+	_, header, payload := makeTestJWT(t, priv, "k1")
+	for jkt, ok := range map[string]bool{
+		"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U":  true,
+		"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0":   false, // 42 chars
+		"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U=": false, // padded
+		"poqkLGiymh+W0uP6PZFw-dvez3QJT5SolqXBCW38r0U":  false, // not base64url
+		"": false,
+	} {
+		p := *payload
+		p.Cnf = &types.Confirmation{Jkt: jkt}
+		if err := ValidateClaims(&p); (err == nil) != ok {
+			t.Errorf("%q: %v", jkt, err)
+		}
+		jwt, err := EncodeJWT(header, &p, priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, decoded, _, err := DecodeJWTUnverified(jwt)
+		if (err == nil) != ok {
+			t.Errorf("decode %q: %v", jkt, err)
+		}
+		if ok && decoded.Cnf.Jkt != jkt {
+			t.Errorf("cnf round trip %q", decoded.Cnf.Jkt)
+		}
+	}
+	// cnf is omitted when absent.
+	b, _ := json.Marshal(payload)
+	if strings.Contains(string(b), "cnf") {
+		t.Fatal("cnf serialized when absent")
+	}
+}

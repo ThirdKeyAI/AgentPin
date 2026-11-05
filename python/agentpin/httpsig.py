@@ -1130,7 +1130,7 @@ class PrivateKey:
     __slots__ = ("_key",)
 
     def __init__(self, key: Union[Ed25519PrivateKey, rsa.RSAPrivateKey]) -> None:
-        if isinstance(key, rsa.RSAPrivateKey) and not 2048 <= key.key_size <= 8192:
+        if isinstance(key, rsa.RSAPrivateKey) and not 2048 <= key.key_size <= 4096:
             raise _key_format()
         if not isinstance(key, (Ed25519PrivateKey, rsa.RSAPrivateKey)):
             raise _key_format()
@@ -1143,8 +1143,8 @@ class PrivateKey:
 
     @classmethod
     def from_pem(cls, pem: str) -> "PrivateKey":
-        """Load a PEM key: PKCS#8 Ed25519 or RSA, or PKCS#1 RSA. RSA keys
-        must be 2048 to 8192 bits."""
+        """Load a PEM key: PKCS#8 Ed25519 or RSA, or PKCS#1 RSA. RSA signing
+        keys must be 2048 to 4096 bits (the same limit as the Rust crate)."""
         try:
             key = serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
         except Exception:

@@ -545,7 +545,7 @@ export class PrivateKey {
         } else if (type === 'rsa') {
             const bits = keyObject.asymmetricKeyDetails?.modulusLength ?? 0;
             const bytes = Math.ceil(bits / 8);
-            if (bytes < 256 || bytes > 1024) throw keyFormat('RSA keys must be 2048 to 8192 bits');
+            if (bytes < 256 || bytes > 512) throw keyFormat('RSA signing keys must be 2048 to 4096 bits');
             this.type = 'rsa';
         } else {
             throw keyFormat();
@@ -556,7 +556,8 @@ export class PrivateKey {
 
     /**
      * Load a PEM key: PKCS#8 (`PRIVATE KEY`) Ed25519 or RSA, or PKCS#1
-     * (`RSA PRIVATE KEY`). RSA keys must be 2048 to 8192 bits; keys with
+     * (`RSA PRIVATE KEY`). RSA signing keys must be 2048 to 4096 bits (the
+     * same limit as the Rust crate); keys with
      * the RSASSA-PSS algorithm identifier are rejected.
      */
     static fromPem(pem) {

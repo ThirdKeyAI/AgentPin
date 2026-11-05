@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/ThirdKeyAi/agentpin/go/internal/version"
+	"github.com/ThirdKeyAi/agentpin/go/internal/weburl"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/domain"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/fetch"
 	"github.com/ThirdKeyAi/agentpin/go/pkg/types"
@@ -72,6 +73,18 @@ func ValidateDiscoveryDocument(doc *types.DiscoveryDocument, expectedEntity stri
 	}
 	if len(doc.PublicKeys) == 0 {
 		return errors.New("discovery document must have at least one public key")
+	}
+	// Web Bot Auth directories the entity vouches for (spec §18): any https
+	// URL, since key directories may be hosted by a provider.
+	if wba := doc.WebBotAuth; wba != nil {
+		if len(wba.SignatureAgents) == 0 || len(wba.SignatureAgents) > 16 {
+			return errors.New("web_bot_auth.signature_agents must list 1-16 URLs")
+		}
+		for _, u := range wba.SignatureAgents {
+			if _, err := weburl.NormalizeSignatureAgent(u); err != nil {
+				return fmt.Errorf("invalid web_bot_auth signature agent: %w", err)
+			}
+		}
 	}
 	if doc.MaxDelegationDepth > 3 {
 		return errors.New("max_delegation_depth must be 0-3")
