@@ -88,6 +88,7 @@ else:
 - **Signed A2A AgentCards** (v0.3.0) — extends the [A2A](https://github.com/google-a2a/A2A) AgentCard with an AgentPin cryptographic-identity payload. `LocalAgentCardStore` for push-registered agents, `A2aAgentCardResolver` for `.well-known/agent-card.json` fetches.
 - **DNS TXT cross-verification** (v0.3.0) — second-channel trust via `_agentpin.{domain}` TXT records (`v=agentpin1; kid=...; fp=sha256:<hex>`).
 - **`AllowedDomains` typed wrapper** (v0.3.0; tri-state since v0.4) — `None` = unrestricted, `[]` = restricted to nothing, pattern-aware intersection for cross-protocol scoping.
+- **Web Bot Auth** (v0.4.0) — RFC 9421 HTTP message signatures (Ed25519 and RSASSA-PSS SHA-512) in the IETF Web Bot Auth profile, signed key directories, SSRF-hardened directory fetching, and an optional binding to an AgentPin credential (`cnf.jkt`).
 
 ## API
 
@@ -248,9 +249,43 @@ provider = AllowedDomains.from_constraints(provider_agent.get("constraints"))
 scope    = AllowedDomains.intersect(caller, provider)  # None ∩ X = X; disjoint lists -> [] (allows nothing)
 ```
 
+### Web Bot Auth (v0.4.0)
+
+Agents sign HTTP requests with their own Ed25519 (or RSA) key and name the HTTPS key directory that publishes it in `Signature-Agent`. ES256 credential keys are never used for this.
+
+```python
+import time
+
+from agentpin import (
+    Component, HttpRequest, SignOptions, VerifyOptions, CachingDirectoryResolver,
+    InMemoryNonceStore, generate_signing_key, sign_request, verify_request, thumbprint,
+    Directory, sign_directory_response, issue_bound_credential, verify_bound_request,
+)
+
+# Agent: sign a request (covers @authority, the Signature-Agent member, @method, @path)
+key = generate_signing_key()                      # or load_signing_key(pem)
+directory_url = "https://example.com/.well-known/http-message-signatures-directory"
+req = HttpRequest("GET", "https://shop.example/products")
+sign_request(req, key, directory_url, SignOptions()).apply(req)
+# send req.headers with your HTTP client
+
+# Publisher: serve the directory with a possession proof per key
+body = Directory.from_keys([key.public_key()]).to_json()
+headers = sign_directory_response(body, "example.com", [key], created=int(time.time()), validity_secs=3600)
+
+# Origin: verify, fetching directories over https only (no redirects, public IPs only)
+outcome = verify_request(req, CachingDirectoryResolver(), VerifyOptions(nonce_store=InMemoryNonceStore()))
+if outcome.verified:
+    print(outcome.agent.signature_agent, outcome.agent.keyid)
+else:
+    print(outcome.status, outcome.reason)         # "invalid" or "unverified"
+```
+
+To bind the signature to an AgentPin identity (spec §18), issue the credential with `issue_bound_credential(..., wba_jkt=thumbprint(key.public_key()))`, send it as `Authorization: AgentPin <jwt>`, cover it with `SignOptions(components=[Component("@method"), Component("@path"), Component("authorization")])`, and verify with `verify_bound_request(req, keys, resolver, pin_store)`, which raises `BindingFailure` (`kind` is `"wba"`, `"credential"` or `"binding"`). The issuer's discovery document vouches for the directory URL with `"web_bot_auth": {"signature_agents": [...]}`; without that field only `https://{entity}/.well-known/http-message-signatures-directory` is accepted. The low-level RFC 9421 layer is in `agentpin.httpsig`. See [docs/web-bot-auth.md](../docs/web-bot-auth.md).
+
 ## Cross-Language Interoperability
 
-Credentials and signed A2A AgentCards issued by the Python package verify byte-identically in the [Rust](https://crates.io/crates/agentpin), [JavaScript](https://www.npmjs.com/package/agentpin), and [Go](https://pkg.go.dev/github.com/ThirdKeyAi/agentpin/go) implementations, and vice versa. All four SDKs use DER-encoded ECDSA signatures, identical JSON field names, and sorted-key canonical JSON for AgentCard signing inputs.
+Credentials and signed A2A AgentCards issued by the Python package verify byte-identically in the [Rust](https://crates.io/crates/agentpin), [JavaScript](https://www.npmjs.com/package/agentpin), and [Go](https://pkg.go.dev/github.com/ThirdKeyAi/agentpin/go) implementations, and vice versa. All four SDKs use DER-encoded ECDSA signatures, identical JSON field names, and sorted-key canonical JSON for AgentCard signing inputs. All four also run the shared Web Bot Auth vectors in `testdata/web_bot_auth/vectors.json`.
 
 ## License
 

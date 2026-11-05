@@ -6,6 +6,7 @@ from .constraint import domain_pattern_matches
 from .domain import normalize_domain, validate_https_url_for_domain
 from .net import fetch_json_bounded
 from .types import AgentPinError, ErrorCode
+from .wba import normalize_signature_agent
 
 
 def build_discovery_document(
@@ -153,6 +154,23 @@ def validate_discovery_document(doc: dict, expected_entity: str) -> None:
 
     if not doc.get("public_keys"):
         raise AgentPinError(ErrorCode.DISCOVERY_INVALID, "Discovery document must have at least one public key")
+
+    # Web Bot Auth directories the entity vouches for (spec §18): any https
+    # URL, since key directories may be hosted by a provider.
+    wba = doc.get("web_bot_auth")
+    if wba is not None:
+        agents = wba.get("signature_agents") if isinstance(wba, dict) else None
+        if not isinstance(agents, list) or not 1 <= len(agents) <= 16:
+            raise AgentPinError(ErrorCode.DISCOVERY_INVALID, "web_bot_auth.signature_agents must list 1-16 URLs")
+        for url in agents:
+            try:
+                if not isinstance(url, str):
+                    raise AgentPinError(ErrorCode.DISCOVERY_INVALID, "not a string")
+                normalize_signature_agent(url)
+            except AgentPinError as e:
+                raise AgentPinError(
+                    ErrorCode.DISCOVERY_INVALID, f"Invalid web_bot_auth signature agent: {e}"
+                ) from None
 
     if doc.get("max_delegation_depth", 0) > 3:
         raise AgentPinError(ErrorCode.DISCOVERY_INVALID, "max_delegation_depth must be 0-3")
