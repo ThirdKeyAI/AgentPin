@@ -194,8 +194,10 @@ agentpin verify \
 
 ### `agentpin wba` — Web Bot Auth
 
-Ed25519 keys, key directories and request signing for
-[Web Bot Auth](web-bot-auth.md).
+Keys, key directories and request signing for
+[Web Bot Auth](web-bot-auth.md). `keygen` makes Ed25519 keys; `directory`
+and `sign` also accept RSA keys (2048 to 4096 bits, PKCS#8 or PKCS#1 PEM),
+which sign with `rsa-pss-sha512`.
 
 ```bash
 # Generate a key; prints its keyid (JWK thumbprint)
@@ -209,11 +211,13 @@ agentpin wba sign \
   --key ./keys/crawler-2026-11.ed25519.pem \
   --signature-agent https://example.com/.well-known/http-message-signatures-directory \
   --url https://shop.example/products \
-  [--method GET] [--header "Authorization: AgentPin <jwt>"] [--validity 300] \
-  [--legacy-signature-agent]
+  [--method GET] [--header "Authorization: AgentPin <jwt>"] [--query-param q] \
+  [--validity 300] [--legacy-signature-agent]
 ```
 
-Headers passed with `--header` are sent and covered by the signature. To
+Headers passed with `--header` are sent and covered by the signature.
+Query parameters named with `--query-param` are covered with
+`@query-param`. To
 bind a credential to the key, issue it with `agentpin issue --wba-jkt <keyid>`.
 
 ---
@@ -237,7 +241,7 @@ agentpin-server \
 | `--revocation` | No | — | Path to revocation document JSON |
 | `--port` | No | `8080` | HTTP listening port |
 | `--host` | No | `0.0.0.0` | Bind address |
-| `--wba-key` | No | — | Ed25519 PEM to publish in the Web Bot Auth key directory (repeatable) |
+| `--wba-key` | No | — | Ed25519 or RSA PEM to publish in the Web Bot Auth key directory (repeatable) |
 | `--wba-authority` | No | — | Extra host the key directory is served for (the discovery entity is always allowed) |
 
 **Endpoints served:**

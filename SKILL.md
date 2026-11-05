@@ -255,7 +255,7 @@ Serves:
 
 AgentPin exclusively uses ES256 (ECDSA P-256). All other algorithms are rejected. This is enforced inline without an external JWT crate.
 
-The one exception is Web Bot Auth (`agentpin::wba`, Rust only): HTTP requests are signed with separate Ed25519 keys per RFC 9421. A credential can name its agent's WBA key in `cnf.jkt`, binding the two identities. Credentials themselves are still ES256 only. See `docs/web-bot-auth.md`.
+The one exception is Web Bot Auth (`agentpin::wba` in Rust, and the matching modules in the JavaScript, Python and Go SDKs): HTTP requests are signed with separate Ed25519 or RSA-PSS keys per RFC 9421. A credential can name its agent's WBA key in `cnf.jkt`, binding the two identities. Credentials themselves are still ES256 only. See `docs/web-bot-auth.md`.
 
 ### 12-Step Verification
 

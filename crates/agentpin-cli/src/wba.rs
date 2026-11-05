@@ -51,7 +51,7 @@ pub struct DirectoryArgs {
 
 #[derive(Args)]
 pub struct SignArgs {
-    /// Ed25519 or RSA (2048-8192 bit, signs with rsa-pss-sha512) private
+    /// Ed25519 or RSA (2048-4096 bit, signs with rsa-pss-sha512) private
     /// key PEM
     #[arg(long)]
     pub key: String,

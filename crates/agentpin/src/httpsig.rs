@@ -591,7 +591,8 @@ pub enum PrivateKey {
 
 impl PrivateKey {
     /// Load a PEM key: PKCS#8 (`PRIVATE KEY`) Ed25519 or RSA, or PKCS#1
-    /// (`RSA PRIVATE KEY`). RSA keys must be 2048 to 8192 bits.
+    /// (`RSA PRIVATE KEY`). RSA signing keys must be 2048 to 4096 bits
+    /// (verification accepts up to 8192).
     pub fn from_pem(pem: &str) -> Result<Self, Error> {
         use ed25519_dalek::pkcs8::{spki::der::pem, DecodePrivateKey};
         if let Ok(k) = SigningKey::from_pkcs8_pem(pem) {
@@ -607,7 +608,7 @@ impl PrivateKey {
             _ => return Err(Error::InvalidKeyFormat),
         }
         .map_err(|_| Error::InvalidKeyFormat)?;
-        if !(256..=1024).contains(&kp.public().modulus_len()) {
+        if !(256..=512).contains(&kp.public().modulus_len()) {
             return Err(Error::InvalidKeyFormat);
         }
         Ok(PrivateKey::RsaPss(Box::new(kp)))

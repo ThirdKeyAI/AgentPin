@@ -2,27 +2,30 @@
 
 Web Bot Auth (WBA) is the IETF protocol for identifying automated HTTP
 clients with [RFC 9421 HTTP Message Signatures](https://www.rfc-editor.org/rfc/rfc9421).
-An agent signs each request with an Ed25519 key and names the HTTPS key
+An agent signs each request with an Ed25519 or RSA key and names the HTTPS key
 directory that publishes that key. Origins and edge providers that support
 WBA verify the signature and recognize the agent by that directory URL.
 
 AgentPin supports WBA in three ways:
 
-- **Signing and verification.** RFC 9421 signatures with Ed25519 in the WBA
-  profile (`agentpin::wba`, built on `agentpin::httpsig`).
+- **Signing and verification.** RFC 9421 signatures with Ed25519 or
+  RSASSA-PSS SHA-512 in the WBA profile (`agentpin::wba`, built on
+  `agentpin::httpsig`).
 - **Key publication.** A signed `/.well-known/http-message-signatures-directory`,
   served by `agentpin-server` or generated with the CLI.
 - **Identity binding.** An optional link from a WBA signature to an AgentPin
   credential, so a request recognized at the edge can also be attributed to
   a specific agent with its capabilities and constraints.
 
-WBA uses its own Ed25519 keys. Your ES256 credential keys and credentials
+WBA uses its own keys. Your ES256 credential keys and credentials
 are unchanged.
 
 The normative rules are in §18 of the
 [technical specification](../AGENTPIN_TECHNICAL_SPECIFICATION.md#18-web-bot-auth-binding-v04).
 The implementation follows draft-ietf-webbotauth-httpsig-protocol-01 and
-reproduces that draft's Ed25519 test vectors byte for byte.
+reproduces that draft's Ed25519 test vectors byte for byte and verifies its
+RSA-PSS vectors. The Rust crate and the JavaScript, Python and Go SDKs all
+run the same vectors from `testdata/web_bot_auth/vectors.json`.
 
 ## 1. Create a key and publish it
 
@@ -47,6 +50,18 @@ The directory is answered only for the discovery entity's host, plus any
 host added with `--wba-authority`. The response's possession proof covers
 the request authority, so signing for any `Host` a client sends would let
 others mint proofs for domains that are not yours.
+
+`agentpin wba keygen` makes Ed25519 keys, which the draft's examples and
+most deployments use. To sign with RSA instead (`rsa-pss-sha512`), bring a
+2048 to 4096-bit key in PKCS#8 or PKCS#1 PEM and use it anywhere a key is
+accepted:
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out keys/crawler-rsa.pem
+```
+
+Keys with the RSASSA-PSS algorithm identifier (`openssl genpkey -algorithm
+RSA-PSS`) are not accepted; use a plain RSA key.
 
 To host the directory elsewhere, print it and serve it with media type
 `application/http-message-signatures-directory+json`:
@@ -79,7 +94,10 @@ wba::sign_request(
 
 By default the signature covers `@authority`, the `Signature-Agent` member,
 `@method` and `@path`. It is valid for 5 minutes and carries a random nonce.
-Add components with `SignOptions::components`.
+Add components with `SignOptions::components`. To cover individual query
+parameters, add `Component::query_param("q")`, or pass `--query-param q` to
+the CLI. This survives intermediaries reordering the query string, which
+`@target-uri` and `@query` do not.
 
 From the shell:
 
@@ -133,8 +151,23 @@ Notes on `CachingDirectoryResolver`:
 For offline or pre-provisioned keys, use `DirectoryKeyStore` with the
 synchronous `verify_request`.
 
-Replay protection is up to you. Signatures are short-lived, and
-`VerifiedAgent::nonce` is available if you want to track nonces.
+For replay protection, set a nonce store. Each verified signature's
+`(keyid, nonce)` pair is recorded until the signature expires. A repeat, or
+a signature without a nonce, is *invalid*. Nonces are recorded only after
+the signature verifies, so forged requests cannot fill the store.
+
+```rust
+use std::sync::Arc;
+use agentpin::nonce::InMemoryNonceStore;
+
+let opts = VerifyOptions {
+    nonce_store: Some(Arc::new(InMemoryNonceStore::new())),
+    ..Default::default()
+};
+```
+
+Use a shared store implementing `agentpin::nonce::NonceStore` when several
+verifier instances sit behind one origin.
 
 ## 4. Bind WBA to an AgentPin identity
 
@@ -186,13 +219,31 @@ following hold:
 
 Any other result is a `BindingFailure` that says which part failed.
 
+## JavaScript, Python and Go
+
+Every SDK implements the same protocol and passes the same vectors. The
+names follow each language's conventions:
+
+| | JavaScript (`agentpin/wba`) | Python (`agentpin`) | Go (`pkg/wba`) |
+|---|---|---|---|
+| Load a key | `loadSigningKey(pem)` | `load_signing_key(pem)` | `wba.LoadSigningKey(pem)` |
+| Sign | `signRequest(req, key, url, opts)` | `sign_request(req, key, url, opts)` | `wba.SignRequest(req, key, url, opts)` |
+| Verify | `await verifyRequest(req, keys, opts)` | `verify_request(req, keys, opts)` | `wba.VerifyRequest(req, keys, opts)` |
+| Fetch directories | `CachingDirectoryResolver` | `CachingDirectoryResolver` | `wba.NewCachingDirectoryResolver` |
+| Replay protection | `opts.nonceStore` | `VerifyOptions.nonce_store` | `VerifyOptions.NonceStore` |
+| Binding | `verifyBoundRequest` | `verify_bound_request` | `wba.VerifyBoundRequest` |
+| Bound credential | `issueBoundCredential` | `issue_bound_credential` | `credential.IssueBoundCredential` |
+
+Only Rust and JavaScript need an async key lookup. Python and Go fetch
+directories synchronously, so their resolver plugs straight into the normal
+verify call. The Go CLI has the same `agentpin wba` commands and
+`issue --wba-jkt` as the Rust CLI. See each SDK's README for a full example.
+
 ## Scope
 
-- Ed25519 is the only HTTP signature algorithm implemented. RSA-PSS
-  (`rsa-pss-sha512`) is not.
+- HTTP signature algorithms are `ed25519` and `rsa-pss-sha512`. Shared-key
+  HMAC is excluded by the draft, and ECDSA is not used by WBA deployments.
 - Supported components are `@method`, `@target-uri`, `@authority`,
-  `@scheme`, `@request-target`, `@path`, `@query`, `@status` and HTTP
-  fields, with the `key` and `req` parameters. Signatures using `@query-param`
-  or the `sf`, `bs` or `tr` parameters are rejected.
-- This is in the Rust crates only. The JavaScript, Python and Go SDKs do not
-  implement WBA yet.
+  `@scheme`, `@request-target`, `@path`, `@query`, `@query-param`,
+  `@status` and HTTP fields, with the `key`, `req` and `name` parameters.
+  Signatures using the `sf`, `bs` or `tr` parameters are rejected.

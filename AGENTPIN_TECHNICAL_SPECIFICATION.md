@@ -1966,7 +1966,7 @@ a domain-anchored credential. This section binds the two, so that a request
 recognized at the edge by its WBA signature can also be attributed to a
 specific AgentPin agent with its capabilities and constraints.
 
-WBA keys are Ed25519 and separate from the ES256 keys of §7. The ES256
+WBA keys are Ed25519 or RSA and separate from the ES256 keys of §7. The ES256
 credential profile (§5) is unchanged, and an ES256 credential key MUST NOT
 be used to sign HTTP messages.
 
@@ -1974,14 +1974,20 @@ be used to sign HTTP messages.
 
 An agent signs requests per the WBA draft:
 
-- `alg="ed25519"`; `keyid` is the RFC 8037 Appendix A.3 JWK SHA-256
-  thumbprint of the Ed25519 key, base64url without padding.
+- `alg="ed25519"` with an Ed25519 key, or `alg="rsa-pss-sha512"` with an
+  RSA key. Signers SHOULD use RSA keys of 2048 to 4096 bits, and verifiers
+  MUST accept 2048 to 8192 bits. Ed25519 is RECOMMENDED. When present,
+  `alg` MUST match the key type.
+- `keyid` is the JWK SHA-256 thumbprint of the key, base64url without
+  padding: RFC 8037 Appendix A.3 for Ed25519, RFC 7638 for RSA.
 - `tag="web-bot-auth"`; `created` and `expires` are REQUIRED, and
   `expires - created` SHOULD NOT exceed 24 hours.
 - The covered components MUST include `@authority` (or `@target-uri`) and
   the `Signature-Agent` member naming the agent's key directory
   (`"signature-agent";key="<label>"`). They SHOULD include `@method` and
-  `@path`.
+  `@path`. Individual query parameters MAY be covered with
+  `"@query-param";name="<name>"` (RFC 9421 §2.2.8).
+- A `nonce` of 64 random bytes, base64-encoded, SHOULD be included.
 - `Signature-Agent` MUST be sent as a Dictionary
   (`sig1="https://example.com/.well-known/http-message-signatures-directory"`).
   Implementations MAY offer the legacy bare-String form for verifiers that
@@ -1989,11 +1995,13 @@ An agent signs requests per the WBA draft:
 
 ### 18.2 Key Directory
 
-The agent's operator publishes its Ed25519 keys as a JWK Set at the
+The agent's operator publishes its keys as a JWK Set at the
 `Signature-Agent` URL, normally
 `https://{domain}/.well-known/http-message-signatures-directory`, served
 with media type `application/http-message-signatures-directory+json`. Each
-JWK's `kid`, when present, MUST be its thumbprint.
+JWK's `kid`, when present, MUST be its thumbprint. Verifiers compute the
+thumbprint from the key material and ignore entries that are not Ed25519
+OKP keys or RSA keys of 2048 to 8192 bits.
 
 The directory response SHOULD carry one possession-proof signature per key
 (WBA Appendix B.1): covered components `"@authority";req` and
@@ -2037,6 +2045,13 @@ cannot be checked because its directory is unavailable, or the directory
 lacks the key, is *unverified*, not invalid (WBA Appendix C.1). Failing step
 3, 4 or 5 means the WBA identity and the AgentPin identity are not bound,
 and the request MUST NOT be attributed to the AgentPin agent.
+
+Verifiers that require replay protection SHOULD record each verified
+signature's `(keyid, nonce)` pair until the signature expires and reject
+repeats, and SHOULD treat a signature without a `nonce` as invalid. A
+nonce is recorded only after the signature verifies, so that forged
+requests cannot exhaust the store. The reference SDKs offer this as an
+option on request verification.
 
 ### 18.5 Directory Fetching
 
