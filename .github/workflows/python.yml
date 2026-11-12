@@ -26,5 +26,5 @@ jobs:
       - name: Audit Python dependencies
         working-directory: python
         run: |
-          pip install --upgrade --upgrade-strategy eager pip pip-audit
-          pip-audit --progress-spinner off
+          pip install --upgrade pip pip-audit
+          pip-audit --progress-spinner off .
