@@ -1,6 +1,6 @@
 {
   "name": "agentpin",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Domain-anchored cryptographic identity protocol for AI agents",
   "main": "src/index.js",
   "type": "module",
@@ -33,7 +33,10 @@
     "well-known",
     "credential-verification",
     "delegation",
-    "agentpin"
+    "agentpin",
+    "web-bot-auth",
+    "http-message-signatures",
+    "rfc9421"
   ],
   "author": {
     "name": "Jascha Wanger / ThirdKey.ai",
@@ -112,6 +115,15 @@
     },
     "./bundle": {
       "import": "./src/bundle.js"
+    },
+    "./httpsig": {
+      "import": "./src/httpsig.js"
+    },
+    "./wba": {
+      "import": "./src/wba.js"
+    },
+    "./resolverWba": {
+      "import": "./src/resolverWba.js"
     }
   },
   "publishConfig": {

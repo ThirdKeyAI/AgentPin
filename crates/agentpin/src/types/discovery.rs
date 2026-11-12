@@ -158,8 +158,22 @@ pub struct DiscoveryDocument {
     /// (`.well-known/agent-card.json`), enabling cross-protocol discovery.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub a2a_endpoint: Option<String>,
+    /// Optional v0.4.0: Web Bot Auth key directories this entity vouches
+    /// for (spec §18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_bot_auth: Option<WebBotAuth>,
     pub max_delegation_depth: u8,
     pub updated_at: String,
+}
+
+/// Web Bot Auth binding for a discovery document (spec §18).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WebBotAuth {
+    /// HTTPS URLs of the key directories (`Signature-Agent` values) whose
+    /// keys may sign requests for this entity's agents. When the field is
+    /// absent, only `https://{entity}/.well-known/http-message-signatures-directory`
+    /// is accepted.
+    pub signature_agents: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,6 +247,7 @@ mod tests {
             policy_url: None,
             schemapin_endpoint: None,
             a2a_endpoint: None,
+            web_bot_auth: None,
             max_delegation_depth: 2,
             updated_at: "2026-01-15T00:00:00Z".to_string(),
         };

@@ -24,6 +24,18 @@ pub struct ServerConfig {
     /// serves these endpoints under https (AP-23).
     #[arg(long)]
     pub hsts: bool,
+
+    /// Ed25519 PKCS#8 PEM key to publish and sign with at
+    /// /.well-known/http-message-signatures-directory (Web Bot Auth).
+    /// Repeat for key rotation.
+    #[arg(long = "wba-key")]
+    pub wba_keys: Vec<String>,
+
+    /// Extra host the key directory may be served under. The discovery
+    /// entity is always allowed; requests for any other Host get 404, so the
+    /// directory's possession proof cannot be minted for a foreign domain.
+    #[arg(long = "wba-authority")]
+    pub wba_authorities: Vec<String>,
 }
 
 impl ServerConfig {

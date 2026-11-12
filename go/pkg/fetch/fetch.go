@@ -13,8 +13,11 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -101,4 +104,131 @@ func JSONBounded(client *http.Client, url string, maxBytes int64) (body []byte, 
 		return nil, false, fmt.Errorf("response from %s exceeds %d bytes", url, maxBytes)
 	}
 	return data, true, nil
+}
+
+// IsNonPublic reports whether ip is an address a server-side fetch driven
+// by a client-supplied URL must never reach: loopback, private,
+// link-local, CGNAT, multicast, documentation, unspecified and reserved
+// ranges.
+func IsNonPublic(ip net.IP) bool {
+	if v4 := ip.To4(); v4 != nil {
+		o := v4
+		return v4.IsLoopback() || v4.IsPrivate() || v4.IsLinkLocalUnicast() ||
+			v4.IsUnspecified() || v4.IsMulticast() ||
+			o[0] == 0 ||
+			(o[0] == 100 && o[1]&0xc0 == 64) ||
+			(o[0] == 192 && o[1] == 0 && o[2] == 0) ||
+			(o[0] == 192 && o[1] == 0 && o[2] == 2) ||
+			(o[0] == 198 && o[1]&0xfe == 18) ||
+			(o[0] == 198 && o[1] == 51 && o[2] == 100) ||
+			(o[0] == 203 && o[1] == 0 && o[2] == 113) ||
+			o[0] >= 240
+	}
+	if len(ip) != net.IPv6len {
+		return true
+	}
+	return ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() ||
+		ip[0]&0xfe == 0xfc ||
+		(ip[0] == 0xfe && ip[1]&0xc0 == 0x80) ||
+		(ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x0d && ip[3] == 0xb8) ||
+		(ip[0] == 0x00 && ip[1] == 0x64 && ip[2] == 0xff && ip[3] == 0x9b)
+}
+
+// BoundedOptions configures Bounded.
+type BoundedOptions struct {
+	// Timeout bounds the whole request (DefaultTimeout when 0).
+	Timeout time.Duration
+	// MaxBytes caps the response body (DefaultMaxBytes when <= 0).
+	MaxBytes int64
+	// PublicOnly refuses hosts that are, or resolve to, non-public
+	// addresses. The check runs on the address actually dialed, so DNS
+	// rebinding cannot bypass it, and proxies are disabled.
+	PublicOnly bool
+	// Accept is the Accept header value.
+	Accept string
+}
+
+// Response is a response read by Bounded.
+type Response struct {
+	Status int
+	// Headers as (name, value) pairs; names in canonical form.
+	Headers [][2]string
+	Body    []byte
+}
+
+func refuseNonPublic(network, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || IsNonPublic(ip) {
+		return errors.New("refusing to connect to a non-public address")
+	}
+	return nil
+}
+
+// Bounded GETs rawURL with the same limits as JSONBounded (no redirects,
+// timeout, byte cap) and returns status, headers and body for any
+// non-redirect status.
+func Bounded(rawURL string, opts BoundedOptions) (*Response, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("invalid URL %s", rawURL)
+	}
+	if opts.Timeout == 0 {
+		opts.Timeout = DefaultTimeout
+	}
+	if opts.MaxBytes <= 0 {
+		opts.MaxBytes = DefaultMaxBytes
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if opts.PublicOnly {
+		if ip := net.ParseIP(u.Hostname()); ip != nil && IsNonPublic(ip) {
+			return nil, fmt.Errorf("refusing to fetch non-public address %s", rawURL)
+		}
+		dialer := &net.Dialer{Timeout: opts.Timeout, Control: refuseNonPublic}
+		transport.DialContext = dialer.DialContext
+		transport.Proxy = nil
+	}
+	client := &http.Client{
+		Timeout:   opts.Timeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	defer client.CloseIdleConnections()
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL %s", rawURL)
+	}
+	if opts.Accept != "" {
+		req.Header.Set("Accept", opts.Accept)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch %s", rawURL)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return nil, fmt.Errorf("redirect rejected fetching %s (status %d)", rawURL, resp.StatusCode)
+	}
+	if resp.ContentLength > opts.MaxBytes {
+		return nil, fmt.Errorf("response from %s exceeds %d bytes", rawURL, opts.MaxBytes)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, opts.MaxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response from %s", rawURL)
+	}
+	if int64(len(body)) > opts.MaxBytes {
+		return nil, fmt.Errorf("response from %s exceeds %d bytes", rawURL, opts.MaxBytes)
+	}
+	out := &Response{Status: resp.StatusCode, Body: body}
+	for name, values := range resp.Header {
+		for _, v := range values {
+			out.Headers = append(out.Headers, [2]string{name, v})
+		}
+	}
+	return out, nil
 }

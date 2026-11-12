@@ -30,3 +30,10 @@ pub mod resolver_local;
 // v0.3.0: DNS TXT cross-verification at `_agentpin.{domain}`. Parser/matcher
 // always available; the async fetcher lives behind the `dns` Cargo feature.
 pub mod dns;
+
+// v0.4.0: RFC 9421 HTTP Message Signatures and the Web Bot Auth profile
+// (Ed25519 request signing, key directories, AgentPin identity binding).
+pub mod httpsig;
+#[cfg(feature = "fetch")]
+pub mod resolver_wba;
+pub mod wba;

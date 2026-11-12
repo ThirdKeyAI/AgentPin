@@ -24,6 +24,7 @@ func runIssue(args []string) error {
 	delChainPath := fs.String("delegation-chain", "", "JSON file with delegation chain entries")
 	constraintsArg := fs.String("constraints", "", "JSON string with constraint overrides (literal; use --constraints-file for a file)")
 	constraintsFile := fs.String("constraints-file", "", "Path to a JSON file with constraint overrides")
+	wbaJkt := fs.String("wba-jkt", "", "Bind the credential to a Web Bot Auth key: its keyid (JWK thumbprint, as printed by 'agentpin wba keygen'), carried as cnf.jkt")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -82,7 +83,12 @@ func runIssue(args []string) error {
 		}
 	}
 
-	jwt, err := credential.IssueCredential(priv, *kid, *issuer, *agentID, *audience, capList, constraints, chain, *ttl)
+	var jwt string
+	if *wbaJkt != "" {
+		jwt, err = credential.IssueBoundCredential(priv, *kid, *issuer, *agentID, *audience, capList, constraints, chain, *ttl, *wbaJkt)
+	} else {
+		jwt, err = credential.IssueCredential(priv, *kid, *issuer, *agentID, *audience, capList, constraints, chain, *ttl)
+	}
 	if err != nil {
 		return err
 	}

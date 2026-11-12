@@ -114,6 +114,15 @@ pub fn validate_claims(payload: &JwtPayload) -> Result<(), Error> {
             ));
         }
     }
+    if let Some(ref cnf) = payload.cnf {
+        // A base64url SHA-256 thumbprint: 43 characters, 32 bytes.
+        let ok = cnf.jkt.len() == 43 && base64url_decode(&cnf.jkt).is_ok_and(|b| b.len() == 32);
+        if !ok {
+            return Err(Error::MalformedCredential(
+                "cnf.jkt must be a base64url SHA-256 JWK thumbprint".to_string(),
+            ));
+        }
+    }
     if payload.agentpin_version != CREDENTIAL_VERSION {
         return Err(Error::MalformedCredential(format!(
             "Unsupported agentpin_version '{}'",
@@ -172,6 +181,7 @@ mod tests {
             constraints: None,
             delegation_chain: None,
             nonce: None,
+            cnf: None,
         };
         let jwt = encode_jwt(&header, &payload, signing_key).unwrap();
         (jwt, header, payload)
@@ -225,6 +235,7 @@ mod tests {
             constraints: None,
             delegation_chain: None,
             nonce: None,
+            cnf: None,
         };
         let jwt = encode_jwt(&header, &payload, &sk).unwrap();
 
@@ -257,6 +268,7 @@ mod tests {
             constraints: None,
             delegation_chain: None,
             nonce: None,
+            cnf: None,
         };
         let jwt = encode_jwt(&header, &payload, &sk).unwrap();
 

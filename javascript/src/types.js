@@ -76,6 +76,10 @@ export const ErrorCode = Object.freeze({
     ALGORITHM_REJECTED: 'ALGORITHM_REJECTED',
     KEY_PIN_MISMATCH: 'KEY_PIN_MISMATCH',
     MALFORMED_CREDENTIAL: 'MALFORMED_CREDENTIAL',
+    /** Malformed or unverifiable RFC 9421 / Web Bot Auth message signature data. */
+    HTTP_SIGNATURE_INVALID: 'HTTP_SIGNATURE_INVALID',
+    /** A key that is not a supported Ed25519 or RSA key. */
+    INVALID_KEY_FORMAT: 'INVALID_KEY_FORMAT',
 });
 
 /** AgentPin-specific error class. */

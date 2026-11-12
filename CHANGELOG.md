@@ -1,26 +1,46 @@
 # Changelog
 
-## Unreleased — Rust cryptography
-
-- Upgrade to p256 0.14 and require crypto-bigint >= 0.7.6 to address
-  RUSTSEC-2026-0387. Key generation uses the fallible OS-randomness API.
-- Preserve PEM/JWK encodings, key IDs, credential DER signatures, and persisted
-  TOFU pins; add fixed vectors produced by the unmodified 0.3.0 SDK.
-- Rust callers that name the public P-256 key types must also use p256 0.14.
-  This dependency update does not change the protocol on this branch.
-- Require hickory-resolver >= 0.26.1 so downstream DNS-feature builds cannot
-  retain the older release affected by RUSTSEC-2026-0119.
-
 All notable changes to the AgentPin project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-11
 
 Security release addressing the AP-1 through AP-23 review findings in all
-four SDKs (Rust, Go, JavaScript, Python). Specification bumped to 0.4.0; the
-document `agentpin_version` stays `"0.1"`.
+four SDKs (Rust, Go, JavaScript, Python), plus Web Bot Auth support.
+Specification bumped to 0.4.0; the document `agentpin_version` stays `"0.1"`.
+
+### Added: Web Bot Auth
+
+- RFC 9421 HTTP Message Signatures (`agentpin::httpsig`): signature base
+  construction, `Signature-Input`/`Signature` parsing, Ed25519 (strict
+  verification) and RSASSA-PSS SHA-512 (`rsa-pss-sha512`; signing keys of
+  2048 to 4096 bits, verification up to 8192) signing and verification,
+  `@query-param`, `Content-Digest`.
+- Web Bot Auth profile (`agentpin::wba`), following
+  draft-ietf-webbotauth-httpsig-protocol-01: Ed25519 or RSA keys with JWK
+  thumbprint `keyid` (RFC 8037 / RFC 7638), request signing with a Dictionary `Signature-Agent`
+  (legacy String form opt-in), verification with verified / invalid /
+  unverified outcomes and key lookup keyed on (URL, keyid), and signed key
+  directory responses. Optional replay protection through
+  `VerifyOptions::nonce_store`, checked only after a signature verifies.
+  Reproduces the draft's Ed25519 test vectors and verifies its RSA-PSS
+  vectors; the shared vectors live in `testdata/web_bot_auth/vectors.json`.
+- `agentpin::resolver_wba` (`fetch` feature): directory fetching with SSRF
+  limits (https only, no redirects, non-public addresses refused, size, key
+  count and time caps) and a cache that a failed refetch never evicts.
+  `net::fetch_bounded` and `net::is_non_public` back it.
+- AgentPin binding (spec §18): optional `cnf.jkt` credential claim
+  (`credential::issue_bound_credential`), optional `web_bot_auth` discovery
+  field, and `wba::verify_bound_request` / `wba::check_binding`.
+- `agentpin-server --wba-key` serves a signed
+  `/.well-known/http-message-signatures-directory`, only for its own hosts.
+  RSA keys are accepted as well as Ed25519.
+- CLI: `agentpin wba keygen | directory | sign` (with `--query-param`) and
+  `agentpin issue --wba-jkt`.
+- The ES256 credential profile is unchanged. The new fields are optional,
+  so documents and credentials without them verify as before.
 
 ### Breaking wire changes
 
@@ -61,7 +81,7 @@ document `agentpin_version` stays `"0.1"`.
   (`key_pinning.status: "rotated"`).
 - Server: HSTS is opt-in (`--hsts`).
 - Go module now requires Go 1.26 (floor of the patched `golang.org/x/net`),
-  with Go 1.26.9 selected for its standard-library security fixes.
+  with Go 1.26.11 selected for its standard-library security fixes.
 
 ### Fixed
 
@@ -126,6 +146,32 @@ document `agentpin_version` stays `"0.1"`.
   test suites.
 - Fuzz targets: cargo-fuzz crate in `fuzz/`, Go native fuzz tests,
   fast-check (JS) and hypothesis (Python) properties.
+
+### Rust cryptography
+
+- p256 0.14 and crypto-bigint >= 0.7.6 (RUSTSEC-2026-0387), first shipped in
+  0.3.1. Key generation uses the fallible OS-randomness API.
+- PEM/JWK encodings, key IDs, credential DER signatures and persisted TOFU
+  pins are preserved; fixed vectors produced by the unmodified 0.3.0 SDK
+  guard this.
+- Rust callers that name the public P-256 key types must also use p256 0.14.
+- hickory-resolver >= 0.26.1, so downstream DNS-feature builds cannot retain
+  the older release affected by RUSTSEC-2026-0119.
+
+## [0.3.1] - 2026-11-04
+
+Rust-only cryptography security backport, published to crates.io only. The
+JavaScript, Python and Go SDKs stayed at 0.3.0.
+
+- Upgrade to p256 0.14 and require crypto-bigint >= 0.7.6 to address
+  RUSTSEC-2026-0387. Key generation uses fallible OS randomness; rand 0.8 is
+  removed from the default dependency graph.
+- Preserve the 0.3.0 wire protocol, including DER credential/delegation
+  signatures, PEM/JWK encodings, key IDs, and persisted TOFU pins. Regression
+  vectors were generated with the unmodified 0.3.0 SDK.
+- Rust callers that name public P-256 key types must also use p256 0.14.
+- Update optional DNS support to hickory-resolver >= 0.26.1 to address
+  RUSTSEC-2026-0119. Rust 1.89 is now required.
 
 ## [0.3.0] - 2026-05-14
 

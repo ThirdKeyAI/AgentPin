@@ -48,7 +48,19 @@ type DiscoveryDocument struct {
 	SchemapinEndpoint  string             `json:"schemapin_endpoint,omitempty"`
 	// A2aEndpoint (v0.3.0) optionally identifies the URL of the entity's A2A
 	// AgentCard endpoint, enabling cross-protocol discovery.
-	A2aEndpoint        string `json:"a2a_endpoint,omitempty"`
-	MaxDelegationDepth uint8  `json:"max_delegation_depth"`
-	UpdatedAt          string `json:"updated_at"`
+	A2aEndpoint string `json:"a2a_endpoint,omitempty"`
+	// WebBotAuth (optional, v0.4.0) lists the Web Bot Auth key directories
+	// this entity vouches for (spec §18).
+	WebBotAuth         *WebBotAuth `json:"web_bot_auth,omitempty"`
+	MaxDelegationDepth uint8       `json:"max_delegation_depth"`
+	UpdatedAt          string      `json:"updated_at"`
+}
+
+// WebBotAuth is the Web Bot Auth binding of a discovery document (spec
+// §18). SignatureAgents are the HTTPS URLs of the key directories
+// (Signature-Agent values) whose keys may sign requests for this entity's
+// agents. When the field is absent, only
+// https://{entity}/.well-known/http-message-signatures-directory is accepted.
+type WebBotAuth struct {
+	SignatureAgents []string `json:"signature_agents"`
 }

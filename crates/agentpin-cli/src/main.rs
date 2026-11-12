@@ -2,6 +2,7 @@ mod bundle;
 mod issue;
 mod keygen;
 mod verify;
+mod wba;
 
 use clap::{Parser, Subcommand};
 
@@ -22,6 +23,8 @@ enum Commands {
     Verify(verify::VerifyArgs),
     /// Create a trust bundle from discovery and revocation documents
     Bundle(bundle::BundleArgs),
+    /// Web Bot Auth: Ed25519 keys, key directories, request signing
+    Wba(wba::WbaArgs),
 }
 
 #[tokio::main]
@@ -32,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Issue(args) => issue::run(args)?,
         Commands::Verify(args) => verify::run(args).await?,
         Commands::Bundle(args) => bundle::run(args)?,
+        Commands::Wba(args) => wba::run(args)?,
     }
     Ok(())
 }

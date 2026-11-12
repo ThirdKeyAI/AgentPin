@@ -1,4 +1,4 @@
-// Command agentpin is the AgentPin CLI: keygen, issue, verify, bundle.
+// Command agentpin is the AgentPin CLI: keygen, issue, verify, bundle, wba.
 //
 // It mirrors the Rust `agentpin` binary's subcommand surface to keep
 // operator workflows portable across language stacks.
@@ -27,6 +27,8 @@ func main() {
 		err = runVerify(args)
 	case "bundle":
 		err = runBundle(args)
+	case "wba":
+		err = runWba(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -55,6 +57,7 @@ SUBCOMMANDS:
     issue     Issue an agent credential (JWT)
     verify    Verify an agent credential
     bundle    Create a trust bundle from discovery and revocation documents
+    wba       Web Bot Auth keys, key directories and request signing
     version   Print the AgentPin Go SDK version
 
 Run 'agentpin <SUBCOMMAND> --help' for subcommand help.`)

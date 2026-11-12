@@ -446,3 +446,42 @@ def verify_credential(
     return verify_credential_offline(
         credential_jwt, discovery, revocation, pin_store, audience, config, chain_resolver=_PreResolved()
     )
+
+
+def verify_credential_with_resolver(
+    credential_jwt: str,
+    resolver: Any,
+    pin_store: KeyPinStore,
+    audience: Optional[str],
+    config: Optional[VerifierConfig] = None,
+) -> VerificationResult:
+    """Verify a credential with documents from ``resolver``.
+
+    ``resolver`` provides ``resolve_discovery(domain)`` and optionally
+    ``resolve_revocation(domain, discovery)`` (returning a revocation
+    document or ``None``); it also resolves delegation attesters. A failing
+    revocation lookup fails closed. Mirrors the Rust
+    ``verify_credential_with_resolver``.
+    """
+    try:
+        _header, payload, _sig = decode_jwt_unverified(credential_jwt)
+    except Exception as e:
+        return _parse_failure(e)
+    try:
+        issuer = normalize_domain(payload.get("iss"))
+    except AgentPinError as e:
+        return _failure(ErrorCode.DISCOVERY_INVALID, f"Invalid issuer domain: {e}")
+    try:
+        discovery = resolver.resolve_discovery(issuer)
+    except Exception as e:
+        return _failure(ErrorCode.DISCOVERY_FETCH_FAILED, f"Failed to resolve discovery document: {e}")
+    revocation = None
+    resolve_revocation = getattr(resolver, "resolve_revocation", None)
+    if callable(resolve_revocation):
+        try:
+            revocation = resolve_revocation(issuer, discovery)
+        except Exception:
+            return _failure(ErrorCode.DISCOVERY_FETCH_FAILED, "Revocation document unreachable (fail-closed)")
+    return verify_credential_offline(
+        credential_jwt, discovery, revocation, pin_store, audience, config, chain_resolver=resolver
+    )

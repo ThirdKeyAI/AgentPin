@@ -1,6 +1,7 @@
+use agentpin::wba;
 use axum::extract::State;
-use axum::http::header;
 use axum::http::StatusCode;
+use axum::http::{header, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
@@ -34,6 +35,45 @@ pub async fn revocations(State(state): State<AppState>) -> Response {
         Some(doc) => json_response(doc, "public, max-age=300"),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// Web Bot Auth key directory, signed per request (Appendix B.1). The
+/// signature covers the request's authority, so only configured hosts are
+/// answered.
+pub async fn wba_directory(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(dir) = state.wba.as_deref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .map(|h| h.trim().to_ascii_lowercase())
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    if !dir.authorities.contains(&host) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let signed = match wba::sign_directory_response(
+        &dir.body,
+        &host,
+        &dir.keys,
+        chrono::Utc::now().timestamp(),
+        wba::MAX_VALIDITY_SECS,
+    ) {
+        Ok(h) => h,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, wba::DIRECTORY_MEDIA_TYPE)
+        .header(header::CACHE_CONTROL, "public, max-age=3600");
+    for (name, value) in signed {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(axum::body::Body::from(dir.body.clone()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 pub async fn health() -> Response {
@@ -78,6 +118,7 @@ mod tests {
             policy_url: None,
             schemapin_endpoint: None,
             a2a_endpoint: None,
+            web_bot_auth: None,
             max_delegation_depth: 2,
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         };
@@ -85,6 +126,7 @@ mod tests {
         AppState {
             discovery: Arc::new(RwLock::new(discovery)),
             revocation: Arc::new(RwLock::new(None)),
+            wba: None,
         }
     }
 
@@ -98,8 +140,78 @@ mod tests {
                 "/.well-known/agent-identity-revocations.json",
                 axum::routing::get(revocations),
             )
+            .route(
+                "/.well-known/http-message-signatures-directory",
+                axum::routing::get(wba_directory),
+            )
             .route("/health", axum::routing::get(health))
             .with_state(state)
+    }
+
+    fn wba_state(key: &ed25519_dalek::SigningKey) -> AppState {
+        let mut state = test_state();
+        state.wba = Some(Arc::new(crate::state::WbaDirectory {
+            keys: vec![key.clone().into()],
+            body: wba::Directory::from_keys([&key.verifying_key().into()])
+                .to_json()
+                .unwrap(),
+            authorities: vec!["test.com".to_string()],
+        }));
+        state
+    }
+
+    async fn get_directory(state: AppState, host: Option<&str>) -> Response {
+        let mut req = Request::builder().uri("/.well-known/http-message-signatures-directory");
+        if let Some(h) = host {
+            req = req.header(header::HOST, h);
+        }
+        app(state)
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_wba_directory_is_signed() {
+        let key = wba::generate_signing_key();
+        let resp = get_directory(wba_state(&key), Some("Test.com")).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            wba::DIRECTORY_MEDIA_TYPE
+        );
+        let headers: Vec<(String, String)> = resp
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap().to_string()))
+            .collect();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let proven = wba::verify_directory_response(
+            &body,
+            &headers,
+            "test.com",
+            chrono::Utc::now().timestamp(),
+            60,
+        )
+        .unwrap();
+        assert_eq!(proven.keys.len(), 1);
+        assert_eq!(
+            proven.keys[0].thumbprint().unwrap(),
+            wba::thumbprint(&key.verifying_key().into())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wba_directory_refuses_foreign_host() {
+        let key = wba::generate_signing_key();
+        let resp = get_directory(wba_state(&key), Some("evil.example")).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let resp = get_directory(wba_state(&key), None).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let resp = get_directory(test_state(), Some("test.com")).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

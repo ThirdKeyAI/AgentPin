@@ -1013,6 +1013,7 @@ mod tests {
             constraints: None,
             delegation_chain: None,
             nonce: None,
+            cnf: None,
         };
         let jwt_str = jwt::encode_jwt(&header, &payload, &sk).unwrap();
 

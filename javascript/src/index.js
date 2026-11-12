@@ -65,6 +65,7 @@ export {
 
 export {
     issueCredential,
+    issueBoundCredential,
     validateCredentialAgainstDiscovery,
 } from './credential.js';
 
@@ -180,6 +181,8 @@ export {
 
 export {
     fetchJsonBounded,
+    fetchBounded,
+    isNonPublic,
     DEFAULT_TIMEOUT_MS,
     DEFAULT_MAX_RESPONSE_BYTES,
 } from './net.js';
@@ -198,4 +201,14 @@ export {
     fetchDnsTxt,
 } from './dns.js';
 
-export const version = '0.3.0';
+// Web Bot Auth (spec §18) and the RFC 9421 layer it is built on, as
+// namespaces: `wba.signRequest`, `httpsig.Component`, ...
+export * as httpsig from './httpsig.js';
+export * as wba from './wba.js';
+export {
+    CachingDirectoryResolver,
+    fetchDirectory,
+    defaultDirectoryFetchOptions,
+} from './resolverWba.js';
+
+export const version = '0.4.0';

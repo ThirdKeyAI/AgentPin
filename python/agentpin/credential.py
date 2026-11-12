@@ -2,10 +2,10 @@
 
 import math
 import uuid
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .capability import Capability, capabilities_subset
-from .jwt import encode_jwt
+from .jwt import encode_jwt, validate_claims
 from .types import AgentPinError, ErrorCode
 
 
@@ -21,6 +21,52 @@ def issue_credential(
     ttl_secs: int,
 ) -> str:
     """Issue a new agent credential JWT."""
+    return _issue(
+        private_key_pem, kid, issuer, agent_id, audience, capabilities, constraints, delegation_chain, ttl_secs, None
+    )
+
+
+def issue_bound_credential(
+    private_key_pem: str,
+    kid: str,
+    issuer: str,
+    agent_id: str,
+    audience: Optional[str],
+    capabilities: List[Capability],
+    constraints: Optional[Dict[str, Any]],
+    delegation_chain: Optional[List[Dict[str, Any]]],
+    ttl_secs: int,
+    wba_jkt: str,
+) -> str:
+    """Issue a credential bound to the agent's Web Bot Auth key: ``wba_jkt``
+    (its JWK thumbprint, see :func:`agentpin.wba.thumbprint`) is carried as
+    ``cnf.jkt`` (spec §18)."""
+    return _issue(
+        private_key_pem,
+        kid,
+        issuer,
+        agent_id,
+        audience,
+        capabilities,
+        constraints,
+        delegation_chain,
+        ttl_secs,
+        {"jkt": wba_jkt},
+    )
+
+
+def _issue(
+    private_key_pem: str,
+    kid: str,
+    issuer: str,
+    agent_id: str,
+    audience: Optional[str],
+    capabilities: List[Capability],
+    constraints: Optional[Dict[str, Any]],
+    delegation_chain: Optional[List[Dict[str, Any]]],
+    ttl_secs: int,
+    cnf: Optional[Dict[str, str]],
+) -> str:
     import time
 
     now = math.floor(time.time())
@@ -31,7 +77,7 @@ def issue_credential(
         "kid": kid,
     }
 
-    payload: dict = {
+    payload: Dict[str, Any] = {
         "iss": issuer,
         "sub": agent_id,
         "iat": now,
@@ -47,6 +93,9 @@ def issue_credential(
         payload["constraints"] = constraints
     if delegation_chain:
         payload["delegation_chain"] = delegation_chain
+    if cnf is not None:
+        payload["cnf"] = cnf
+    validate_claims(payload)
 
     return encode_jwt(header, payload, private_key_pem)
 

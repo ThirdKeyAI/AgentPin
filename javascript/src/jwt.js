@@ -160,6 +160,19 @@ export function validateClaims(payload) {
     if (payload.nonce !== undefined && payload.nonce !== null && typeof payload.nonce !== 'string') {
         throw new MalformedCredentialError('nonce must be a string');
     }
+    if (payload.cnf !== undefined && payload.cnf !== null) {
+        // A base64url SHA-256 JWK thumbprint (spec §18): 43 characters, 32 bytes.
+        const jkt = isPlainObject(payload.cnf) ? payload.cnf.jkt : undefined;
+        let ok = typeof jkt === 'string' && jkt.length === 43;
+        if (ok) {
+            try {
+                ok = base64urlDecode(jkt).length === 32;
+            } catch {
+                ok = false;
+            }
+        }
+        if (!ok) throw new MalformedCredentialError('cnf.jkt must be a base64url SHA-256 JWK thumbprint');
+    }
     if (payload.constraints !== undefined && payload.constraints !== null && !isPlainObject(payload.constraints)) {
         throw new MalformedCredentialError('constraints must be an object');
     }
