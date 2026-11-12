@@ -1,26 +1,15 @@
 # Changelog
 
-## Unreleased — Rust cryptography
-
-- Upgrade to p256 0.14 and require crypto-bigint >= 0.7.6 to address
-  RUSTSEC-2026-0387. Key generation uses the fallible OS-randomness API.
-- Preserve PEM/JWK encodings, key IDs, credential DER signatures, and persisted
-  TOFU pins; add fixed vectors produced by the unmodified 0.3.0 SDK.
-- Rust callers that name the public P-256 key types must also use p256 0.14.
-  This dependency update does not change the protocol on this branch.
-- Require hickory-resolver >= 0.26.1 so downstream DNS-feature builds cannot
-  retain the older release affected by RUSTSEC-2026-0119.
-
 All notable changes to the AgentPin project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-11
 
 Security release addressing the AP-1 through AP-23 review findings in all
-four SDKs (Rust, Go, JavaScript, Python). Specification bumped to 0.4.0; the
-document `agentpin_version` stays `"0.1"`.
+four SDKs (Rust, Go, JavaScript, Python), plus Web Bot Auth support.
+Specification bumped to 0.4.0; the document `agentpin_version` stays `"0.1"`.
 
 ### Added: Web Bot Auth
 
@@ -157,6 +146,32 @@ document `agentpin_version` stays `"0.1"`.
   test suites.
 - Fuzz targets: cargo-fuzz crate in `fuzz/`, Go native fuzz tests,
   fast-check (JS) and hypothesis (Python) properties.
+
+### Rust cryptography
+
+- p256 0.14 and crypto-bigint >= 0.7.6 (RUSTSEC-2026-0387), first shipped in
+  0.3.1. Key generation uses the fallible OS-randomness API.
+- PEM/JWK encodings, key IDs, credential DER signatures and persisted TOFU
+  pins are preserved; fixed vectors produced by the unmodified 0.3.0 SDK
+  guard this.
+- Rust callers that name the public P-256 key types must also use p256 0.14.
+- hickory-resolver >= 0.26.1, so downstream DNS-feature builds cannot retain
+  the older release affected by RUSTSEC-2026-0119.
+
+## [0.3.1] - 2026-11-04
+
+Rust-only cryptography security backport, published to crates.io only. The
+JavaScript, Python and Go SDKs stayed at 0.3.0.
+
+- Upgrade to p256 0.14 and require crypto-bigint >= 0.7.6 to address
+  RUSTSEC-2026-0387. Key generation uses fallible OS randomness; rand 0.8 is
+  removed from the default dependency graph.
+- Preserve the 0.3.0 wire protocol, including DER credential/delegation
+  signatures, PEM/JWK encodings, key IDs, and persisted TOFU pins. Regression
+  vectors were generated with the unmodified 0.3.0 SDK.
+- Rust callers that name public P-256 key types must also use p256 0.14.
+- Update optional DNS support to hickory-resolver >= 0.26.1 to address
+  RUSTSEC-2026-0119. Rust 1.89 is now required.
 
 ## [0.3.0] - 2026-05-14
 

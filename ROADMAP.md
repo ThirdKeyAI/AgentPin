@@ -1,7 +1,7 @@
 # AgentPin Roadmap
 
-![Version](https://img.shields.io/badge/current-v0.3.0-brightgreen)
-![Next](https://img.shields.io/badge/next-v0.4.0-blue)
+![Version](https://img.shields.io/badge/current-v0.4.0-brightgreen)
+![Next](https://img.shields.io/badge/next-v0.5.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **Domain-anchored cryptographic identity for AI agents — the identity layer of the ThirdKey trust stack.**
@@ -14,8 +14,9 @@
 |---------|--------|----------|--------|
 | **v0.1.0** | 2026-01 | Core identity, verification, delegation | Shipped |
 | **v0.2.0** | 2026-02 | Trust bundles, alternative discovery, directory listing | Shipped |
-| **v0.3.0** | 2026-05-14 | A2A AgentCard extension types + resolvers + AllowedDomains + DNS TXT (Rust, JavaScript, Python, Go) | **Shipped** |
-| **v0.4.0** | Q3 2026 | Mutual auth as A2A handshake, hardware-backed keys | Planning |
+| **v0.3.0** | 2026-05-14 | A2A AgentCard extension types + resolvers + AllowedDomains + DNS TXT (Rust, JavaScript, Python, Go) | Shipped |
+| **v0.4.0** | 2026-11-11 | Security hardening (AP-1 through AP-23), Web Bot Auth (Rust, JavaScript, Python, Go) | **Shipped** |
+| **v0.5.0** | TBD | Mutual auth as A2A handshake, hardware-backed keys | Planning |
 | **v1.0.0** | Q4 2026 | Stable API, full specification compliance | Planning |
 
 ---
@@ -60,7 +61,26 @@ See [CHANGELOG.md](CHANGELOG.md#030---2026-05-14) for full release notes.
 
 ---
 
-## v0.4.0 — Mutual Auth as A2A Handshake (Q3 2026)
+## v0.4.0 — Shipped (2026-11-11)
+
+A security release across all four SDKs, plus Web Bot Auth.
+
+- **Security hardening** — the AP-1 through AP-23 review findings:
+  domain-separated signature inputs for challenge responses, delegation
+  attestations and AgentCards, delegation chains verified by default, signed
+  revocation documents and trust bundles, and hardened fetches. Several of
+  these are breaking wire changes; see the changelog.
+- **Web Bot Auth** — RFC 9421 HTTP message signatures with Ed25519 or
+  RSA-PSS, signed key directories, replay protection, and a `cnf.jkt` binding
+  from a Web Bot Auth key to an AgentPin credential. See
+  [docs/web-bot-auth.md](docs/web-bot-auth.md).
+- **Rust cryptography** — p256 0.14; Rust 1.89 or later is required.
+
+See [CHANGELOG.md](CHANGELOG.md#040---2026-11-11) for full release notes.
+
+---
+
+## v0.5.0 — Mutual Auth as A2A Handshake
 
 Adapts AgentPin's challenge-response mutual authentication as an A2A handshake protocol, enabling agents to cryptographically verify each other's identity before exchanging tasks.
 
@@ -115,4 +135,4 @@ We welcome input on roadmap priorities:
 
 ---
 
-*Last updated: 2026-05-14 (v0.3.0 shipped — A2A AgentCard types, AllowedDomains, LocalAgentCardStore, A2aAgentCardResolver, DNS TXT cross-verification across Rust, JavaScript, Python, and Go)*
+*Last updated: 2026-11-11 (v0.4.0 shipped — security hardening and Web Bot Auth across Rust, JavaScript, Python, and Go)*
