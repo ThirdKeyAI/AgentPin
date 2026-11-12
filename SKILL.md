@@ -1,9 +1,9 @@
 ---
 name: agentpin
 title: AgentPin
-description: Domain-anchored cryptographic identity protocol for AI agents — ES256 JWT credentials, 12-step verification, TOFU key pinning, revocation, delegation chains, mutual authentication, and (v0.3.0, four-language parity) A2A AgentCard extension types + signed AgentCard builder + LocalAgentCardStore + A2aAgentCardResolver + AllowedDomains type for cross-protocol use with SchemaPin v1.4, plus DNS TXT cross-verification at _agentpin.{domain} for second-channel trust independent of HTTPS hosting
-version: 0.3.0
-stable_version: 0.3.0
+description: Domain-anchored cryptographic identity protocol for AI agents — ES256 JWT credentials, 12-step verification, TOFU key pinning, revocation, delegation chains, mutual authentication, and (v0.3.0, four-language parity) A2A AgentCard extension types + signed AgentCard builder + LocalAgentCardStore + A2aAgentCardResolver + AllowedDomains type for cross-protocol use with SchemaPin v1.4, plus DNS TXT cross-verification at _agentpin.{domain} for second-channel trust independent of HTTPS hosting, and (v0.4.0, all four SDKs) Web Bot Auth: RFC 9421 HTTP message signatures with Ed25519 or RSA-PSS, signed key directories, and a cnf.jkt binding from a WBA key to an AgentPin credential
+version: 0.4.0
+stable_version: 0.4.0
 ---
 
 # AgentPin Development Skills Guide
@@ -225,7 +225,7 @@ Serves:
 | `mutual` | Challenge-response mutual authentication (128-bit nonces) |
 | `jwk` | JWK handling and thumbprint computation |
 | `resolver` | Pluggable discovery resolution |
-| `httpsig` | RFC 9421 HTTP message signatures (Ed25519) |
+| `httpsig` | RFC 9421 HTTP message signatures (Ed25519, RSA-PSS SHA-512) |
 | `wba` | Web Bot Auth: request signing/verification, key directories, AgentPin binding |
 | `resolver_wba` | Web Bot Auth directory fetching and caching (`fetch`) |
 
@@ -294,7 +294,7 @@ Challenge-response with 128-bit nonces (22 base64url characters), single-use
 by default. Responses sign a domain-separated structure bound to the nonce,
 timestamp, responder `kid` and the verifier's credential, never raw bytes.
 
-### Security Defaults (0.4.0, unreleased)
+### Security Defaults (0.4.0)
 
 - Every non-JWT signature uses a domain-separated input
   (`context || 0x00 || length-prefixed fields`).
@@ -304,6 +304,45 @@ timestamp, responder `kid` and the verifier's credential, never raw bytes.
 - Fetches: HTTPS only, no redirects, 10 s timeout, 1 MiB cap.
 - Revocation falls back to the default `.well-known` URL; signed revocation
   documents and trust bundles are supported.
+
+---
+
+## Web Bot Auth (v0.4.0)
+
+[Web Bot Auth](https://github.com/ThirdKeyAI/agentpin/blob/main/docs/web-bot-auth.md)
+identifies an automated HTTP client by an RFC 9421 signature on each request
+plus an HTTPS key directory. It uses its own Ed25519 (recommended) or RSA
+(`rsa-pss-sha512`, 2048 to 4096 bits) keys; ES256 credential keys are not
+used for it.
+
+```bash
+agentpin wba keygen --name crawler-2026-11 --output-dir ./keys   # prints the keyid
+agentpin-server --discovery agent-identity.json --wba-key keys/crawler-2026-11.ed25519.pem
+agentpin wba sign --key keys/crawler-2026-11.ed25519.pem \
+  --signature-agent https://example.com/.well-known/http-message-signatures-directory \
+  --url https://shop.example/products
+```
+
+| Operation | Rust | JavaScript (`agentpin/wba`) | Python | Go (`pkg/wba`) |
+|-----------|------|------------|--------|-----|
+| Load a key | `wba::load_signing_key()` | `loadSigningKey()` | `load_signing_key()` | `wba.LoadSigningKey()` |
+| Sign | `wba::sign_request()` | `signRequest()` | `sign_request()` | `wba.SignRequest()` |
+| Verify | `wba::verify_request()` | `verifyRequest()` | `verify_request()` | `wba.VerifyRequest()` |
+| Fetch directories | `resolver_wba::CachingDirectoryResolver` | `CachingDirectoryResolver` | `CachingDirectoryResolver` | `wba.NewCachingDirectoryResolver()` |
+| Bound credential | `credential::issue_bound_credential()` | `issueBoundCredential()` | `issue_bound_credential()` | `credential.IssueBoundCredential()` |
+| Verify binding | `wba::verify_bound_request()` | `verifyBoundRequest()` | `verify_bound_request()` | `wba.VerifyBoundRequest()` |
+
+- Verification has three outcomes: verified, invalid, and unverified (no
+  signature, or the directory could not be fetched). Treat unverified as its
+  own signal, not as a failure.
+- Default covered components: `@authority`, the `Signature-Agent` member,
+  `@method`, `@path`; 5 minute validity and a random nonce. Set a nonce store
+  on the verifier for replay protection.
+- Verifiers built on earlier drafts need the legacy bare-string
+  `Signature-Agent` (`legacy_signature_agent` / `--legacy-signature-agent`).
+- Binding: put the WBA `keyid` in the credential's `cnf.jkt`
+  (`agentpin issue --wba-jkt <keyid>`), send the credential as
+  `Authorization: AgentPin <jwt>`, and cover `authorization` in the signature.
 
 ---
 

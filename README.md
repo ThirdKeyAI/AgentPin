@@ -49,7 +49,7 @@ Requires Rust 1.89 or later.
 
 ```toml
 [dependencies]
-agentpin = { version = "0.3", features = ["fetch"] }
+agentpin = { version = "0.4", features = ["fetch"] }
 ```
 
 ### JavaScript
