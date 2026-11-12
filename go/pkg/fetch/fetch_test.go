@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -117,6 +118,31 @@ func TestConnectionErrorsAreGeneric(t *testing.T) {
 	s.Close()
 	_, _, err := JSONBounded(nil, url, 0)
 	if err == nil || err.Error() != "failed to fetch "+url {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestIsNonPublic(t *testing.T) {
+	for _, s := range []string{
+		"127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "0.1.2.3",
+		"100.64.0.1", "192.0.0.8", "192.0.2.1", "198.18.0.1", "198.51.100.1", "203.0.113.1",
+		"224.0.0.1", "240.0.0.1", "255.255.255.255", "::1", "::", "fc00::1", "fe80::1",
+		"2001:db8::1", "64:ff9b::1.2.3.4", "::ffff:127.0.0.1", "ff02::1",
+	} {
+		if !IsNonPublic(net.ParseIP(s)) {
+			t.Errorf("%s reported public", s)
+		}
+	}
+	for _, s := range []string{"8.8.8.8", "1.1.1.1", "2606:4700::1111", "::ffff:8.8.8.8"} {
+		if IsNonPublic(net.ParseIP(s)) {
+			t.Errorf("%s reported non-public", s)
+		}
+	}
+}
+
+func TestBoundedRefusesLoopbackWhenPublicOnly(t *testing.T) {
+	if _, err := Bounded("http://127.0.0.1:9/", BoundedOptions{PublicOnly: true}); err == nil ||
+		!strings.Contains(err.Error(), "non-public") {
 		t.Fatalf("got %v", err)
 	}
 }

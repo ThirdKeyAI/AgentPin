@@ -25,6 +25,7 @@ pub fn build_discovery_document(
         policy_url: None,
         schemapin_endpoint: None,
         a2a_endpoint: None,
+        web_bot_auth: None,
         max_delegation_depth,
         updated_at: updated_at.to_string(),
     }
@@ -68,6 +69,20 @@ pub fn validate_discovery_document(
         return Err(Error::Discovery(
             "Discovery document must have at least one public key".to_string(),
         ));
+    }
+    // Web Bot Auth directories the entity vouches for (spec §18): any
+    // https URL, since key directories may be hosted by a provider.
+    if let Some(ref wba) = doc.web_bot_auth {
+        if wba.signature_agents.is_empty() || wba.signature_agents.len() > 16 {
+            return Err(Error::Discovery(
+                "web_bot_auth.signature_agents must list 1-16 URLs".to_string(),
+            ));
+        }
+        for url in &wba.signature_agents {
+            crate::wba::normalize_signature_agent(url).map_err(|e| {
+                Error::Discovery(format!("Invalid web_bot_auth signature agent: {}", e))
+            })?;
+        }
     }
     if doc.max_delegation_depth > 3 {
         return Err(Error::Discovery(

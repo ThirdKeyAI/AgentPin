@@ -46,6 +46,10 @@ pub enum Error {
     #[error("Transport error: {0}")]
     Transport(String),
 
+    /// RFC 9421 HTTP message signature parsing or construction failed.
+    #[error("HTTP signature error: {0}")]
+    HttpSignature(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

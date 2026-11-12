@@ -22,6 +22,37 @@ Security release addressing the AP-1 through AP-23 review findings in all
 four SDKs (Rust, Go, JavaScript, Python). Specification bumped to 0.4.0; the
 document `agentpin_version` stays `"0.1"`.
 
+### Added: Web Bot Auth
+
+- RFC 9421 HTTP Message Signatures (`agentpin::httpsig`): signature base
+  construction, `Signature-Input`/`Signature` parsing, Ed25519 (strict
+  verification) and RSASSA-PSS SHA-512 (`rsa-pss-sha512`; signing keys of
+  2048 to 4096 bits, verification up to 8192) signing and verification,
+  `@query-param`, `Content-Digest`.
+- Web Bot Auth profile (`agentpin::wba`), following
+  draft-ietf-webbotauth-httpsig-protocol-01: Ed25519 or RSA keys with JWK
+  thumbprint `keyid` (RFC 8037 / RFC 7638), request signing with a Dictionary `Signature-Agent`
+  (legacy String form opt-in), verification with verified / invalid /
+  unverified outcomes and key lookup keyed on (URL, keyid), and signed key
+  directory responses. Optional replay protection through
+  `VerifyOptions::nonce_store`, checked only after a signature verifies.
+  Reproduces the draft's Ed25519 test vectors and verifies its RSA-PSS
+  vectors; the shared vectors live in `testdata/web_bot_auth/vectors.json`.
+- `agentpin::resolver_wba` (`fetch` feature): directory fetching with SSRF
+  limits (https only, no redirects, non-public addresses refused, size, key
+  count and time caps) and a cache that a failed refetch never evicts.
+  `net::fetch_bounded` and `net::is_non_public` back it.
+- AgentPin binding (spec §18): optional `cnf.jkt` credential claim
+  (`credential::issue_bound_credential`), optional `web_bot_auth` discovery
+  field, and `wba::verify_bound_request` / `wba::check_binding`.
+- `agentpin-server --wba-key` serves a signed
+  `/.well-known/http-message-signatures-directory`, only for its own hosts.
+  RSA keys are accepted as well as Ed25519.
+- CLI: `agentpin wba keygen | directory | sign` (with `--query-param`) and
+  `agentpin issue --wba-jkt`.
+- The ES256 credential profile is unchanged. The new fields are optional,
+  so documents and credentials without them verify as before.
+
 ### Breaking wire changes
 
 - **Challenge responses, delegation attestations and AgentCards are signed
@@ -61,7 +92,7 @@ document `agentpin_version` stays `"0.1"`.
   (`key_pinning.status: "rotated"`).
 - Server: HSTS is opt-in (`--hsts`).
 - Go module now requires Go 1.26 (floor of the patched `golang.org/x/net`),
-  with Go 1.26.9 selected for its standard-library security fixes.
+  with Go 1.26.11 selected for its standard-library security fixes.
 
 ### Fixed
 

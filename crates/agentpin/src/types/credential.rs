@@ -29,6 +29,18 @@ pub struct JwtPayload {
     pub delegation_chain: Option<Vec<DelegationAttestation>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
+    /// Optional v0.4.0: binds the credential to a Web Bot Auth signing key
+    /// (spec §18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cnf: Option<Confirmation>,
+}
+
+/// Key confirmation claim (RFC 7800 `cnf`). `jkt` is the base64url
+/// SHA-256 JWK thumbprint of the agent's Ed25519 Web Bot Auth key, which is
+/// also the `keyid` its HTTP message signatures carry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Confirmation {
+    pub jkt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,6 +100,7 @@ mod tests {
                 exp: None,
             }]),
             nonce: None,
+            cnf: None,
         };
         let json = serde_json::to_string_pretty(&payload).unwrap();
         let p2: JwtPayload = serde_json::from_str(&json).unwrap();

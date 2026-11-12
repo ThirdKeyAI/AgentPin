@@ -36,6 +36,7 @@ from .constraint import (
     parse_rate_limit,
 )
 from .credential import (
+    issue_bound_credential,
     issue_credential,
     validate_credential_against_discovery,
 )
@@ -81,6 +82,17 @@ from .domain import (
     normalize_domain,
     validate_https_url_for_domain,
 )
+from .httpsig import (
+    Component,
+    HttpRequest,
+    HttpResponse,
+    ParsedSignature,
+    SignatureFields,
+    SignatureParams,
+    content_digest,
+    content_digest_matches,
+    parse_signatures,
+)
 from .jwk import (
     jwk_thumbprint,
     jwk_to_pem,
@@ -108,7 +120,10 @@ from .mutual import (
 from .net import (
     DEFAULT_MAX_RESPONSE_BYTES,
     DEFAULT_TIMEOUT_SECS,
+    FetchedResponse,
+    fetch_bounded,
     fetch_json_bounded,
+    is_non_public,
 )
 from .nonce import (
     InMemoryNonceStore,
@@ -128,6 +143,11 @@ from .resolver_local import (
     card_endpoint_host,
     card_key_published_in,
     derive_discovery_from_card,
+)
+from .resolver_wba import (
+    CachingDirectoryResolver,
+    DirectoryFetchOptions,
+    fetch_directory,
 )
 from .revocation import (
     add_revoked_agent,
@@ -178,6 +198,50 @@ from .verification import (
     check_key_usable,
     verify_credential,
     verify_credential_offline,
+    verify_credential_with_resolver,
+)
+from .wba import (
+    DIRECTORY_MEDIA_TYPE,
+    DIRECTORY_PATH,
+    DIRECTORY_TAG,
+    MAX_DIRECTORY_KEYS,
+    MAX_VALIDITY_SECS,
+    BindingFailure,
+    BoundAgent,
+    Directory,
+    DirectoryKeyStore,
+    KeyLookup,
+    SignedHeaders,
+    SignOptions,
+    VerifiedAgent,
+    VerifyOptions,
+    WbaOutcome,
+    check_binding,
+    find_key,
+    generate_signing_key,
+    load_signing_key,
+    normalize_signature_agent,
+    request_credential,
+    sign_directory_response,
+    sign_request,
+    signing_key_to_pem,
+    thumbprint,
+    verify_bound_request,
+    verify_directory_response,
+    verify_request,
+    well_known_directory,
+)
+from .wba import (
+    TAG as WBA_TAG,
+)
+from .wba import (
+    Jwk as WbaJwk,
+)
+from .wba import (
+    PrivateKey as WbaPrivateKey,
+)
+from .wba import (
+    PublicKey as WbaPublicKey,
 )
 
 __version__ = "0.3.0"
@@ -236,6 +300,7 @@ __all__ = [
     "merge_constraints",
     # Credential
     "issue_credential",
+    "issue_bound_credential",
     "validate_credential_against_discovery",
     # Discovery
     "build_discovery_document",
@@ -283,6 +348,9 @@ __all__ = [
     "check_revocation_freshness",
     # Network
     "fetch_json_bounded",
+    "fetch_bounded",
+    "FetchedResponse",
+    "is_non_public",
     "DEFAULT_TIMEOUT_SECS",
     "DEFAULT_MAX_RESPONSE_BYTES",
     # Pinning
@@ -325,6 +393,7 @@ __all__ = [
     # Verification
     "verify_credential_offline",
     "verify_credential",
+    "verify_credential_with_resolver",
     "check_key_usable",
     "DEFAULT_CREDENTIAL_TTL_MAX",
     # Bundle
@@ -338,4 +407,51 @@ __all__ = [
     "sign_trust_bundle",
     "verify_trust_bundle",
     "check_bundle_expiry",
+    # HTTP Message Signatures (RFC 9421)
+    "Component",
+    "HttpRequest",
+    "HttpResponse",
+    "ParsedSignature",
+    "SignatureFields",
+    "SignatureParams",
+    "parse_signatures",
+    "content_digest",
+    "content_digest_matches",
+    # Web Bot Auth (v0.4.0)
+    "WBA_TAG",
+    "DIRECTORY_TAG",
+    "DIRECTORY_PATH",
+    "DIRECTORY_MEDIA_TYPE",
+    "MAX_DIRECTORY_KEYS",
+    "MAX_VALIDITY_SECS",
+    "WbaPrivateKey",
+    "WbaPublicKey",
+    "WbaJwk",
+    "Directory",
+    "DirectoryKeyStore",
+    "KeyLookup",
+    "SignOptions",
+    "SignedHeaders",
+    "VerifyOptions",
+    "VerifiedAgent",
+    "WbaOutcome",
+    "BoundAgent",
+    "BindingFailure",
+    "generate_signing_key",
+    "load_signing_key",
+    "signing_key_to_pem",
+    "thumbprint",
+    "find_key",
+    "normalize_signature_agent",
+    "well_known_directory",
+    "sign_request",
+    "verify_request",
+    "sign_directory_response",
+    "verify_directory_response",
+    "request_credential",
+    "check_binding",
+    "verify_bound_request",
+    "DirectoryFetchOptions",
+    "CachingDirectoryResolver",
+    "fetch_directory",
 ]

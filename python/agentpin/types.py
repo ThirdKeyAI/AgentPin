@@ -72,6 +72,10 @@ class ErrorCode(str, Enum):
     ALGORITHM_REJECTED = "ALGORITHM_REJECTED"
     KEY_PIN_MISMATCH = "KEY_PIN_MISMATCH"
     MALFORMED_CREDENTIAL = "MALFORMED_CREDENTIAL"
+    #: RFC 9421 HTTP message signature parsing or construction failed.
+    HTTP_SIGNATURE = "HTTP_SIGNATURE"
+    #: A key that is malformed or of an unsupported type.
+    INVALID_KEY_FORMAT = "INVALID_KEY_FORMAT"
 
 
 class AgentPinError(Exception):
@@ -120,6 +124,8 @@ class JwtPayload:
     constraints: Optional[Constraints] = None
     delegation_chain: Optional[list] = None
     nonce: Optional[str] = None
+    #: Optional v0.4.0 key confirmation binding a Web Bot Auth key: ``{"jkt": ...}`` (spec §18).
+    cnf: Optional[dict] = None
 
 
 @dataclass
@@ -170,6 +176,8 @@ class DiscoveryDocument:
     revocation_endpoint: Optional[str] = None
     policy_url: Optional[str] = None
     schemapin_endpoint: Optional[str] = None
+    #: Optional v0.4.0 Web Bot Auth directories: ``{"signature_agents": [...]}`` (spec §18).
+    web_bot_auth: Optional[dict] = None
 
 
 @dataclass

@@ -58,7 +58,7 @@ pub fn validate_kid(kid: &str) -> anyhow::Result<()> {
 /// Create `path` with `mode`, refusing to overwrite unless `force`. The mode
 /// is applied at creation (so a 0600 private key is never world-readable
 /// even for an instant) and re-applied after an overwrite.
-fn write_new_file(path: &Path, contents: &[u8], mode: u32, force: bool) -> anyhow::Result<()> {
+pub fn write_new_file(path: &Path, contents: &[u8], mode: u32, force: bool) -> anyhow::Result<()> {
     let mut opts = fs::OpenOptions::new();
     opts.write(true);
     if force {

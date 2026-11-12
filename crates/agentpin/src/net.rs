@@ -129,6 +129,152 @@ pub async fn fetch_json_bounded(url: &str, opts: &FetchOptions) -> Result<Option
     Ok(Some(body))
 }
 
+/// A response read by [`fetch_bounded`].
+#[derive(Debug, Clone)]
+pub struct FetchedResponse {
+    pub status: u16,
+    /// Header fields, lowercase names.
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+/// `true` for addresses a server-side fetch driven by a client-supplied
+/// URL must never reach: loopback, private, link-local, CGNAT, multicast,
+/// documentation, unspecified and reserved ranges.
+pub fn is_non_public(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || o[0] == 0
+                || (o[0] == 100 && (o[1] & 0xc0) == 64)
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+                || (o[0] == 198 && (o[1] & 0xfe) == 18)
+                || o[0] >= 240
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_non_public(IpAddr::V4(v4));
+            }
+            let s = v6.segments();
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (s[0] & 0xfe00) == 0xfc00
+                || (s[0] & 0xffc0) == 0xfe80
+                || (s[0] == 0x2001 && s[1] == 0x0db8)
+                || (s[0] == 0x0064 && s[1] == 0xff9b)
+        }
+    }
+}
+
+/// DNS resolver that drops non-public addresses (SSRF guard).
+struct PublicOnlyResolver;
+
+impl reqwest::dns::Resolve for PublicOnlyResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((name.as_str(), 0))
+                .await?
+                .filter(|a| !is_non_public(a.ip()))
+                .collect();
+            if addrs.is_empty() {
+                return Err("host resolves only to non-public addresses".into());
+            }
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// GET `url` with the same limits as [`fetch_json_bounded`] (no
+/// redirects, timeout, byte cap) and return status, headers and body for
+/// any non-redirect status. With `public_only`, hosts that are or resolve
+/// to non-public addresses are refused.
+pub async fn fetch_bounded(
+    url: &str,
+    accept: &str,
+    opts: &FetchOptions,
+    public_only: bool,
+) -> Result<FetchedResponse, Error> {
+    let parsed =
+        url::Url::parse(url).map_err(|_| Error::Transport(format!("Invalid URL {}", url)))?;
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(opts.timeout);
+    if public_only {
+        let literal = match parsed.host() {
+            Some(url::Host::Ipv4(ip)) => Some(std::net::IpAddr::V4(ip)),
+            Some(url::Host::Ipv6(ip)) => Some(std::net::IpAddr::V6(ip)),
+            _ => None,
+        };
+        if literal.is_some_and(is_non_public) {
+            return Err(Error::Transport(format!(
+                "Refusing to fetch non-public address {}",
+                url
+            )));
+        }
+        builder = builder.dns_resolver(std::sync::Arc::new(PublicOnlyResolver));
+    }
+    let client = builder
+        .build()
+        .map_err(|_| Error::Transport("HTTP client initialization failed".to_string()))?;
+    let mut resp = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, accept)
+        .send()
+        .await
+        .map_err(|_| Error::Transport(format!("Failed to fetch {}", url)))?;
+
+    let status = resp.status();
+    if status.is_redirection() {
+        return Err(Error::Transport(format!(
+            "Redirect rejected fetching {} (status {})",
+            url,
+            status.as_u16()
+        )));
+    }
+    if resp
+        .content_length()
+        .is_some_and(|l| l > opts.max_bytes as u64)
+    {
+        return Err(Error::Transport(format!(
+            "Response from {} exceeds {} bytes",
+            url, opts.max_bytes
+        )));
+    }
+    let headers = resp
+        .headers()
+        .iter()
+        .filter_map(|(k, v)| Some((k.as_str().to_string(), v.to_str().ok()?.to_string())))
+        .collect();
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|_| Error::Transport(format!("Failed to read response from {}", url)))?
+    {
+        if body.len() + chunk.len() > opts.max_bytes {
+            return Err(Error::Transport(format!(
+                "Response from {} exceeds {} bytes",
+                url, opts.max_bytes
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(FetchedResponse {
+        status: status.as_u16(),
+        headers,
+        body,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +415,51 @@ mod tests {
         let start = std::time::Instant::now();
         assert!(fetch_json_bounded(&url, &opts).await.is_err());
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn classifies_non_public_addresses() {
+        for ip in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "224.0.0.1",
+            "240.0.0.1",
+            "198.18.0.1",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+            "2001:db8::1",
+        ] {
+            assert!(is_non_public(ip.parse().unwrap()), "{}", ip);
+        }
+        for ip in ["93.184.216.34", "1.1.1.1", "2606:4700:4700::1111"] {
+            assert!(!is_non_public(ip.parse().unwrap()), "{}", ip);
+        }
+    }
+
+    #[tokio::test]
+    async fn public_only_refuses_loopback() {
+        let url = serve_once(response(
+            "200 OK",
+            &[("Content-Type", "application/json")],
+            b"{}",
+        ));
+        let err = fetch_bounded(&url, "application/json", &FetchOptions::default(), true)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("non-public"), "{}", err);
+        let ok = fetch_bounded(&url, "application/json", &FetchOptions::default(), false)
+            .await
+            .unwrap();
+        assert_eq!(ok.status, 200);
+        assert_eq!(ok.body, b"{}");
     }
 
     #[tokio::test]

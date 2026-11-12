@@ -140,6 +140,18 @@ def validate_claims(payload: object) -> None:
         raise MalformedCredentialError("nonce must be a string")
     if payload.get("constraints") is not None and not isinstance(payload.get("constraints"), dict):
         raise MalformedCredentialError("constraints must be an object")
+    cnf = payload.get("cnf")
+    if cnf is not None:
+        # A base64url SHA-256 JWK thumbprint: 43 characters, 32 bytes (spec §18).
+        jkt = cnf.get("jkt") if isinstance(cnf, dict) else None
+        ok = False
+        if isinstance(jkt, str) and len(jkt) == 43:
+            try:
+                ok = len(base64url_decode(jkt)) == 32
+            except ValueError:
+                ok = False
+        if not ok:
+            raise MalformedCredentialError("cnf.jkt must be a base64url SHA-256 JWK thumbprint")
     chain = payload.get("delegation_chain")
     if chain is not None:
         if not isinstance(chain, list):

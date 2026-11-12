@@ -3,7 +3,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { encodeJwt } from './jwt.js';
+import { encodeJwt, validateClaims } from './jwt.js';
 import { Capability, capabilitiesSubset } from './capability.js';
 import { AgentPinError, ErrorCode } from './types.js';
 
@@ -31,6 +31,43 @@ export function issueCredential(
     delegationChain,
     ttlSecs
 ) {
+    return issue(privateKeyPem, kid, issuer, agentId, audience, capabilities, constraints, delegationChain, ttlSecs, null);
+}
+
+/**
+ * Issue a credential bound to the agent's Web Bot Auth key (spec §18):
+ * `wbaJkt`, the key's JWK thumbprint (see `wba.thumbprint`), is carried as
+ * `cnf.jkt`.
+ * @param {string} privateKeyPem - PEM-encoded ECDSA P-256 private key
+ * @param {string} kid
+ * @param {string} issuer
+ * @param {string} agentId
+ * @param {string|null} audience
+ * @param {Capability[]} capabilities
+ * @param {object|null} constraints
+ * @param {object[]|null} delegationChain
+ * @param {number} ttlSecs
+ * @param {string} wbaJkt - base64url SHA-256 JWK thumbprint of the WBA key
+ * @returns {string} Compact JWT string
+ * @throws {MalformedCredentialError} if `wbaJkt` is not a thumbprint
+ */
+export function issueBoundCredential(
+    privateKeyPem,
+    kid,
+    issuer,
+    agentId,
+    audience,
+    capabilities,
+    constraints,
+    delegationChain,
+    ttlSecs,
+    wbaJkt
+) {
+    return issue(privateKeyPem, kid, issuer, agentId, audience, capabilities, constraints, delegationChain, ttlSecs,
+        { jkt: wbaJkt });
+}
+
+function issue(privateKeyPem, kid, issuer, agentId, audience, capabilities, constraints, delegationChain, ttlSecs, cnf) {
     const now = Math.floor(Date.now() / 1000);
 
     const header = {
@@ -52,6 +89,8 @@ export function issueCredential(
     if (audience) payload.aud = audience;
     if (constraints) payload.constraints = constraints;
     if (delegationChain) payload.delegation_chain = delegationChain;
+    if (cnf) payload.cnf = cnf;
+    validateClaims(payload);
 
     return encodeJwt(header, payload, privateKeyPem);
 }

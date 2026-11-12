@@ -210,6 +210,7 @@ mod tests {
             policy_url: None,
             schemapin_endpoint: None,
             a2a_endpoint: None,
+            web_bot_auth: None,
             max_delegation_depth: 0,
             updated_at: "2026-05-01T00:00:00Z".to_string(),
         }

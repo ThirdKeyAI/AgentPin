@@ -2,7 +2,7 @@ use std::fs;
 
 use clap::Args;
 
-use agentpin::credential::issue_credential;
+use agentpin::credential::{issue_bound_credential, issue_credential};
 use agentpin::crypto;
 use agentpin::types::capability::Capability;
 use agentpin::types::constraint::Constraints;
@@ -49,6 +49,11 @@ pub struct IssueArgs {
     /// Path to a JSON file with constraint overrides
     #[arg(long, conflicts_with = "constraints")]
     pub constraints_file: Option<String>,
+
+    /// Bind the credential to a Web Bot Auth key: its keyid (JWK
+    /// thumbprint, as printed by `agentpin wba keygen`), carried as cnf.jkt
+    #[arg(long)]
+    pub wba_jkt: Option<String>,
 }
 
 pub fn run(args: IssueArgs) -> anyhow::Result<()> {
@@ -78,17 +83,31 @@ pub fn run(args: IssueArgs) -> anyhow::Result<()> {
         None => None,
     };
 
-    let jwt = issue_credential(
-        &signing_key,
-        &args.kid,
-        &args.issuer,
-        &args.agent_id,
-        args.audience.as_deref(),
-        capabilities,
-        constraints,
-        delegation_chain,
-        args.ttl,
-    )?;
+    let jwt = match &args.wba_jkt {
+        Some(jkt) => issue_bound_credential(
+            &signing_key,
+            &args.kid,
+            &args.issuer,
+            &args.agent_id,
+            args.audience.as_deref(),
+            capabilities,
+            constraints,
+            delegation_chain,
+            args.ttl,
+            jkt,
+        )?,
+        None => issue_credential(
+            &signing_key,
+            &args.kid,
+            &args.issuer,
+            &args.agent_id,
+            args.audience.as_deref(),
+            capabilities,
+            constraints,
+            delegation_chain,
+            args.ttl,
+        )?,
+    };
 
     println!("{}", jwt);
     Ok(())

@@ -6,6 +6,7 @@ import { AgentPinError, ErrorCode } from './types.js';
 import { normalizeDomain, validateHttpsUrlForDomain } from './domain.js';
 import { fetchJsonBounded } from './net.js';
 import { domainPatternMatches } from './constraint.js';
+import { normalizeSignatureAgent } from './wba.js';
 
 /**
  * Build a new discovery document.
@@ -17,6 +18,7 @@ import { domainPatternMatches } from './constraint.js';
  * @param {string} updatedAt - ISO 8601 timestamp
  * @param {object} [opts]
  * @param {string} [opts.a2aEndpoint] - Optional A2A AgentCard endpoint URL (v0.3.0)
+ * @param {string[]} [opts.signatureAgents] - Web Bot Auth key directories this entity vouches for (spec §18)
  * @returns {object} Discovery document
  */
 export function buildDiscoveryDocument(entity, entityType, publicKeys, agents, maxDelegationDepth, updatedAt, opts = {}) {
@@ -32,6 +34,9 @@ export function buildDiscoveryDocument(entity, entityType, publicKeys, agents, m
     };
     if (opts.a2aEndpoint) {
         doc.a2a_endpoint = opts.a2aEndpoint;
+    }
+    if (opts.signatureAgents) {
+        doc.web_bot_auth = { signature_agents: [...opts.signatureAgents] };
     }
     return doc;
 }
@@ -87,6 +92,25 @@ export function validateDiscoveryDocument(doc, expectedEntity) {
             ErrorCode.DISCOVERY_INVALID,
             'Discovery document must have at least one public key'
         );
+    }
+    // Web Bot Auth directories the entity vouches for (spec §18): any https
+    // URL, since key directories may be hosted by a provider.
+    if (doc.web_bot_auth !== undefined && doc.web_bot_auth !== null) {
+        const agents = doc.web_bot_auth.signature_agents;
+        if (!Array.isArray(agents) || agents.length === 0 || agents.length > 16) {
+            throw new AgentPinError(
+                ErrorCode.DISCOVERY_INVALID,
+                'web_bot_auth.signature_agents must list 1-16 URLs'
+            );
+        }
+        for (const url of agents) {
+            try {
+                if (typeof url !== 'string') throw new Error('not a string');
+                normalizeSignatureAgent(url);
+            } catch (e) {
+                throw new AgentPinError(ErrorCode.DISCOVERY_INVALID, `Invalid web_bot_auth signature agent: ${e.message}`);
+            }
+        }
     }
     if (doc.max_delegation_depth > 3) {
         throw new AgentPinError(
