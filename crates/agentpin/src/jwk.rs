@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 use p256::{
     ecdsa::VerifyingKey,
-    elliptic_curve::sec1::ToEncodedPoint,
+    elliptic_curve::sec1::ToSec1Point,
     pkcs8::{DecodePublicKey, EncodePublicKey},
     PublicKey,
 };
@@ -28,7 +28,7 @@ pub struct Jwk {
 /// Convert a VerifyingKey to a JWK with the given key ID.
 pub fn verifying_key_to_jwk(key: &VerifyingKey, kid: &str) -> Jwk {
     let public_key = PublicKey::from(key);
-    let point = public_key.to_encoded_point(false);
+    let point = public_key.to_sec1_point(false);
     let x = BASE64URL.encode(point.x().expect("x coordinate"));
     let y = BASE64URL.encode(point.y().expect("y coordinate"));
 

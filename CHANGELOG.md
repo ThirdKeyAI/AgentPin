@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Rust cryptography
+
+- Upgrade to p256 0.14 and require crypto-bigint >= 0.7.6 to address
+  RUSTSEC-2026-0387. Key generation uses the fallible OS-randomness API.
+- Preserve PEM/JWK encodings, key IDs, credential DER signatures, and persisted
+  TOFU pins; add fixed vectors produced by the unmodified 0.3.0 SDK.
+- Rust callers that name the public P-256 key types must also use p256 0.14.
+  This dependency update does not change the protocol on this branch.
+- Require hickory-resolver >= 0.26.1 so downstream DNS-feature builds cannot
+  retain the older release affected by RUSTSEC-2026-0119.
+
 All notable changes to the AgentPin project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
