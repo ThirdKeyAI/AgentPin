@@ -106,10 +106,11 @@ describe('directory fetching', () => {
         const viaDns = ok.url.replace('127.0.0.1', 'localhost');
         await assert.rejects(fetchDirectory(viaDns, { requireHttps: false }), /Failed to fetch/);
         assert.strictEqual(ok.hits.count, 0);
-        // Both URLs are reachable once the guard is off.
+        // Reachable once the guard is off. Only the literal is fetched:
+        // where `localhost` resolves to ::1 first, Node 18 dials only that
+        // and misses this IPv4 listener.
         assert.strictEqual((await fetchDirectory(ok.url, local)).directory.keys.length, 0);
-        assert.strictEqual((await fetchDirectory(viaDns, local)).directory.keys.length, 0);
-        assert.strictEqual(ok.hits.count, 2);
+        assert.strictEqual(ok.hits.count, 1);
 
         // Oversized bodies, by Content-Length and while streaming.
         const big = JSON.stringify({ keys: [], pad: 'x'.repeat(70 * 1024) });
